@@ -51,10 +51,10 @@ hold-time state machine is used here; EVAC-120 does not evaluate alert rules.
 
 | Left behind | Why |
 |---|---|
-| `modules/mv3dt/fuser.py` | Bound to VisionTrack's SQLAlchemy models and session. EVAC-120 consumes its **output** as `global_person_id` on the Redis stream instead. |
-| `modules/persons/matcher.py` | Requires Milvus. Re-identification similarity is not employee identity anyway, so it is an evidence source, not a dependency. |
-| `modules/alerts/track_state.py` | Redis-backed persistence of the state `rule_state.py` computes. Phase 3 writes its own, to firedrill's own Postgres. |
-| `modules/persons/face_identity_consumer.py` | A stream consumer tied to VisionTrack's schema. Phase 3 writes the equivalent against firedrill's event model. |
+| `backend/app/modules/mv3dt/fuser.py` | Bound to VisionTrack's SQLAlchemy models and session. EVAC-120 consumes its **output** as `global_person_id` on the Redis stream instead. |
+| `backend/app/modules/persons/matcher.py` | Requires Milvus. Re-identification similarity is not employee identity anyway, so it is an evidence source, not a dependency. |
+| `backend/app/modules/alerts/track_state.py` | Redis-backed persistence of the state `rule_state.py` computes. Phase 3 writes its own, to firedrill's own Postgres. |
+| `backend/app/modules/persons/face_identity_consumer.py` | A stream consumer tied to VisionTrack's schema. Phase 3 writes the equivalent against firedrill's event model. |
 
 ## From DeepStream
 
@@ -80,7 +80,7 @@ GStreamer.
 
 ### 1. Falsy-zero restarts the hold timer
 
-`rule_state.py` (upstream `alerts/evaluator.py`) starts its hold timer with:
+`rule_state.py` (upstream `backend/app/modules/alerts/evaluator.py`) starts its hold timer with:
 
 ```python
 since = state.condition_since_ms or now_ms

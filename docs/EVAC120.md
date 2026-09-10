@@ -63,6 +63,54 @@ producer disappears mid-drill, the system degrades to
 `DEGRADED / MANUAL_VERIFICATION_REQUIRED` and the warden's count carries the
 drill. It never reports `ALL CLEAR` from silence.
 
+### 2.2 Integration plan
+
+Four seams, in the order they have to be closed. Each is independently useful,
+which matters because two of them are blocked on hardware and the other two are
+not.
+
+**Seam 1 — DeepStream to firedrill.** The pipeline publishes typed events with
+per-source sequence numbers to `vt:evac:events:<tenant>`. firedrill consumes
+them. *Blocked* on the P2.3b segfault; the consumer half is built and tested,
+the producer half needs a working probe. Contract in
+`EVAC120_DEEPSTREAM.md` §3.1; event shapes in §5 below.
+
+**Seam 2 — FaceTrack to firedrill.** The roster, fetched at drill start and
+frozen for the drill's duration. FaceTrack supplies `emp_id`, names, and gallery
+state; department, home floor and assembly zone do not exist upstream and are
+owned here. *Not blocked* by hardware, only by FaceTrack currently
+crash-looping. `EVAC_ROSTER_FILE` covers the gap and is also the offline
+fallback, which is not a workaround: a site should be able to run a drill from
+an exported roster with no network at all.
+
+**Seam 3 — VisionTrack geometry to firedrill.** Floor plans, zone polygons and
+camera homographies, synced into firedrill's tables. Zones additionally need a
+kind — `FLOOR`, `EXIT`, `ASSEMBLY` or `BLIND` — which VisionTrack has no concept
+of, so the sync is a transformation rather than a copy. *Not blocked.* This is
+the largest piece of unbuilt integration work.
+
+**Seam 4 — edge to central.** One-directional, asynchronous, never on the
+critical path. Built and tested, including convergence after a partition.
+*Blocked* only on a credential: the transport interface exists, the
+authentication does not.
+
+### 2.3 What integration deliberately does not do
+
+**No shared database.** Two systems writing one schema means every migration is
+a cross-repo release. It also means a VisionTrack outage can take firedrill's
+storage with it, and the whole point of the edge node is that it keeps deciding.
+
+**No synchronous calls on the accountability path.** Nothing firedrill decides
+waits on an HTTP round trip to another service. The roster is fetched once, at
+drill start, and frozen — a roster that shifts mid-drill would move the
+denominator under the operator, and a person who "disappeared" because HR
+updated a record looks identical on screen to one who disappeared in a
+stairwell.
+
+**No writing back.** firedrill never updates VisionTrack or FaceTrack. It is a
+consumer of both, and a bug here cannot corrupt either.
+
+
 ---
 
 ## 3. Verified facts — 2026-09-10
@@ -920,24 +968,31 @@ celebrate the zero.
 
 ## 11. Deliverables checklist
 
+Audited against the filesystem, not against memory.
+
 | Deliverable | Where | State |
 |---|---|---|
-| Architecture assessment | this file, §2-§3 | Done |
-| Tree map | this file, §7 | Done |
+| Architecture assessment | §2-§3 | Done |
+| Component / data-flow diagram | `docs/EVAC120_ARCHITECTURE.md` | Done |
+| Integration plan | §2.2 | Done |
+| Tree map | §7 | Done |
 | Vendoring provenance | `docs/EVAC120_PROVENANCE.md` | Done |
-| Security model — permissions | `app/infra/permissions.py`, §6 | Partial |
-| Integration plan | this file, §2.1 | Outline |
-| Component / data-flow diagram | `docs/EVAC120_ARCHITECTURE.md` | Phase 1 |
-| State-machine transition tables | `docs/EVAC120_STATE_MACHINES.md` | Phase 1 |
-| Event schema | `app/core/events.py` | Phase 1 |
-| Identity persistence algorithm | `app/core/identity_fsm.py` | Phase 1 |
-| Accountability algorithm | `app/core/accountability_fsm.py` | Phase 1 |
-| Test strategy | `backend/tests/` | Phase 1 |
-| Alembic schema | `backend/alembic/versions/` | Phase 3 |
-| DeepStream integration design | `docs/EVAC120_DEEPSTREAM.md` | Phase 2 |
-| Calibration report | `docs/EVAC120_CALIBRATION.md` | Phase 2 |
-| Benchmark report | `docs/EVAC120_BENCHMARKS.md` | Phase 2 |
-| Failure / recovery strategy | `docs/EVAC120_RESILIENCE.md` | Phase 3 |
-| OpenAPI spec for `/api/evac/*` | generated | Phase 3-4 |
-| Deployment guide | `docs/EVAC120_DEPLOYMENT.md` | Phase 4 |
-| Warden PWA install guide | `docs/EVAC120_WARDEN_PWA.md` | Phase 4 |
+| State-machine transition tables | `docs/EVAC120_STATE_MACHINES.md` | Done |
+| Event schema | `app/core/events.py` | Done |
+| Identity persistence algorithm | `app/core/identity_fsm.py` | Done |
+| Accountability algorithm | `app/core/accountability_fsm.py` | Done |
+| Test strategy | `backend/tests/`, 712 tests | Done |
+| DeepStream integration design | `docs/EVAC120_DEEPSTREAM.md` | Done |
+| Failure / recovery strategy | `docs/EVAC120_RESILIENCE.md` | Done |
+| Security model | `docs/EVAC120_SECURITY.md` | Done |
+| OpenAPI spec for `/api/evac/*` | generated at `/openapi.json`, 14 routes | Done |
+| Deployment guide | `docs/EVAC120_DEPLOYMENT.md` | Done |
+| Warden PWA install guide | `docs/EVAC120_WARDEN_PWA.md` | Done |
+| Validation criteria and report | `docs/EVAC120_VALIDATION.md`, `app/reporting/` | Done |
+| **Alembic schema** | — | **Not built.** Nothing is persisted yet, so there is nothing to migrate. `evac_events` is the first table, and it lands with the Redis consumer |
+| **Calibration report** | `docs/EVAC120_CALIBRATION.md` | **Empty by necessity.** The harness is built and refuses to certify simulated data. Blocked on the pipeline and on recorded footage |
+| **Benchmark report** | `docs/EVAC120_BENCHMARKS.md` | **Empty by necessity.** The measurement plan and the hardware it must be tied to are recorded; no figure is estimated |
+
+The last three are stated as gaps rather than quietly omitted. Two of the
+documents exist and contain no numbers on purpose: a plausible-looking FPS
+figure nobody measured is worse than an empty table, because it will be quoted.
