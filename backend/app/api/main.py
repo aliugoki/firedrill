@@ -12,6 +12,7 @@ import os
 
 from app.api.app import create_app
 from app.core.roster import RosterSnapshot
+from app.infra.auth import settings_from_env
 
 
 def _assembly_zones() -> frozenset:
@@ -56,4 +57,5 @@ def _roster_provider():
 
 
 app = create_app(roster_provider=_roster_provider(),
-                 assembly_zones=_assembly_zones())
+                 assembly_zones=_assembly_zones(),
+                 auth=settings_from_env(dict(os.environ)))

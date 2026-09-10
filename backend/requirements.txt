@@ -28,6 +28,14 @@ sqlalchemy==2.0.36
 alembic==1.14.0
 psycopg2-binary==2.9.10
 
+# --- Authentication ---
+# A library rather than 80 lines of hmac. JWT has a well-known set of ways to
+# get it wrong — accepting `alg: none`, algorithm confusion between HS256 and
+# RS256, forgetting to check expiry — and "we wrote our own" is not a sentence
+# worth having in a security review of a life-safety-adjacent system. The
+# fewer-dependencies argument for an edge node does not outweigh that.
+pyjwt==2.10.1
+
 # --- Optional at runtime, imported lazily ---
 # redis                consumes vt:evac:events:<tenant>; the consumer works
 #                      against any client, and an edge node driven by the

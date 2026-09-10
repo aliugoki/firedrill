@@ -73,6 +73,48 @@ Everything under `/api/evac/` requires a caller identity and a permission.
 
 ---
 
+## 2A. Establishing who is calling
+
+Two modes, and which one is the default matters more than either
+implementation.
+
+**Bearer token (the default).** The caller presents a signed JWT. Permissions
+and zone assignments are claims inside it, so a warden cannot widen their own
+scope by editing a header.
+
+**Trusted identity headers (opt-in).** A gateway in front of the service has
+already authenticated the caller and passes the result on. A real deployment
+shape, and supported — but it must be switched on with
+`EVAC_TRUST_IDENTITY_HEADERS=true`, because a service that trusts
+`X-Permissions` from anyone who can reach it has no authentication at all. That
+was the behaviour before this existed; the insecure mode now has a name and a
+switch, and refusing it names the setting so nobody spends an afternoon on a
+401 that is really a deployment decision.
+
+With neither configured, every request is refused. `/healthz` reports it as a
+configuration gap, so an operator finds out from a dashboard rather than from a
+wall of 401s.
+
+### 2A.1 Verification is deliberately narrow
+
+Each of these closes a named vulnerability class rather than a hypothetical.
+
+| Rule | Closes |
+|---|---|
+| One algorithm, from configuration, never read from the token | `alg: none`, and HS256/RS256 confusion |
+| HMAC algorithms only | An RS256 token verified as HS256 with the public key as the secret |
+| `exp` always required and checked, with no "unless missing" branch | Credentials that live forever |
+| `sub` always required and non-blank | Actions that cannot be attributed |
+| Issuer and audience checked when configured | Tokens minted for a different service |
+| Permissions and zones read from claims, never from the request | A caller widening their own scope |
+
+The library is PyJWT rather than eighty lines of `hmac`. "We wrote our own JWT"
+is not a sentence worth having in a security review of a life-safety-adjacent
+system, and the fewer-dependencies argument for an edge node does not outweigh
+that.
+
+---
+
 ## 3. Biometric data
 
 The distinction the retention policy turns on:
@@ -161,14 +203,10 @@ on a device, deliberately cannot export.
 
 Stated plainly rather than left to be discovered.
 
-- **JWT verification is not implemented.** The API reads caller identity from
-  headers a gateway is expected to set. The seam is visible on purpose; a
-  hand-rolled verifier would be worse than an obvious gap. Until a gateway is in
-  front of it, the API must not be exposed beyond the edge node's own network.
+- **Rate limiting.** A device syncing in a loop can flood the ingest path.
 - **No transport security is configured.** TLS terminates at whatever fronts the
   service. On an edge node serving a warden PWA, that matters: a service worker
   will not install over plain HTTP except on localhost.
-- **No rate limiting.** A device syncing in a loop can flood the ingest path.
 - **Central replication authenticates the site, not the node.** A per-site
   shared secret proves the sender knows a token, not that it is the node it
   claims to be, so a stolen token lets someone inject events for that site. On a

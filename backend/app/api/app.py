@@ -19,13 +19,21 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api import schemas
 from app.core.roster import RosterSnapshot
 from app.drill import Drill, DrillError, DrillRegistry, DrillStatus
+from app.infra.auth import (
+    AuthConfigError,
+    AuthError,
+    AuthSettings,
+    Caller,
+    from_headers,
+    verify,
+)
 from app.infra.permissions import (
     EVAC_ADMIN,
     EVAC_OPERATE,
@@ -41,42 +49,36 @@ def now_ms() -> int:
 
 
 # --- authorisation ------------------------------------------------------------
-# Phase 4 reads the caller from headers a gateway is expected to set. The JWT
-# verification itself is deployment shell rather than domain logic, and putting
-# a hand-rolled one here would be worse than leaving the seam visible.
-
-
-class Caller:
-    def __init__(self, user_id: str, permissions: set[str], zones: set[str]) -> None:
-        self.user_id = user_id
-        self.permissions = permissions
-        self.zones = zones
-
-    def may(self, permission: str) -> bool:
-        return permission in self.permissions
-
-    def covers(self, zone_id: str) -> bool:
-        """A warden is scoped to the zones they were assigned.
-
-        Not cosmetic: a warden confirming people at a zone they are not standing
-        in is making the one claim the system trusts above its own cameras,
-        about a place they cannot see.
-        """
-        return not self.zones or zone_id in self.zones
+# A bearer token by default. Trusting identity headers is a real deployment
+# shape when a gateway sits in front, and it is supported — but it has to be
+# switched on deliberately, because a service that trusts `X-Permissions` from
+# anyone who can reach it has no authentication at all.
 
 
 def get_caller(
+    request: Request,
+    authorization: str = Header(default=""),
     x_user_id: str = Header(default=""),
     x_permissions: str = Header(default=""),
     x_zones: str = Header(default=""),
 ) -> Caller:
-    if not x_user_id:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "no caller identity")
-    return Caller(
-        user_id=x_user_id,
-        permissions={p.strip() for p in x_permissions.split(",") if p.strip()},
-        zones={z.strip() for z in x_zones.split(",") if z.strip()},
-    )
+    settings: AuthSettings = getattr(request.app.state, "auth",
+                                     AuthSettings(trust_headers=False))
+
+    if authorization.lower().startswith("bearer "):
+        try:
+            return verify(authorization[7:].strip(), settings)
+        except AuthError as exc:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc))
+        except AuthConfigError as exc:
+            # A misconfiguration, not a bad caller. Distinguished so an operator
+            # is not sent looking for a broken client.
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc))
+
+    try:
+        return from_headers(x_user_id, x_permissions, x_zones, settings)
+    except AuthError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc))
 
 
 def requires(permission: str) -> Callable:
@@ -93,7 +95,8 @@ def requires(permission: str) -> Callable:
 def create_app(registry: DrillRegistry | None = None,
                roster_provider: Callable[[str], RosterSnapshot] | None = None,
                assembly_zones: frozenset = frozenset(),
-               replica=None) -> FastAPI:
+               replica=None,
+               auth: AuthSettings | None = None) -> FastAPI:
     app = FastAPI(
         title="EVAC-120",
         version="0.4.0",
@@ -106,6 +109,10 @@ def create_app(registry: DrillRegistry | None = None,
         ),
     )
     app.state.registry = registry or DrillRegistry()
+    # No secret and no trusted headers means every request is refused. That is
+    # the safe default; `/healthz` reports it as a gap so an operator finds out
+    # from a dashboard rather than from a wall of 401s.
+    app.state.auth = auth or AuthSettings(trust_headers=False)
     app.state.roster_provider = roster_provider
     app.state.assembly_zones = assembly_zones
 
@@ -346,6 +353,11 @@ def create_app(registry: DrillRegistry | None = None,
             report.update(node.health(now_ms()))
             report["status"] = "ok"
             report["drill"] = drill.drill_id if drill else None
+
+        gap = app.state.auth.describe_gap()
+        if gap:
+            report["degraded"] = True
+            report.setdefault("configuration_gaps", []).append(gap)
 
         if drill is not None:
             state = drill.ingestor.state

@@ -130,7 +130,16 @@ EVAC_CENTRAL_TOKEN=                  # REQUIRED when CENTRAL_URL is set.
                                      # than buffering forever against a central
                                      # that will refuse every batch.
 
-EVAC_JWT_SECRET=                     # REQUIRED
+EVAC_JWT_SECRET=                     # REQUIRED unless headers are trusted
+EVAC_JWT_ALGORITHM=HS256             # HMAC only; RS256 is refused
+EVAC_JWT_ISSUER=                     # optional, checked when set
+EVAC_JWT_AUDIENCE=                   # optional, checked when set
+
+# Only when a gateway in front of this service has already authenticated the
+# caller. With this off and no secret set, every request is refused, which is
+# the safe default. With it on, anyone who can reach the service can name their
+# own permissions.
+EVAC_TRUST_IDENTITY_HEADERS=false
 ```
 
 `EVAC_OUTBOX_FLUSH_SEC` is not only a tuning knob. It is the window during which

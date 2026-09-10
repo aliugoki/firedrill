@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.api.app import create_app
 from app.core.roster import ExpectationReason, Roster
+from app.infra.auth import AuthSettings, issue
 from app.drill import DrillRegistry
 from app.infra.permissions import EVAC_ADMIN, EVAC_OPERATE, EVAC_READ, EVAC_WARDEN
 
@@ -26,11 +27,18 @@ def roster_provider(site_id: str):
     return roster.snapshot(T0)
 
 
+#: A gateway-fronted deployment. Chosen for most of these tests because they
+#: are about authorisation, not authentication, and a signed token per request
+#: would obscure what each one is checking. `TestAuthentication` covers the
+#: default, where headers are refused.
+GATEWAY = AuthSettings(trust_headers=True)
+
+
 @pytest.fixture
 def client() -> TestClient:
     return TestClient(create_app(registry=DrillRegistry(),
                                  roster_provider=roster_provider,
-                                 assembly_zones=ASSEMBLY))
+                                 assembly_zones=ASSEMBLY, auth=GATEWAY))
 
 
 def headers(*permissions, user="user-1", zones=""):
@@ -59,6 +67,87 @@ class TestAuthentication:
         response = client.get("/api/evac/drills", headers=headers("some:other"))
         assert response.status_code == 403
         assert EVAC_READ in response.json()["detail"]
+
+
+class TestHeadersAreNotTrustedByDefault:
+    """Before this was enforced, anyone who could reach the service could name
+    their own permissions. The insecure mode is still supported; it now has a
+    name and a switch."""
+
+    def _secured(self):
+        settings = AuthSettings(secret="a-test-signing-secret")
+        return settings, TestClient(create_app(
+            registry=DrillRegistry(), roster_provider=roster_provider,
+            assembly_zones=ASSEMBLY, auth=settings))
+
+    def test_forged_identity_headers_are_refused(self):
+        _, secured = self._secured()
+        response = secured.get(
+            "/api/evac/drills",
+            headers={"X-User-Id": "attacker", "X-Permissions": "evac:admin"})
+        assert response.status_code == 401
+        assert "not trusted" in response.json()["detail"]
+
+    def test_the_refusal_names_the_setting(self):
+        # The alternative is somebody spending an afternoon on a 401 that is
+        # really a deployment decision nobody made.
+        _, secured = self._secured()
+        detail = secured.get("/api/evac/drills",
+                             headers={"X-User-Id": "x"}).json()["detail"]
+        assert "EVAC_TRUST_IDENTITY_HEADERS" in detail
+
+    def test_a_signed_token_is_accepted(self):
+        settings, secured = self._secured()
+        token = issue("viewer-1", settings, permissions=["evac:read"])
+        assert secured.get("/api/evac/drills",
+                           headers={"Authorization": f"Bearer {token}"}
+                           ).status_code == 200
+
+    def test_permissions_come_from_the_token_not_the_request(self):
+        # A warden cannot widen their own scope by editing a header.
+        settings, secured = self._secured()
+        token = issue("warden-7", settings, permissions=["evac:read"])
+        response = secured.post(
+            "/api/evac/drills",
+            headers={"Authorization": f"Bearer {token}",
+                     "X-Permissions": "evac:operate"},
+            json={"name": "x", "site_id": "s", "tenant_id": "t"})
+        assert response.status_code == 403
+
+    def test_zone_scope_comes_from_the_token(self):
+        settings, secured = self._secured()
+        commander = issue("commander-1", settings,
+                          permissions=["evac:read", "evac:operate"])
+        drill_id = secured.post(
+            "/api/evac/drills",
+            headers={"Authorization": f"Bearer {commander}"},
+            json={"name": "x", "site_id": "site-1",
+                  "tenant_id": "tenant-1"}).json()["drill_id"]
+
+        warden = issue("warden-7", settings,
+                       permissions=["evac:read", "evac:warden"],
+                       zones=["assembly-north"])
+        auth = {"Authorization": f"Bearer {warden}"}
+        assert secured.get(f"/api/evac/drills/{drill_id}/warden/assembly-north",
+                           headers=auth).status_code == 200
+        refused = secured.get(
+            f"/api/evac/drills/{drill_id}/warden/assembly-south", headers=auth)
+        assert refused.status_code == 403
+        assert "not assigned" in refused.json()["detail"]
+
+    def test_an_unconfigured_service_refuses_everything(self):
+        # No secret and no trusted headers. The safe default.
+        bare = TestClient(create_app(registry=DrillRegistry(),
+                                     roster_provider=roster_provider))
+        assert bare.get("/api/evac/drills",
+                        headers={"X-User-Id": "x"}).status_code == 401
+
+    def test_and_says_so_in_health_rather_than_only_in_401s(self):
+        bare = TestClient(create_app(registry=DrillRegistry()))
+        body = bare.get("/healthz").json()
+        assert body["degraded"] is True
+        assert any("EVAC_JWT_SECRET" in gap
+                   for gap in body["configuration_gaps"])
 
 
 class TestSeparationOfDuty:
@@ -186,7 +275,7 @@ class TestDrillLifecycle:
     def test_a_drill_without_a_roster_source_is_refused(self):
         # A drill with no roster has no denominator and cannot account for
         # anyone. Better to refuse than to show a confident zero.
-        bare = TestClient(create_app(registry=DrillRegistry()))
+        bare = TestClient(create_app(registry=DrillRegistry(), auth=GATEWAY))
         response = bare.post("/api/evac/drills", headers=OPERATOR, json={
             "name": "x", "site_id": "s", "tenant_id": "t"})
         assert response.status_code == 503
