@@ -74,6 +74,7 @@ anywhere. Change any input and the answer changes with it.
 | `app/infra` | 582 | — | Permissions, audit log, retention policy |
 | `app/sync` | 700 | `core` | VisionTrack geometry into EVAC-120's model, and pulling it |
 | `app/service` | 560 | everything | The edge process: what runs, when, and what happens when it fails |
+| `app/store` | 420 | `core` | The event log, and surviving the database being gone |
 | `frontend/` | 1323 | — | Command centre and warden PWA. No framework |
 
 10,330 lines of application code, 6,412 of tests, 712 tests.
@@ -168,7 +169,7 @@ Named rather than left to be discovered.
 
 | Missing | Consequence |
 |---|---|
-| Postgres persistence | The geometry store and drill registry are in memory; a restart re-syncs and loses a running drill |
+| The edge process appending to the store | The store and the rebuild path are built and tested; nothing calls them yet, so a restart still loses a running drill |
 | The HTTP transport to central | Events buffer durably and are never delivered |
 | Postgres projection persistence | Projections are in memory; a restart rebuilds them from the event stream |
 | Alembic migrations | Nothing is persisted yet, so there is nothing to migrate. `evac_events` is the first table |

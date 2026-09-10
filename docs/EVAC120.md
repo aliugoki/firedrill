@@ -994,7 +994,7 @@ Audited against the filesystem, not against memory.
 | Deployment guide | `docs/EVAC120_DEPLOYMENT.md` | Done |
 | Warden PWA install guide | `docs/EVAC120_WARDEN_PWA.md` | Done |
 | Validation criteria and report | `docs/EVAC120_VALIDATION.md`, `app/reporting/` | Done |
-| **Alembic schema** | — | **Not built.** Nothing is persisted yet, so there is nothing to migrate. `evac_events` is the first table, and it lands with the Redis consumer |
+| Alembic schema | `backend/alembic/versions/0001_event_log.py` | Done. `evac_events` plus drills, zone kinds and the audit log |
 | **Calibration report** | `docs/EVAC120_CALIBRATION.md` | **Empty by necessity.** The harness is built and refuses to certify simulated data. Blocked on the pipeline and on recorded footage |
 | **Benchmark report** | `docs/EVAC120_BENCHMARKS.md` | **Empty by necessity.** The measurement plan and the hardware it must be tied to are recorded; no figure is estimated |
 

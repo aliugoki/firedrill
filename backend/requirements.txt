@@ -18,8 +18,17 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 httpx==0.28.1           # test client only
 
-# --- Phase 4/5 (not installed yet, listed so the target is visible) ---
-# sqlalchemy[asyncio]  projection persistence
-# asyncpg              Postgres driver
-# alembic              migrations, schema only
-# redis                consumes vt:evac:events:<tenant>
+# --- Persistence ---
+# The brief sanctions Alembic for schema, and Alembic requires SQLAlchemy.
+# Core rather than the ORM: the schema is small and explicit, and an event log
+# is a poor fit for object mapping. Sync rather than async, because the edge
+# process is a scheduling loop and the API can hand a blocking call to a thread
+# far more cheaply than the whole codebase can become async.
+sqlalchemy==2.0.36
+alembic==1.14.0
+psycopg2-binary==2.9.10
+
+# --- Optional at runtime, imported lazily ---
+# redis                consumes vt:evac:events:<tenant>; the consumer works
+#                      against any client, and an edge node driven by the
+#                      simulator or a JSON export needs none of it

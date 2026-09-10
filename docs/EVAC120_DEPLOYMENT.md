@@ -77,7 +77,27 @@ through an architectural coverage hole.
 EVAC_ASSEMBLY_ZONES=assembly-north,assembly-south
 ```
 
-### 2.3 Nothing is calibrated
+### 2.3 Migrations
+
+```bash
+cd backend
+EVAC_DB_PASSWORD=... ../.venv/bin/alembic upgrade head
+```
+
+The URL is assembled from the environment, not read from `alembic.ini`, and a
+missing `EVAC_DB_PASSWORD` refuses to run rather than falling back to a default.
+A DSN in a checked-in config file eventually points at the wrong database, and
+"which one did that migration just run against" is a question nobody wants to
+ask.
+
+There is one migration and one table that matters. `evac_events` is the source
+of truth: presence, identity, the ledger, the board and the report are all
+derived from it, so a node that has its events can be rebuilt from nothing.
+
+`downgrade` exists because Alembic expects it. Running it destroys the only
+record of a drill.
+
+### 2.4 Nothing is calibrated
 
 Every threshold in the system reports `calibrated=False` until a labelled
 calibration set exists. Identity thresholds, presence timings, the accountability
@@ -225,10 +245,10 @@ truth; everything else is derived from it.
 
 Named rather than left to be discovered:
 
-- **Postgres persistence for the geometry store and the drill registry.** Both
-  are in memory, so a restart re-syncs geometry and loses any drill that was
-  running. The event stream is the source of truth, but nothing reads it back
-  yet.
+- **Wiring the store into the running edge node.** The event store, its
+  migration and the rebuild-from-log path are built and tested; the edge process
+  does not yet append to it, so a restart still loses a running drill's state
+  even though the machinery to recover it exists.
 - **The HTTP transport to central.** The outbox buffers durably and the
   reconciler is built; what is missing is the credential and the endpoint
   between them, so events accumulate locally rather than being delivered.
