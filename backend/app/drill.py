@@ -179,6 +179,11 @@ class Drill:
             return self.ingestor.state.ledger.explain(person_ref)
         return self.ingestor.state.ledger.explain(subjects[0])
 
+    def bottlenecks(self, now_ms: int):
+        """Where the evacuation is slow, and which exit is holding it up."""
+        return self.ingestor.state.bottlenecks.measure(
+            now_ms, started_ms=self.started_ms)
+
     def zone_panels(self) -> list:
         return self.warden.zone_panels(self.roster.by_assembly_zone())
 

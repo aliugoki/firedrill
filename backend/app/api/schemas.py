@@ -184,6 +184,30 @@ class HeadcountOut(BaseModel):
     recommended_action: str
 
 
+class ExitMeasureOut(BaseModel):
+    zone_id: str
+    completed: int
+    queue: int
+    throughput_per_min: float | None
+    median_dwell_s: float | None
+    worst_dwell_s: float | None
+    capacity: int | None
+    density: float | None
+    """None when no capacity was recorded for the zone. A crowding figure
+    against an invented denominator is worse than none: it is the kind of
+    number that ends up in a report."""
+
+    is_congested: bool
+
+
+class BottlenecksOut(BaseModel):
+    exits: list[ExitMeasureOut]
+    limiting_zone_id: str | None
+    total_through: int
+    measured_over_s: float
+    caveats: list[str] = []
+
+
 class ZonePanelOut(BaseModel):
     zone_id: str
     warden_id: str | None

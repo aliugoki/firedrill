@@ -41,6 +41,7 @@ from app.core.presence_fsm import (
     ZoneKind,
     ZoneSighting,
 )
+from app.ingest.bottlenecks import BottleneckTracker
 from app.ingest.health import Component, HealthLog
 
 
@@ -53,6 +54,7 @@ class IngestState:
     ledger: EvidenceLedger
     tracker: SequenceTracker
     health: HealthLog = field(default_factory=HealthLog)
+    bottlenecks: BottleneckTracker = field(default_factory=BottleneckTracker)
     drill_started_ms: int | None = None
     drill_completed_ms: int | None = None
     assembly_arrival_ms: dict = field(default_factory=dict)
@@ -187,6 +189,11 @@ class Ingestor:
             ts_ms=event.ts_ms, zone_id=payload["zone_id"],
             zone_kind=ZoneKind(payload["zone_kind"]),
             camera_id=payload.get("camera_id"))
+        # Fed from the same sighting the presence machine uses, so the
+        # bottleneck panel cannot disagree with the board about where somebody
+        # was.
+        self.state.bottlenecks.observe(
+            subject, sighting.zone_id, sighting.zone_kind, event.ts_ms)
         transition = self.state.presence.observe(subject, sighting)
         if transition is None:
             return

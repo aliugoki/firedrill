@@ -229,6 +229,24 @@ def create_app(registry: DrillRegistry | None = None,
             contradicting=[_evidence(e) for e in explanation.contradicting],
             context=[_evidence(e) for e in explanation.context])
 
+    @app.get("/api/evac/drills/{drill_id}/bottlenecks",
+             response_model=schemas.BottlenecksOut, tags=["board"])
+    def get_bottlenecks(drill_id: str,
+                        caller: Caller = Depends(requires(EVAC_READ))):
+        drill = drill_or_404(drill_id)
+        panel = drill.bottlenecks(now_ms())
+        return schemas.BottlenecksOut(
+            exits=[schemas.ExitMeasureOut(
+                zone_id=e.zone_id, completed=e.completed, queue=e.queue,
+                throughput_per_min=e.throughput_per_min,
+                median_dwell_s=e.median_dwell_s, worst_dwell_s=e.worst_dwell_s,
+                capacity=e.capacity, density=e.density,
+                is_congested=e.is_congested) for e in panel.exits],
+            limiting_zone_id=(panel.limiting.zone_id if panel.limiting else None),
+            total_through=panel.total_through,
+            measured_over_s=panel.measured_over_s,
+            caveats=list(panel.caveats))
+
     @app.get("/api/evac/drills/{drill_id}/zones",
              response_model=list[schemas.ZonePanelOut], tags=["board"])
     def get_zones(drill_id: str, caller: Caller = Depends(requires(EVAC_READ))):

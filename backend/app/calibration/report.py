@@ -13,7 +13,12 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from app.calibration.dataset import CalibrationSet, Source, Split
-from app.calibration.sweep import OperatingPoint, Sweep
+from app.calibration.sweep import (
+    NoAcceptableOperatingPoint,
+    OperatingPoint,
+    Sweep,
+    evaluate,
+)
 from app.core.identity_fsm import IdentityConfig
 
 
@@ -85,6 +90,46 @@ def _delta(value: float | None) -> str:
     return f"{value * 100:+.2f} points"
 
 
+def _no_operating_point(sweep: Sweep, ceiling: float) -> OperatingPoint:
+    """The closest the sweep got, so a reader can see how far short it fell.
+
+    Not a recommendation. Its config stays uncalibrated and the report is
+    refused; this exists only so "no threshold works" comes with the number.
+    """
+    measurable = [r for r in sweep.results if r.false_accept_rate is not None]
+    best = (min(measurable, key=lambda r: r.false_accept_rate)
+            if measurable else None)
+    from dataclasses import replace
+
+    config = replace(sweep.base_config, calibrated=False,
+                     source="no threshold pair met the required accuracy")
+    if best is None:
+        return OperatingPoint(
+            config=config, on_tune=_empty_outcome(), on_validate=None,
+            ceiling=ceiling,
+            rationale="the sweep produced no measurable result at all")
+
+    config = replace(config, score_threshold=best.score_threshold,
+                     min_margin=best.min_margin)
+    return OperatingPoint(
+        config=config, on_tune=best,
+        on_validate=(evaluate(sweep.split.validate, config)
+                     if len(sweep.split.validate) else None),
+        ceiling=ceiling,
+        rationale=(f"closest available: false accepts "
+                   f"{best.false_accept_rate:.3f} against a {ceiling:.3f} "
+                   "ceiling. Shown so the shortfall is visible, not as a "
+                   "recommendation"))
+
+
+def _empty_outcome():
+    from app.calibration.sweep import Outcome
+
+    return Outcome(score_threshold=0.0, min_margin=0.0, true_accepts=0,
+                   false_accepts=0, false_rejects=0, true_rejects=0,
+                   admitted_unknown=0)
+
+
 #: The most drift tolerated between the tuning and held-out halves before the
 #: thresholds are treated as fitted to the tuning data rather than measured.
 MAX_DRIFT = 0.02
@@ -109,9 +154,22 @@ def certify(
     set `calibrated=True`, and nothing downstream may present its numbers as
     validated.
     """
-    point = sweep.choose(false_accept_ceiling=false_accept_ceiling)
     refusals: list[str] = []
     caveats: list[str] = []
+
+    try:
+        point = sweep.choose(false_accept_ceiling=false_accept_ceiling)
+    except NoAcceptableOperatingPoint as exc:
+        # A finding, not a crash. The docstring promises an uncertified report
+        # is still worth reading, and a caller who cannot see how far short the
+        # pipeline fell has nothing to act on: "it raised" does not say whether
+        # the answer was 1.1% or 40%.
+        #
+        # Collected rather than returned early, so the other refusals still
+        # appear. A set that is both simulated and short of the ceiling has two
+        # problems, and reporting one hides the other.
+        point = _no_operating_point(sweep, false_accept_ceiling)
+        refusals.append(str(exc))
 
     combined = CalibrationSet(
         observations=list(sweep.split.tune.observations)
@@ -128,7 +186,7 @@ def certify(
 
     if point.on_validate is None:
         refusals.append("no held-out half, so generalisation is unmeasured")
-    else:
+    elif not refusals or "no threshold pair" not in refusals[0]:
         if point.generalises is False:
             refusals.append(
                 f"on held-out people the false-accept rate is "

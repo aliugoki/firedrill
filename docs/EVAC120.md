@@ -845,7 +845,25 @@ unreviewed:
   not happen would make the policy a lie that passes its own verification.
 - `verify` treats overdue biometric material as a finding, not a warning.
 
-### 9D.6 Phase 4 gate
+### 9D.6 A gap a later review found
+
+Phase 4 was reported as built, and the bottleneck panel the brief asks for —
+people per minute per exit, queue length, density, dwell — had not been built at
+all. Nothing in the documents claimed it specifically, which is how it went
+unnoticed: the phase was marked done and the missing piece was inside it.
+
+It exists now, in `app/ingest/bottlenecks.py`, measured from the same zone
+sightings the presence machine uses so it cannot disagree with the board about
+where somebody was. Density is reported only where a capacity was actually
+recorded: a crowding figure against an invented denominator is worse than none,
+because it is the kind of number that ends up in a report.
+
+The same review found that five of the six modules vendored from VisionTrack in
+Phase 0 were used by nothing. `docs/EVAC120_PROVENANCE.md` now says which, and
+why, rather than leaving the original rationale standing as though it still
+described the code.
+
+### 9D.7 Phase 4 gate
 
 | Check | Result |
 |---|---|

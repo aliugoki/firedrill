@@ -47,6 +47,30 @@ dwell.py:41        app.modules.floor_plans.zones_math -> app.vendor.visiontrack.
 The file was renamed `evaluator.py` to `rule_state.py` because only its
 hold-time state machine is used here; EVAC-120 does not evaluate alert rules.
 
+### What is actually used, a review later
+
+Vendoring is a promise about future use, and promises drift. Checked against the
+code rather than against the Phase 0 intent:
+
+| Vendored | Used by | Status |
+|---|---|---|
+| `zones_math.py` | `app/sync/geometry.py`, and every polygon test | **In use** |
+| `dwell.py` | `app/ingest/bottlenecks.py`, for the interval union | **In use** |
+| `zone_resolve.py` | nothing yet | Waiting on the DeepStream probe, which needs it to project a bounding box to a floor point |
+| `occupancy.py` | nothing | The bottleneck panel counts from the event stream instead, which cannot disagree with the board |
+| `heatmap.py` | nothing | Density binning for a heat map nobody has asked for. **Dead weight** |
+| `rule_state.py` | nothing | Hold-time and hysteresis were reimplemented in `presence_fsm.py`, because presence needed blind-zone and degradation rules this does not have |
+
+Two of six are used, one is waiting on blocked work, and three are not. That is
+worth stating plainly rather than leaving the Phase 0 rationale standing as
+though it still described the code.
+
+`heatmap.py` and `rule_state.py` should be removed when someone is confident
+nothing will want them. They are kept for now because the DeepStream work is
+blocked and its shape may still change; `occupancy.py` is the same call. What
+they are not is evidence that vendoring was wrong — `zones_math` and `dwell` did
+exactly what they were brought in to do.
+
 ### Deliberately not vendored
 
 | Left behind | Why |
