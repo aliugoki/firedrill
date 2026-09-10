@@ -147,6 +147,7 @@ class PersonPresence:
     person_id: str
     config: PresenceConfig
     state: PresenceState = PresenceState.NOT_OBSERVED
+    first_sighting_ms: int | None = None
     last_sighting_ms: int | None = None
     last_known: LastKnown | None = None
     state_before_unobserved: PresenceState | None = None
@@ -178,6 +179,20 @@ class PersonPresence:
             and self.state_before_unobserved is PresenceState.ASSEMBLY_PRESENT
         )
 
+    def overlaps(self, other: "PersonPresence") -> bool:
+        """Whether two tracks were being observed at the same time.
+
+        One person cannot be two simultaneously observed tracks, so an overlap
+        between two tracks claiming the same identity is a real conflict.
+        Sequential tracks are the ordinary result of fragmentation and mean only
+        that one person's evidence got split.
+        """
+        if None in (self.first_sighting_ms, self.last_sighting_ms,
+                    other.first_sighting_ms, other.last_sighting_ms):
+            return False
+        return (self.first_sighting_ms <= other.last_sighting_ms
+                and other.first_sighting_ms <= self.last_sighting_ms)
+
     def staleness_ms(self, now_ms: int) -> int | None:
         if self.last_sighting_ms is None:
             return None
@@ -194,6 +209,8 @@ class PersonPresence:
     def observe(self, sighting: ZoneSighting) -> PresenceTransition | None:
         """Fold in one sighting. Returns a transition if the state changed."""
         previous = self.state
+        if self.first_sighting_ms is None:
+            self.first_sighting_ms = sighting.ts_ms
         self.last_sighting_ms = sighting.ts_ms
         self.last_known = LastKnown(
             ts_ms=sighting.ts_ms, zone_id=sighting.zone_id,

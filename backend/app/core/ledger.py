@@ -208,7 +208,19 @@ class EvidenceLedger:
     mid-drill would make `explain` lie by omission.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, min_claims_for_dispute: int = 1) -> None:
+        """`min_claims_for_dispute` must match the identity FSM's
+        `conflict_votes`.
+
+        The two rules have to agree or the same screen contradicts itself. With
+        the ledger at 1 and the FSM at 3, a single stray admissible match for a
+        look-alike put a DISPUTED banner above a person the FSM had confirmed
+        and the board had marked ACCOUNTED. One near miss is worth showing in
+        the narrative; it is not worth telling an operator a human must rule.
+        """
+        if min_claims_for_dispute < 1:
+            raise ValueError("min_claims_for_dispute must be at least 1")
+        self.min_claims_for_dispute = min_claims_for_dispute
         self._by_subject: dict[str, list[Evidence]] = defaultdict(list)
         self._decisions: dict[str, Evidence] = {}
         self._counter = 0
@@ -248,9 +260,13 @@ class EvidenceLedger:
     def disputes_for(self, subject: str) -> tuple[IdentityDispute, ...]:
         """Identity claims that disagree.
 
-        A dispute is any subject with two or more distinct identities asserted
-        by non-rejected evidence. It is reported, never adjudicated: invariant 3
-        forbids the software from picking a winner.
+        A dispute is any subject with two or more distinct identities each
+        asserted by at least `min_claims_for_dispute` pieces of non-rejected
+        evidence. It is reported, never adjudicated: invariant 3 forbids the
+        software from picking a winner.
+
+        A single warden confirmation always counts as a claim regardless of the
+        threshold. One human saying so is not a near miss.
         """
         claims: dict[str, list[Evidence]] = defaultdict(list)
         rejected: set[str] = set()
@@ -263,7 +279,12 @@ class EvidenceLedger:
             ):
                 claims[item.identity].append(item)
 
-        live = {name: items for name, items in claims.items() if name not in rejected}
+        live = {
+            name: items for name, items in claims.items()
+            if name not in rejected
+            and (len(items) >= self.min_claims_for_dispute
+                 or any(i.kind is EvidenceKind.WARDEN_CONFIRMATION for i in items))
+        }
         if len(live) < 2:
             return ()
 

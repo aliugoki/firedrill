@@ -223,3 +223,80 @@ class TestAppendOnly:
         decisions = [e for e in ledger.for_subject("EMP-1")
                      if e.kind is EvidenceKind.DECISION]
         assert len(decisions) == 2
+
+
+class TestInadmissibleEvidenceIsNotAClaim:
+    """Invariant 1 has to hold in the record, not only in the state machine.
+
+    A face match that failed the margin gate is not a claim about who someone
+    is. Filing one with an identity attached made an ACCOUNTED person carry a
+    DISPUTED banner, contradicting their own decision on the same screen.
+    """
+
+    def test_a_rejected_match_does_not_create_a_dispute(self, ledger):
+        ledger.record(subject="gp-1", kind=EvidenceKind.FACE_MATCH, ts_ms=T0,
+                      identity="EMP-1", summary="admissible")
+        for i in range(10):
+            ledger.record(subject="gp-1", kind=EvidenceKind.FACE_MATCH,
+                          ts_ms=T0 + i * 100, identity=None,
+                          summary="not admissible: BELOW_MARGIN")
+        assert ledger.disputes_for("gp-1") == ()
+
+    def test_the_rejected_observation_is_still_recorded(self, ledger):
+        # It is not a claim, and it is not deleted either. An operator asking
+        # why someone was not identified needs to see the near misses.
+        ledger.record(subject="gp-1", kind=EvidenceKind.FACE_MATCH, ts_ms=T0,
+                      identity=None, summary="not admissible: BELOW_MARGIN")
+        narrative = "\n".join(ledger.explain("gp-1").narrate())
+        assert "BELOW_MARGIN" in narrative
+
+    def test_two_admissible_matches_still_dispute(self, ledger):
+        ledger.record(subject="gp-1", kind=EvidenceKind.FACE_MATCH, ts_ms=T0,
+                      identity="EMP-1")
+        ledger.record(subject="gp-1", kind=EvidenceKind.FACE_MATCH,
+                      ts_ms=T0 + 100, identity="EMP-2")
+        assert ledger.disputes_for("gp-1") != ()
+
+
+class TestDisputeThresholdMatchesTheIdentityFsm:
+    """The ledger and the identity FSM must agree on what a conflict is.
+
+    With the ledger at one claim and the FSM at three votes, a single stray
+    admissible match for a look-alike put a DISPUTED banner above a person the
+    FSM had confirmed and the board had marked ACCOUNTED. The same screen
+    contradicted itself.
+    """
+
+    def test_a_single_stray_claim_is_not_a_dispute_at_threshold_three(self):
+        ledger = EvidenceLedger(min_claims_for_dispute=3)
+        for i in range(9):
+            ledger.record(subject="gp-1", kind=EvidenceKind.FACE_MATCH,
+                          ts_ms=T0 + i * 100, identity="EMP-1")
+        ledger.record(subject="gp-1", kind=EvidenceKind.FACE_MATCH,
+                      ts_ms=T0 + 5_000, identity="EMP-2")
+        assert ledger.disputes_for("gp-1") == ()
+
+    def test_three_claims_each_is_a_dispute_at_threshold_three(self):
+        ledger = EvidenceLedger(min_claims_for_dispute=3)
+        for i in range(9):
+            ledger.record(subject="gp-1", kind=EvidenceKind.FACE_MATCH,
+                          ts_ms=T0 + i * 100, identity="EMP-1")
+        for i in range(3):
+            ledger.record(subject="gp-1", kind=EvidenceKind.FACE_MATCH,
+                          ts_ms=T0 + 5_000 + i * 100, identity="EMP-2")
+        assert ledger.disputes_for("gp-1")[0].identities == ("EMP-1", "EMP-2")
+
+    def test_one_warden_is_never_a_near_miss(self):
+        # A human saying so counts as a claim whatever the threshold is.
+        ledger = EvidenceLedger(min_claims_for_dispute=5)
+        for i in range(9):
+            ledger.record(subject="gp-1", kind=EvidenceKind.FACE_MATCH,
+                          ts_ms=T0 + i * 100, identity="EMP-1")
+        ledger.record(subject="gp-1", kind=EvidenceKind.WARDEN_CONFIRMATION,
+                      ts_ms=T0 + 9_000, identity="EMP-2", source="warden-7")
+        # A warden claim against camera claims settles rather than disputes.
+        assert ledger.disputes_for("gp-1") == ()
+
+    def test_a_nonsense_threshold_is_refused(self):
+        with pytest.raises(ValueError):
+            EvidenceLedger(min_claims_for_dispute=0)

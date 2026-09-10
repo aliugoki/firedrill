@@ -18,8 +18,8 @@ of each phase. It is updated at every phase gate.
 
 | Phase | Scope | State |
 |---|---|---|
-| 0 | Repo, vendored code, permissions, docs, tree map | **Complete — awaiting sign-off** |
-| 1 | Pure-Python core + simulator, no cameras | Not started |
+| 0 | Repo, vendored code, permissions, docs, tree map | Complete |
+| 1 | Pure-Python core + simulator, no cameras | **Complete — awaiting sign-off** |
 | 2 | Single DeepStream pipeline on GPU host + calibration | Not started |
 | 3 | Edge/central resilience, projections, chaos suite | Not started |
 | 4 | Command Center + Warden Mobile PWA | Not started |
@@ -343,6 +343,120 @@ its own headcount. The warden cannot start, stop or reconfigure a drill. The
 commander cannot confirm people. No default role holds every permission. Someone
 can read the audit log, because invariant 6 is worthless if no role can inspect
 the record.
+
+---
+
+## 9A. Phase 1 results
+
+Eight core modules, a simulator, and 401 tests. Everything in `app/core` is pure
+Python: no database, no Redis, no framework. The simulator drives it directly,
+and Phase 3's ingest will drive it the same way.
+
+### 9A.1 What was built
+
+| Module | Lines | Does |
+|---|---|---|
+| `core/events.py` | 320 | Vocabulary, validation, timestamp normalisation, sequence and gap tracking |
+| `core/identity_fsm.py` | 400 | Six-state identity keyed on the global person id |
+| `core/presence_fsm.py` | 400 | Six-state presence with blind-zone and degradation handling |
+| `core/accountability_fsm.py` | 330 | Derivation from presence, identity, warden evidence and health |
+| `core/ledger.py` | 350 | Append-only evidence with stance, dispute detection, `explain` |
+| `core/timing.py` | 260 | Percentiles, exclusions, and when not to trust them |
+| `core/roster.py` | 330 | Expected set, three populations kept apart |
+| `core/fusion.py` | 300 | Face-to-body association strength, carried into the identity gate |
+| `simulator/` | 1332 | Synthetic site, 512 agents, 20 injectable failures, drill engine |
+
+### 9A.2 Test results
+
+| Area | Tests |
+|---|---|
+| Core state machines, ledger, timing, roster, fusion | 234 |
+| Simulator scenarios and properties | 73 |
+| Vendored code behaviour | 47 |
+| Vendored copy integrity | 25 |
+| Permissions and separation of duty | 22 |
+| **Total** | **400 passed, 1 xfailed** in 100 s |
+
+Coverage is 97% on `app/core` and 87% overall. The shortfall is entirely
+vendored code paths EVAC-120 does not use yet, such as heatmap binning.
+
+### 9A.3 Measured drill results
+
+500 agents plus 12 visitors on the synthetic site, evacuating five floors and a
+basement through two exits to two assembly points. Times in seconds.
+
+| Profile | Events | Dropped | Duplicates | **False accounted** | Accounted | Uncertain | Unaccounted | Manual | P50 | P95 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| clean | 41,019 | 0 | 0 | **0** | 448 | 0 | 64 | 0 | 59.8 | 114.0 |
+| realistic | 39,416 | 719 | 1,818 | **0** | 445 | 11 | 51 | 3 | 67.2 | 120.4 |
+| hostile | 22,888 | 2,155 | 3,145 | **0** | 97 | 337 | 76 | 2 | — | — |
+
+The population deliberately contains 9 people who never leave their desks, 7
+absent from the building entirely, 12 visitors with no gallery entry, 37
+employees never enrolled, and 12 look-alikes in 6 pairs.
+
+Three things in that table matter more than the percentiles.
+
+**False accounted is zero in every profile**, and this is checked against ground
+truth the core cannot see. That is the property the whole system exists to hold.
+
+**The hostile profile collapses into uncertainty rather than staying
+confident.** Accounted falls from 448 to 97 while uncertain rises from 0 to 337.
+That is the correct response to being blind, and the opposite of what a system
+optimising for a clean-looking dashboard would do.
+
+**The hostile profile reports no P95 at all.** Under an all-camera outage nobody
+was tracked from alarm to arrival, so there is no sample, and the timing module
+says "No measurements: nobody had both a start and an arrival" rather than
+producing a number from the few people who happened to be visible. A P95
+computed from survivors of an outage would be the most flattering and least
+honest number the system could print.
+
+### 9A.4 Defects found and fixed during Phase 1
+
+Six, all caught by tests written against the invariants rather than against the
+implementation.
+
+1. **Weak face-to-body association passed the identity gate.** Association
+   strength was applied only as a multiplier on track confidence, and the weak
+   weight of 0.5 met the minimum track confidence of 0.5 exactly. Every
+   geometry-correlated face was admissible. Now enforced structurally as well,
+   with a test that holds even when the numbers align.
+2. **Rare behaviours vanished from small populations.** A mix expressed only as
+   probabilities put zero people who never leave into a 120-agent run, so the
+   test asserting "someone still at their desk is never marked safe" passed
+   without ever containing one. Critical behaviours are now guaranteed.
+3. **Look-alike pairs landed on people no camera ever saw.** Fixing (2) pushed
+   the guaranteed behaviours to the head of the list, which is exactly where the
+   pairs were assigned. Pairs are now drawn from people who walk past a camera.
+4. **Outage windows were alarm-relative but emitted as absolute timestamps.**
+   Every infrastructure outage sorted decades before the drill and recovered
+   before anything happened.
+5. **The board matched roster entries to tracks using ground truth.** The real
+   system has no such access. Matching on truth hid every misidentification the
+   simulator injects, and made the central property test partly tautological.
+   Now matched on the identity the system claimed.
+6. **The explain drawer contradicted itself.** An ACCOUNTED person carried a
+   DISPUTED banner, for two separate reasons: inadmissible face matches were
+   filed as identity claims, and the ledger's dispute threshold was one claim
+   while the identity FSM's conflict threshold was three votes. Both fixed; the
+   two now share the threshold.
+
+### 9A.5 Gate: explain() reviewed
+
+The brief requires `explain()` output reviewed for three sample people. Reviewed
+on a 500-agent realistic run:
+
+- **Accounted.** Decision, then the chronological evidence: face matches with
+  score and margin, the assembly arrival that qualified it, and the gate
+  rejections that did not. Reads correctly.
+- **Still at their desk.** UNCERTAIN, with "track went stale; last seen in FLOOR
+  zone floor-2-open on cam-floor-2-open". It names the place to send someone.
+- **Needs a human.** "4 tracks were identified as EMP-0007 at the same time; a
+  human must establish which is real", with both contested names shown.
+
+All three defects in (6) above were found by this review rather than by a test,
+which is why the brief asks for it.
 
 ---
 
