@@ -154,6 +154,11 @@ cd backend
 ../.venv/bin/python -m app.service.main
 ```
 
+On startup the edge process reloads any drill that was running when it stopped
+and replays its events, so a node that restarts mid-evacuation comes back with
+the same board rather than an empty one. This happens before the first request,
+because the first request may be an operator looking for people.
+
 The edge process starts even when it is misconfigured, and logs each missing
 piece as a warning at startup rather than failing at the first drill. A process
 that exits because Redis is unset gives an operator nothing to look at; one that
@@ -230,7 +235,8 @@ it exists to catch.
 
 | Loss | Recovery |
 |---|---|
-| Edge process | Restart. State rebuilds from the event stream |
+| Edge process **mid-drill** | Restart. Running drills are reloaded at startup and their state is replayed from `evac_events`, arriving at the same board |
+| Edge process | Restart. State rebuilds from the event log |
 | Edge power | Restart. The outbox fsyncs on commit; nothing committed is lost |
 | Edge Postgres | Projections rebuild from the ledger |
 | Edge disk | Everything central has not acknowledged is gone. This is the argument for a short flush interval |
@@ -245,13 +251,9 @@ truth; everything else is derived from it.
 
 Named rather than left to be discovered:
 
-- **Wiring the store into the running edge node.** The event store, its
-  migration and the rebuild-from-log path are built and tested; the edge process
-  does not yet append to it, so a restart still loses a running drill's state
-  even though the machinery to recover it exists.
 - **The HTTP transport to central.** The outbox buffers durably and the
-  reconciler is built; what is missing is the credential and the endpoint
-  between them, so events accumulate locally rather than being delivered.
+  reconciler is built; the credential and the endpoint between them are not, so
+  events accumulate locally rather than being delivered.
 - **JWT verification.** The API reads identity from headers a gateway sets. Do
   not expose it beyond the edge node's network until that gateway exists.
 - **The FaceTrack HTTP client.** Use `EVAC_ROSTER_FILE` until it lands.

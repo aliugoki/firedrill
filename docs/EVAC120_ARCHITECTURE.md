@@ -169,8 +169,8 @@ Named rather than left to be discovered.
 
 | Missing | Consequence |
 |---|---|
-| The edge process appending to the store | The store and the rebuild path are built and tested; nothing calls them yet, so a restart still loses a running drill |
 | The HTTP transport to central | Events buffer durably and are never delivered |
+| JWT verification | The API reads identity from headers a gateway sets; do not expose it beyond the edge node's network |
 | Postgres projection persistence | Projections are in memory; a restart rebuilds them from the event stream |
 | Alembic migrations | Nothing is persisted yet, so there is nothing to migrate. `evac_events` is the first table |
 | JWT verification | The API reads identity from headers a gateway sets. Do not expose it beyond the edge node's network |

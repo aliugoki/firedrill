@@ -35,6 +35,10 @@ class EdgeNode:
     consumer: EventConsumer | None = None
     replicator: Replicator | None = None
     geometry: GeometryStore = field(default_factory=GeometryStore)
+    events_store: object | None = None
+    drill_store: object | None = None
+    registry: object | None = None
+    recovered_drills: tuple = ()
     gaps: tuple = ()
 
     @property
@@ -54,9 +58,19 @@ class EdgeNode:
             "replication_backlog": (self.replicator.backlog
                                     if self.replicator else 0),
             "geometry_ready": self.geometry.ready_for_a_drill(),
+            "durable": self.events_store is not None,
+            "recovered_drills": list(self.recovered_drills),
             "configuration_gaps": list(self.gaps),
             "background": self.supervisor.health(now_ms),
         }
+        if self.events_store is not None:
+            report["store"] = {
+                "written": self.events_store.stats.written,
+                "duplicates": self.events_store.stats.duplicates,
+                "buffered": self.events_store.pending,
+                "dropped": self.events_store.stats.dropped,
+                "degraded": self.events_store.is_degraded,
+            }
         if self.consumer is not None:
             report["stream"] = {
                 "messages_read": self.consumer.stats.messages_read,
@@ -144,6 +158,45 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
         gaps.append("no geometry source is configured, so no zone can be "
                     "resolved and nobody can reach an assembly point")
 
+    # --- durable storage ------------------------------------------------------
+    events_store = drill_store = None
+    registry = None
+    recovered: list[str] = []
+    database_url = _database_url(env)
+
+    if database_url:
+        try:
+            import sqlalchemy as sa
+
+            from app.drill import DrillRegistry
+            from app.store.drills import DrillStore
+            from app.store.events import EventStore
+
+            engine = sa.create_engine(database_url, pool_pre_ping=True)
+            events_store = EventStore(engine=engine, health=ingestor.state.health)
+            drill_store = DrillStore(engine=engine)
+            registry = DrillRegistry()
+
+            if site_id:
+                # A node that restarts mid-evacuation must come back with the
+                # same board rather than an empty one. This happens at startup
+                # rather than on the first request, because the first request
+                # may be an operator looking for people.
+                for drill in registry.recover(
+                        drill_store=drill_store, events_store=events_store,
+                        site_id=site_id, now_ms=now_ms,
+                        assembly_zones=_assembly_zones(env)):
+                    recovered.append(drill.drill_id)
+        except Exception as exc:
+            gaps.append(
+                f"the database could not be opened ({type(exc).__name__}); "
+                "drills will run but nothing will be recorded and a restart "
+                "will lose them")
+            events_store = drill_store = registry = None
+    else:
+        gaps.append("no database is configured; drills run but are not "
+                    "recorded, and a restart loses one in progress")
+
     if not env.get("EVAC_ROSTER_FILE") and not env.get("EVAC_FACETRACK_URL"):
         gaps.append("no roster source is configured; a drill has no "
                     "denominator and cannot be created")
@@ -152,10 +205,42 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
         ingestor=ingestor, consumer=consumer, replicator=replicator,
         sync_runner=sync_runner)
 
+    if events_store is not None:
+        from app.service.supervisor import Job
+
+        # Otherwise an event buffered during a database outage waits for the
+        # next write to be retried, and a quiet drill never produces one.
+        supervisor.add(Job(name="persist", interval_ms=5_000,
+                           run=events_store.flush))
+
     return EdgeNode(
         site_id=site_id, tenant_id=tenant_id, ingestor=ingestor,
         supervisor=supervisor, consumer=consumer, replicator=replicator,
-        geometry=geometry, gaps=tuple(gaps))
+        geometry=geometry, events_store=events_store, drill_store=drill_store,
+        registry=registry, recovered_drills=tuple(recovered),
+        gaps=tuple(gaps))
+
+
+def _database_url(env: dict) -> str:
+    explicit = env.get("EVAC_DATABASE_URL")
+    if explicit:
+        return explicit
+    password = env.get("EVAC_DB_PASSWORD")
+    if not password:
+        # No default. A password with a default is a password that ends up in
+        # production, and a node that silently persists nowhere is worse than
+        # one that says it has no database.
+        return ""
+    host = env.get("EVAC_DB_HOST", "localhost")
+    port = env.get("EVAC_DB_PORT", "5432")
+    name = env.get("EVAC_DB_NAME", "firedrill")
+    user = env.get("EVAC_DB_USER", "firedrill")
+    return f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{name}"
+
+
+def _assembly_zones(env: dict) -> frozenset:
+    raw = env.get("EVAC_ASSEMBLY_ZONES", "")
+    return frozenset(z.strip() for z in raw.split(",") if z.strip())
 
 
 def _tagged_zones(env: dict) -> dict:

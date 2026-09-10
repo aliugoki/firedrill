@@ -66,6 +66,12 @@ class Drill:
     started_ms: int | None = None
     completed_ms: int | None = None
 
+    #: Durable storage. Optional: a drill runs without it, degraded rather than
+    #: refused. An operator with an evacuation in progress needs the drill more
+    #: than the software needs its own bookkeeping.
+    events_store: object | None = None
+    drill_store: object | None = None
+
     ingestor: Ingestor = field(init=False)
     warden: WardenState = field(init=False)
     _system_seq: int = 0
@@ -83,7 +89,8 @@ class Drill:
         self.status = DrillStatus.RUNNING
         self.started_ms = now_ms
         event = self._system_event(EventType.DRILL_STARTED, now_ms)
-        self.ingestor.feed(event)
+        self.feed([event])
+        self._persist()
         return event
 
     def complete(self, now_ms: int) -> Event:
@@ -93,7 +100,8 @@ class Drill:
         self.status = DrillStatus.COMPLETE
         self.completed_ms = now_ms
         event = self._system_event(EventType.DRILL_COMPLETED, now_ms)
-        self.ingestor.feed(event)
+        self.feed([event])
+        self._persist()
         return event
 
     @property
@@ -108,7 +116,23 @@ class Drill:
     # -- input -----------------------------------------------------------------
 
     def feed(self, events: list[Event]) -> int:
-        """Ingest camera and system events. Returns how many were new."""
+        """Ingest camera and system events. Returns how many were new.
+
+        **Persist before folding.** The full chain from Redis is read, append,
+        fold, acknowledge, and every crash point in it is safe:
+
+          * before the append — not acknowledged, so redelivered;
+          * after the append, before the fold — durable, redelivered, and the
+            store rejects the duplicate while the fold still happens;
+          * after the fold, before the acknowledgement — redelivered, and the
+            fold is idempotent.
+
+        Folding first would leave a window where the state has an event the
+        record does not, and a restart would silently lose it.
+        """
+        if self.events_store is not None:
+            for event in events:
+                self.events_store.append(event)
         return self.ingestor.feed_batch(events)
 
     def record_warden_action(self, action: WardenAction) -> Event:
@@ -123,7 +147,7 @@ class Drill:
                          drill_id=self.drill_id, seq=queue.next_seq)
         queue.next_seq += 1
         self.warden.apply(action)
-        self.ingestor.feed(event)
+        self.feed([event])
         return event
 
     def record_headcount(self, headcount: Headcount) -> Headcount:
@@ -213,6 +237,36 @@ class Drill:
             reasons.insert(0, "the drill has not been started")
         return reasons
 
+    def _persist(self) -> bool:
+        """Record the drill row. A failure degrades rather than stops."""
+        if self.drill_store is None:
+            return False
+        return self.drill_store.save(self)
+
+    @property
+    def is_durable(self) -> bool:
+        """Whether this drill would survive a restart.
+
+        Surfaced rather than assumed: an operator running a drill that is not
+        being recorded should know, because the post-drill report is the reason
+        most drills are run at all.
+        """
+        return self.events_store is not None and self.drill_store is not None
+
+    def recover(self, now_ms: int) -> int:
+        """Rebuild state from the stored event log. Returns events replayed.
+
+        The fold is deterministic and idempotent, so a recovered drill reaches
+        exactly the state it had. Warden state is rebuilt too, because warden
+        actions are events like any other.
+        """
+        if self.events_store is None:
+            return 0
+        events = self.events_store.replay(self.drill_id)
+        applied = self.ingestor.feed_batch(events)
+        self.ingestor.tick(now_ms)
+        return applied
+
     def _system_event(self, event_type: EventType, now_ms: int) -> Event:
         self._system_seq += 1
         return Event(
@@ -247,6 +301,36 @@ class DrillRegistry:
 
     def list(self) -> list:
         return sorted(self.drills.values(), key=lambda d: -d.created_ms)
+
+    def recover(self, *, drill_store, events_store, site_id: str,
+                now_ms: int, assembly_zones: frozenset = frozenset()) -> list:
+        """Reload drills that were running when the process stopped.
+
+        Only running ones. A completed drill is history; a running one is a
+        building that may still have people in it, and an edge node that
+        restarts mid-evacuation must come back with the same board rather than
+        an empty one.
+        """
+        from app.store.drills import roster_from_json
+
+        recovered = []
+        for row in drill_store.unfinished(site_id):
+            if row["drill_id"] in self.drills:
+                continue
+            drill = Drill(
+                drill_id=row["drill_id"], tenant_id=row["tenant_id"],
+                site_id=row["site_id"], name=row["name"],
+                roster=roster_from_json(row["roster_snapshot"] or {}),
+                created_ms=row["created_ms"],
+                assembly_zones=assembly_zones,
+                events_store=events_store, drill_store=drill_store)
+            drill.status = DrillStatus(row["status"])
+            drill.started_ms = row["started_ms"]
+            drill.completed_ms = row["completed_ms"]
+            drill.recover(now_ms)
+            self.drills[drill.drill_id] = drill
+            recovered.append(drill)
+        return recovered
 
     def running(self) -> Drill | None:
         """The drill currently in progress, if any.
