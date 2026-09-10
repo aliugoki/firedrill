@@ -28,7 +28,7 @@ from bisect import insort
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Iterable, Iterator
+from typing import Iterator
 
 
 class Stance(str, Enum):
@@ -333,8 +333,3 @@ class EvidenceLedger:
     def __iter__(self) -> Iterator[Evidence]:
         return iter(sorted(i for items in self._by_subject.values() for i in items))
 
-    def extend(self, items: Iterable[Evidence]) -> None:
-        for item in items:
-            insort(self._by_subject[item.subject], item)
-            if item.kind is EvidenceKind.DECISION:
-                self._decisions[item.subject] = item

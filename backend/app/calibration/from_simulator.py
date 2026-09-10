@@ -20,9 +20,12 @@ from app.simulator.engine import DrillPlan, ObservedStream, observe
 def harvest(plan: DrillPlan, stream: ObservedStream | None = None) -> CalibrationSet:
     """Turn a drill's face observations into a labelled set.
 
-    Ground truth comes from `stream.truth`, the mapping the core is never
-    allowed to read. Using it here is correct: labelling is exactly the job a
-    human does by hand on real footage.
+    Ground truth comes from the stream's owner record, the mapping the core is
+    never allowed to read. Using it here is correct: labelling is exactly the
+    job a human does by hand on real footage. It is asked per observation
+    rather than per track, because an ID switch means the face in front of the
+    camera and the track id attached to it belong to two different people, and
+    a human labelling that frame would write down the face.
     """
     stream = stream or observe(plan)
     by_ref = {a.person_ref: a for a in plan.agents}
@@ -34,7 +37,7 @@ def harvest(plan: DrillPlan, stream: ObservedStream | None = None) -> Calibratio
     for event in stream.events:
         if event.type is not EventType.FACE_OBSERVED or not event.subject:
             continue
-        person_ref = stream.truth.get(event.subject)
+        person_ref = stream.who(event.subject, event.ts_ms)
         if person_ref is None:
             continue
         agent = by_ref.get(person_ref)

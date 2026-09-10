@@ -69,8 +69,31 @@ class ObservedStream:
     #: global person id -> the agent it really was. Test-only ground truth;
     #: nothing in `replay` or `conclude` may read this.
     truth: dict[str, str] = field(default_factory=dict)
+    #: global person id -> [(from_ts_ms, agent)], in time order. An ID switch
+    #: hands one person another's track id, so a track genuinely belongs to two
+    #: different people at different moments and a plain gid->agent map cannot
+    #: say so. `truth` keeps the first owner; `who` is the accurate lookup.
+    owners: dict[str, list[tuple[int, str]]] = field(default_factory=dict)
+    #: event id -> when it actually reached the ingest, for events the transport
+    #: delayed. Absent means it arrived at its own timestamp.
+    arrival_ms: dict[str, int] = field(default_factory=dict)
     dropped: int = 0
     degraded_windows: list[tuple[int, int, str]] = field(default_factory=list)
+
+    def who(self, gid: str | None, ts_ms: int) -> str | None:
+        """Which real person was behind this track id at this moment."""
+        if gid is None:
+            return None
+        person = self.truth.get(gid)
+        for from_ts, agent in self.owners.get(gid, ()):
+            if from_ts > ts_ms:
+                break
+            person = agent
+        return person
+
+    def arrival_of(self, event: Event) -> int:
+        """When ingest saw it, which is its timestamp unless it was delayed."""
+        return self.arrival_ms.get(event.event_id, event.ts_ms)
 
 
 def observe(plan: DrillPlan) -> ObservedStream:
@@ -93,11 +116,15 @@ def observe(plan: DrillPlan) -> ObservedStream:
             stream.dropped += 1
             return
         if dice.hit("delay", inj.delay_rate):
-            delayed = Event(
-                **{**{f: getattr(event, f) for f in event.__slots__},
-                   "ts_ms": event.ts_ms}
-            )
-            pending.append(delayed)
+            # A late event keeps its own timestamp -- it happened when it
+            # happened -- and gains an arrival time. The distance between the
+            # two is the whole point: an event 5 s late and one 30 s late pose
+            # different problems, and one delayed past the moment the drill is
+            # concluded never informs the decision at all.
+            late_by = dice.stream("delay_amount").randrange(
+                1_000, max(2_000, inj.max_delay_ms))
+            stream.arrival_ms[event.event_id] = event.ts_ms + late_by
+            pending.append(event)
             return
         stream.events.append(event)
         if dice.hit("duplicate", inj.duplicate_rate):
@@ -140,12 +167,17 @@ def observe(plan: DrillPlan) -> ObservedStream:
     emit("system", SourceKind.SYSTEM, EventType.DRILL_STARTED, plan.alarm_ms,
          None, {})
 
+    switches = _plan_id_switches(plan, dice)
     for agent in plan.agents:
-        _observe_agent(agent, plan, dice, stream, emit)
+        _observe_agent(agent, plan, dice, stream, emit,
+                       switches.get(agent.person_ref, ()))
 
-    # Late events arrive after everything else, which is what makes them late.
-    for event in pending:
+    # Late events arrive after everything else, which is what makes them late,
+    # and among themselves in the order their delays actually finished.
+    for event in sorted(pending, key=stream.arrival_of):
         stream.events.append(event)
+
+    _normalise_owners(stream)
 
     if inj.reorder_rate > 0:
         rng = dice.stream("reorder")
@@ -156,11 +188,131 @@ def observe(plan: DrillPlan) -> ObservedStream:
     return stream
 
 
-def _observe_agent(agent, plan, dice, stream, emit) -> None:
+#: How close in time two people have to be seen by one camera before a tracker
+#: could plausibly confuse them. Wider than a frame, because the confusion
+#: happens while they are crossing, not at one instant.
+_SWITCH_WINDOW_MS = 2_000
+
+
+def _live_cameras(plan, waypoint):
+    """The cameras that can see this waypoint and are not in an outage."""
+    offset_ms = waypoint.ts_ms - plan.alarm_ms
+    return [camera
+            for camera in plan.site.cameras_seeing(waypoint.floor_id, waypoint.point)
+            if not any(outage.covers(offset_ms, camera.camera_id)
+                       or outage.covers(offset_ms, "*")
+                       for outage in plan.injections.camera_outages)]
+
+
+def _visible_slots(plan) -> list[tuple[int, str, str]]:
+    """(ts_ms, camera_id, person_ref) for every waypoint a camera would see.
+
+    Applies exactly the visibility filter `_observe_agent` applies, and touches
+    no dice: planning a switch must not shift which observations get occluded,
+    or two runs that differ only in `id_switch_rate` stop being comparable.
+    """
+    slots = []
+    for agent in plan.agents:
+        for waypoint in agent.trajectory:
+            if waypoint.ts_ms < plan.alarm_ms:
+                continue
+            if waypoint.zone_id is None or waypoint.zone_kind is ZoneKind.BLIND:
+                continue
+            live = _live_cameras(plan, waypoint)
+            if live:
+                slots.append((waypoint.ts_ms, live[0].camera_id, agent.person_ref))
+    slots.sort()
+    return slots
+
+
+def _plan_id_switches(plan, dice) -> dict[str, tuple[tuple[int, str], ...]]:
+    """Decide, before anything is emitted, who swaps track ids with whom.
+
+    Only pairs a single camera holds at the same moment are eligible, because
+    that is the only situation in which a real tracker confuses two people.
+    Swapping strangers on different floors would be a teleport, and a teleport
+    is not the problem this injection exists to pose -- the dangerous case is
+    the plausible one, where a name already confirmed on a track stays on it
+    while a different body carries it away.
+    """
+    rate = plan.injections.id_switch_rate
+    if rate <= 0:
+        return {}
+
+    buckets: dict[tuple[str, int], list[str]] = {}
+    for ts_ms, camera_id, person_ref in _visible_slots(plan):
+        together = buckets.setdefault((camera_id, ts_ms // _SWITCH_WINDOW_MS), [])
+        if person_ref not in together:
+            together.append(person_ref)
+
+    emitting_as = {agent.person_ref: agent.person_ref for agent in plan.agents}
+    timeline: dict[str, list[tuple[int, str]]] = {}
+    # `id_switch_rate` is per person per minute of camera time, because that is
+    # the unit a tracker benchmark reports and the unit `docs/EVAC120_BENCHMARKS.md`
+    # says sets this knob. Two other readings were tried and both are wrong: per
+    # pair makes the rate quadratic in how crowded the frame is, so a 2% figure
+    # shuffles a whole assembly point, and per observation makes it depend on
+    # the camera's frame rate, so improving the cameras would make the tracker
+    # look worse.
+    per_window = rate * _SWITCH_WINDOW_MS / 60_000
+    partners = dice.stream("id_switch_partner")
+    for camera_id, bucket in sorted(buckets):
+        together = buckets[(camera_id, bucket)]
+        if len(together) < 2:
+            continue
+        ts_ms = bucket * _SWITCH_WINDOW_MS
+        for index, person in enumerate(together):
+            if not dice.hit("id_switch", per_window):
+                continue
+            others = together[:index] + together[index + 1:]
+            partner = others[partners.randrange(len(others))]
+            emitting_as[person], emitting_as[partner] = (
+                emitting_as[partner], emitting_as[person])
+            timeline.setdefault(person, []).append((ts_ms, emitting_as[person]))
+            timeline.setdefault(partner, []).append((ts_ms, emitting_as[partner]))
+    return {ref: tuple(entries) for ref, entries in timeline.items()}
+
+
+def _emitting_as(switches, ts_ms: int, default: str) -> str:
+    """Which track lineage an agent is on at this moment."""
+    owner = default
+    for from_ts, other in switches:
+        if from_ts > ts_ms:
+            break
+        owner = other
+    return owner
+
+
+def _record_owner(stream, gid: str, ts_ms: int, person_ref: str) -> None:
+    """Note that this track id belonged to this person at this moment.
+
+    Appended raw and put in order later. Agents are observed one at a time, so
+    the record for a track that changed hands arrives in agent order rather than
+    in time order, and collapsing runs as they arrive would collapse the wrong
+    ones.
+    """
+    stream.owners.setdefault(gid, []).append((ts_ms, person_ref))
+
+
+def _normalise_owners(stream) -> None:
+    """Put each track's owners in time order and collapse the repeats."""
+    for gid, windows in stream.owners.items():
+        windows.sort()
+        collapsed = [windows[0]]
+        for entry in windows[1:]:
+            if entry[1] != collapsed[-1][1]:
+                collapsed.append(entry)
+        stream.owners[gid] = collapsed
+        stream.truth[gid] = collapsed[0][1]
+
+
+def _observe_agent(agent, plan, dice, stream, emit, switches=()) -> None:
     inj = plan.injections
-    base_gid = f"gp-{agent.person_ref}"
-    stream.truth[base_gid] = agent.person_ref
-    fragment = 0
+    _record_owner(stream, f"gp-{agent.person_ref}", plan.alarm_ms, agent.person_ref)
+    # One fragment counter per track lineage this agent emits under. After an ID
+    # switch it continues on somebody else's track id, and that track's
+    # fragment numbering is its own.
+    fragments: dict[str, int] = {}
 
     for waypoint in agent.trajectory:
         if waypoint.ts_ms < plan.alarm_ms:
@@ -168,14 +320,7 @@ def _observe_agent(agent, plan, dice, stream, emit) -> None:
         if waypoint.zone_id is None or waypoint.zone_kind is ZoneKind.BLIND:
             continue  # no camera there; correctly produces no observation
 
-        cameras = plan.site.cameras_seeing(waypoint.floor_id, waypoint.point)
-        if not cameras:
-            continue
-
-        live = [c for c in cameras
-                if not any(o.covers(waypoint.ts_ms - plan.alarm_ms, c.camera_id)
-                           or o.covers(waypoint.ts_ms - plan.alarm_ms, "*")
-                           for o in inj.camera_outages)]
+        live = _live_cameras(plan, waypoint)
         if not live:
             continue
         if dice.hit("occlusion", inj.occlusion_rate):
@@ -183,15 +328,21 @@ def _observe_agent(agent, plan, dice, stream, emit) -> None:
 
         camera = live[0]
 
+        owner = _emitting_as(switches, waypoint.ts_ms, agent.person_ref)
+        base_gid = f"gp-{owner}"
+        fragment = fragments.get(owner, 0)
+
         if dice.hit("fragment", inj.track_fragmentation_rate):
+            previous = base_gid if fragment == 0 else f"{base_gid}#{fragment}"
             fragment += 1
+            fragments[owner] = fragment
             gid = f"{base_gid}#{fragment}"
-            stream.truth[gid] = agent.person_ref
             emit(camera.camera_id, SourceKind.CAMERA, EventType.TRACK_LOST,
-                 waypoint.ts_ms, base_gid if fragment == 1 else f"{base_gid}#{fragment-1}",
-                 {"reason": "fragmentation"})
+                 waypoint.ts_ms, previous, {"reason": "fragmentation"})
         else:
             gid = base_gid if fragment == 0 else f"{base_gid}#{fragment}"
+
+        _record_owner(stream, gid, waypoint.ts_ms, agent.person_ref)
 
         emit(camera.camera_id, SourceKind.CAMERA, EventType.TRACK_UPDATED,
              waypoint.ts_ms, gid,
@@ -385,21 +536,6 @@ def _file_decision(state: DrillState, gids: list[str], decision: Decision,
                     "blockers": list(decision.blockers)})
 
 
-#: Ordering used only to pick the most-informative fragment. Lower is better.
-_RANK = {
-    AccountabilityState.ACCOUNTED: 0,
-    AccountabilityState.EVACUATING: 1,
-    AccountabilityState.MANUAL_VERIFICATION_REQUIRED: 2,
-    AccountabilityState.UNCERTAIN: 3,
-    AccountabilityState.UNACCOUNTED: 4,
-    AccountabilityState.NOT_EVACUATED: 5,
-}
-
-
-def _rank(state: AccountabilityState) -> int:
-    return _RANK[state]
-
-
 def _accountability_completion(decisions: dict, elapsed_ms: int) -> int | None:
     unresolved = sum(
         1 for d in decisions.values()
@@ -416,7 +552,7 @@ def run_drill(plan: DrillPlan, *, now_ms: int | None = None) -> DrillResult:
     # Events past the moment we are concluding at have not happened yet. Folding
     # them in let an outage's recovery event, scheduled beyond the horizon,
     # clear a degradation that was still in force when the drill ended.
-    state = replay([e for e in stream.events if e.ts_ms <= end], plan)
+    state = replay([e for e in stream.events if stream.arrival_of(e) <= end], plan)
     state.presence.tick(end)
     state.identity.tick(end)
     return conclude(plan, state, stream, end)

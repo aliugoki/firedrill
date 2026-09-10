@@ -61,7 +61,14 @@ class Injections:
 
     id_switch_rate: float = 0.0
     """Two people swap tracks. The dangerous one: a confirmed name lands on a
-    different body, turning one problem into two wrong answers."""
+    different body, turning one problem into two wrong answers.
+
+    The one knob that is *not* per observation: it is switches per person per
+    minute of camera time, which is the unit a tracker benchmark reports. Per
+    observation would make it depend on frame rate, so buying better cameras
+    would make the tracker look worse. Only people one camera holds at the same
+    moment are eligible to swap, because that is the only confusion a real
+    tracker makes."""
 
     occlusion_rate: float = 0.0
     """Person hidden behind another. Observed as a dropped sighting."""
@@ -74,8 +81,12 @@ class Injections:
     """Events delivered out of sequence."""
 
     delay_rate: float = 0.0
-    max_delay_ms: int = 30_000
     """Events arriving late, after decisions have already been made on the gap."""
+
+    max_delay_ms: int = 30_000
+    """How late, at most. An event keeps its own timestamp and gains an arrival
+    time; one delayed past the moment the drill is concluded never informs the
+    decision at all, which is the case worth injecting."""
 
     drop_rate: float = 0.0
     """Events lost outright. Produces a SEQUENCE_GAP; never interpolated."""

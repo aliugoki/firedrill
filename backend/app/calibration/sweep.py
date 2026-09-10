@@ -27,7 +27,7 @@ from app.core.identity_fsm import FaceObservation
 
 
 @dataclass(frozen=True, slots=True)
-class Outcome:
+class ThresholdOutcome:
     """What one threshold pair did to a whole set.
 
     `false_accepts` counts only the dangerous case: an observation admitted with
@@ -78,7 +78,7 @@ class Outcome:
 
 def evaluate(
     calibration_set: CalibrationSet, config: IdentityConfig
-) -> Outcome:
+) -> ThresholdOutcome:
     """Run one configuration over a labelled set."""
     true_accepts = false_accepts = false_rejects = true_rejects = 0
     admitted_unknown = 0
@@ -99,7 +99,7 @@ def evaluate(
         else:
             false_accepts += 1
 
-    return Outcome(
+    return ThresholdOutcome(
         score_threshold=config.score_threshold, min_margin=config.min_margin,
         true_accepts=true_accepts, false_accepts=false_accepts,
         false_rejects=false_rejects, true_rejects=true_rejects,
@@ -120,8 +120,8 @@ class OperatingPoint:
     """A chosen configuration, with the evidence for choosing it."""
 
     config: IdentityConfig
-    on_tune: Outcome
-    on_validate: Outcome | None
+    on_tune: ThresholdOutcome
+    on_validate: ThresholdOutcome | None
     ceiling: float
     rationale: str
 
@@ -160,7 +160,7 @@ class Sweep:
 
     split: Split
     base_config: IdentityConfig
-    results: list[Outcome] = field(default_factory=list)
+    results: list[ThresholdOutcome] = field(default_factory=list)
 
     def run(
         self, *, score_range: tuple[float, float, float] = (0.20, 0.75, 0.025),

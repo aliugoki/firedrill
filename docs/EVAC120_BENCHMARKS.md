@@ -35,7 +35,7 @@ measured is worse than an empty table, because it will be quoted.
 | Probe residency per frame | Whether in-probe inference fits the frame budget |
 | End-to-end latency, frame PTS to Redis | Whether the live board is live |
 | GPU memory at each stream count | Whether 8 GB holds the models plus decode |
-| ID-switch rate per hour | Sets `id_switch_rate` in the simulator honestly |
+| ID-switch rate per person-minute | Sets `id_switch_rate` in the simulator honestly |
 | Face TPR and FPR at chosen thresholds | Feeds `EVAC120_CALIBRATION.md` |
 | Duplicate-count rate at a double-covered exit | Whether one person becomes two |
 | Reconnect time after a camera drop | Sets `t_lost_ms` honestly |

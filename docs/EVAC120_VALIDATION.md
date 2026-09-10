@@ -127,35 +127,80 @@ particular drill could not establish.
 
 ## 6. A worked example
 
-From a 200-agent simulated drill under the realistic injection profile, driven
-through the real drill object rather than a test harness:
+From a 200-agent simulated drill under the realistic injection profile,
+driven through the real drill object rather than a test harness. Regenerate
+it with `backend/scripts/worked_example.py`, which is the script that
+produced exactly this:
 
 ```
-INCONCLUSIVE — this drill cannot judge the system: only 83% of people were
-tracked from alarm to arrival
+EVAC-120 drill report — Worked example
+  drill drill-worked-example at site-sialkot-office
+  duration 600.0s
 
-  FALSE ACCOUNTED         0
-  false unaccounted       0
-  P50 64.0s   P90 104.8s   P95 123.4s   P99 195.3s
-  measured on             177 people (83% coverage)
-  slowest floor           basement at P95 158.9s
+INCONCLUSIVE — this drill cannot judge the system: only 82% of people were tracked from alarm to arrival; 18% produced no timing at all, and a percentile that improves by losing the slow people is the easiest way to fake this number
+
+Accountability against the manual roll-call
+  expected                212
+  accounted for           194
+  unaccounted for         3
+  uncertain               5
+  needing verification    10
+  unknown people          0
+
+  FALSE ACCOUNTED         0   (system said safe, no warden confirmed)
+  false unaccounted       10   (warden confirmed, system could not)
+
+Evacuation times
+  P50 68.9s   P90 117.9s   P95 145.5s   P99 279.3s
+  slowest individual      347.9s
+  measured on             174 people (82% coverage)
+  caveat: 38 of 212 people produced no timing (18% excluded). The percentiles describe only those who were tracked end to end.
+  accountability settled  —
+  slowest floor           floor-4 at P95 215.8s
+
+Wardens
+  confirmations           204
+  identity rejections     0
+  manual overrides        0
   sweeps completed        2/2
-  blind for               20% of the drill
+  zones with a headcount  2/2
 
-  PASS  NO_FALSE_ACCOUNTED
-  PASS  SWEEPS_COMPLETED
-  PASS  HEADCOUNTS_TAKEN
-  PASS  HEADCOUNTS_AGREE
-  FAIL  COVERAGE_SUFFICIENT   [83%]
-  FAIL  SYSTEM_MOSTLY_SIGHTED [20%]
-  PASS  P95_MEASURABLE
-  FAIL  P95_WITHIN_TARGET     [123.4s]
+System health
+  outages                 1
+  blind for               20% of the drill
+  longest blind period    120.0s
+  The system was blind for 20% of this drill across 1 outage(s), the longest 120 s. Treat gaps in a person's history as unobserved rather than as absence.
+
+NOTE: no threshold in this system has been validated against a calibration set.
+      These numbers describe what happened. They do not yet describe how well
+      the system works, because the settings that produced them are provisional.
+
+INCONCLUSIVE — this drill cannot judge the system: only 82% of people were tracked from alarm to arrival; 18% produced no timing at all, and a percentile that improves by losing the slow people is the easiest way to fake this number
+
+  PASS  NO_FALSE_ACCOUNTED  [0]
+        nobody was marked accounted whom a warden did not confirm
+  PASS  SWEEPS_COMPLETED  [2/2]
+        every zone was swept
+  PASS  HEADCOUNTS_TAKEN  [2/2]
+        every zone recorded a physical headcount
+  PASS  HEADCOUNTS_AGREE  [0]
+        every physical count agreed with the system
+  FAIL  COVERAGE_SUFFICIENT  [82%]
+        only 82% of people were tracked from alarm to arrival; 18% produced no timing at all, and a percentile that improves by losing the slow people is the easiest way to fake this number
+  FAIL  SYSTEM_MOSTLY_SIGHTED  [20%]
+        the system was blind for 20% of the drill; this is a test of the wardens, not of the system
+  PASS  P95_MEASURABLE  [174 samples]
+        the sample supports a 95th percentile
+  FAIL  P95_WITHIN_TARGET  [145.5s]
+        P95 145.5s against a 120s target
+
+Thresholds are not validated: Phase 5 default, no live drill has run
 ```
 
 Worth reading carefully. Nobody was falsely accounted, every zone was swept and
 counted, and the counts agreed — the system did well by the measures that matter
 most. And the drill still cannot validate it, because a camera was down for two
-minutes and 17% of people produced no timing at all.
+minutes and 18% of people produced no timing at all.
 
 That is the intended behaviour. A drill that says INCONCLUSIVE is telling you to
 fix the coverage and run it again, not to celebrate the zero.
@@ -164,13 +209,13 @@ fix the coverage and run it again, not to celebrate the zero.
 
 ## 7. Getting to P95 ≤ 120 s
 
-The simulated drill above sits at 123.4 s, and the basement is the slowest floor
-at 158.9 s. On simulated data that number means little, but the *shape* of the
+The simulated drill above sits at 145.5 s, and the fourth floor is the slowest
+at 215.8 s. On simulated data that number means little, but the *shape* of the
 problem is the one a real building will have, and the actions divide into two
 kinds.
 
 **Engineering** — makes the measurement better:
-- Close the coverage gap. 17% of people produced no timing, and the exit with no
+- Close the coverage gap. 18% of people produced no timing, and the exit with no
   camera is the obvious cause. An uncovered fire exit means people leave
   unobserved and their evacuation is never measured
 - Fix the P2.3b segfault so face and body share one tracker. Weak association
@@ -178,9 +223,9 @@ kinds.
 - Calibrate the thresholds. Every number in the system is provisional
 
 **Operational** — makes the evacuation faster:
-- The basement is the bottleneck. Its only route out passes through a stairwell
-  with no camera, which is both a coverage problem and probably a real
-  congestion one
+- The fourth floor is the slowest, at P95 215.8 s against a building P95 of
+  145.5 s. It is the longest stair descent in the model, and a floor that is
+  slowest because of distance is an operational problem, not a software one
 - Reaction delay is the largest single component of an individual's time. Drill
   frequency and alarm audibility move it more than any software change
 

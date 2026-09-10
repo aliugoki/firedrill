@@ -215,17 +215,16 @@ class PersonIdentity:
     def needs_human(self) -> bool:
         return self.state in TERMINAL_WITHOUT_HUMAN
 
+    # There is deliberately no `runner_up`. An earlier design detected conflict
+    # by comparing the leader against the second place, and that is exactly the
+    # vote-count comparison invariant 3 forbids: a 9-to-3 split is still a
+    # conflict. `_detect_conflict` counts independent support instead, and a
+    # helper suggesting otherwise would invite the wrong fix.
     def leader(self) -> tuple[str | None, int]:
         if not self.votes:
             return None, 0
         winner, count = self.votes.most_common(1)[0]
         return winner, count
-
-    def runner_up(self) -> tuple[str | None, int]:
-        ranked = self.votes.most_common(2)
-        if len(ranked) < 2:
-            return None, 0
-        return ranked[1]
 
     # -- transitions -----------------------------------------------------------
 

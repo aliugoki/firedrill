@@ -123,9 +123,9 @@ def _no_operating_point(sweep: Sweep, ceiling: float) -> OperatingPoint:
 
 
 def _empty_outcome():
-    from app.calibration.sweep import Outcome
+    from app.calibration.sweep import ThresholdOutcome
 
-    return Outcome(score_threshold=0.0, min_margin=0.0, true_accepts=0,
+    return ThresholdOutcome(score_threshold=0.0, min_margin=0.0, true_accepts=0,
                    false_accepts=0, false_rejects=0, true_rejects=0,
                    admitted_unknown=0)
 

@@ -193,7 +193,7 @@ Numbers to measure, not to estimate. None of these has a value yet.
 | Probe residency per frame | Whether in-probe inference fits the frame budget (§2.4) |
 | End-to-end event latency, PTS to Redis | Whether the live board is live |
 | GPU memory at each stream count | Whether an RTX 3070's 8 GB holds the models plus decode |
-| ID-switch rate per hour | Directly sets `id_switch_rate` in the simulator |
+| ID-switch rate per person-minute | Directly sets `id_switch_rate` in the simulator |
 | Face TPR and FPR at the chosen thresholds | Feeds `docs/EVAC120_CALIBRATION.md` |
 | Duplicate-count rate at the double-covered exit | Whether one person becomes two |
 | Reconnect time after a camera drop | Sets `t_lost_ms` honestly |
