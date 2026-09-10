@@ -151,7 +151,7 @@ Accountability against the manual roll-call
   false unaccounted       10   (warden confirmed, system could not)
 
 Evacuation times
-  P50 68.9s   P90 117.9s   P95 145.5s   P99 279.3s
+  P50 68.9s   P90 117.9s   P95 145.5s   P99 317.4s
   slowest individual      347.9s
   measured on             174 people (82% coverage)
   caveat: 38 of 212 people produced no timing (18% excluded). The percentiles describe only those who were tracked end to end.
@@ -218,8 +218,13 @@ kinds.
 - Close the coverage gap. 18% of people produced no timing, and the exit with no
   camera is the obvious cause. An uncovered fire exit means people leave
   unobserved and their evacuation is never measured
-- Fix the P2.3b segfault so face and body share one tracker. Weak association
-  currently costs identity confirmations, which costs accounted people
+- Fix the P2.3b segfault so face and body share one tracker. Without one, a
+  face is attached to a body by geometry, and the identity gate refuses a
+  geometric association outright rather than discounting it. The simulator now
+  injects that failure, and the shape of it is a cliff rather than a slope: at
+  half of all faces misassociated the accounted count moves by two, and at all
+  of them the drill accounts for nobody through the cameras and falls back
+  entirely on the wardens. It still clears nobody falsely at any rate
 - Calibrate the thresholds. Every number in the system is provisional
 
 **Operational** — makes the evacuation faster:

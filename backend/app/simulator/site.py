@@ -43,6 +43,11 @@ class Camera:
     camera_id: str
     floor_id: str
     coverage: Polygon
+    #: The zones this camera is meant to watch. Not what `sees` consults --
+    #: that is the coverage polygon, and it is the only thing the simulator
+    #: acts on. This is the intent, and `tests/simulator/test_site.py` checks
+    #: the geometry still matches it, which is what catches a polygon edited
+    #: until it no longer covers the zone it was drawn for.
     covers_zones: tuple[str, ...] = ()
 
     def sees(self, point: Point) -> bool:

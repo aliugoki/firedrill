@@ -18,6 +18,7 @@ ACCOUNTED for someone `agents.py` knows never reached an assembly point.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import cached_property
 
 from app.core.accountability_fsm import (
     AccountabilityBoard,
@@ -59,6 +60,14 @@ class DrillPlan:
     identity_config: IdentityConfig = ID_CONFIG
     presence_config: PresenceConfig = PRESENCE_CONFIG
     accountability_config: AccountabilityConfig = ACC_CONFIG
+
+    @cached_property
+    def enrolled_ids(self) -> tuple[str, ...]:
+        """Every gallery identity in this drill, for injections that need one
+        person's name to appear on another person's evidence."""
+        return tuple(sorted(
+            agent.emp_id for agent in self.agents
+            if agent.emp_id and agent.has_gallery_entry and not agent.is_visitor))
 
 
 @dataclass
@@ -407,12 +416,30 @@ def _observe_face(agent, gid, camera, waypoint, plan, dice, emit) -> None:
     if dice.hit("wrong_identity", inj.wrong_identity_rate):
         candidate = "EMP-9999"
 
+    associated, track_confidence = True, 1.0
+    if plan.enrolled_ids and dice.hit("misassociation", inj.misassociation_rate):
+        # A neighbour's face, correctly matched, attached to this body. The
+        # score stays strong on purpose: no score threshold can catch this,
+        # because the matcher was not the thing that got it wrong.
+        #
+        # The track confidence is 0.5 rather than something clearly failing,
+        # because `fusion.fuse` scales it by the association weight and 0.5
+        # against a minimum of 0.5 is the exact coincidence that let every
+        # geometry-correlated face through the gate in Phase 1. Injecting the
+        # comfortable value instead would let the confidence test do the work
+        # and leave the structural test unexercised, which is how the hole got
+        # there in the first place.
+        who = dice.stream("misassociation_who")
+        candidate = plan.enrolled_ids[who.randrange(len(plan.enrolled_ids))]
+        score, margin = 0.84, 0.29
+        associated, track_confidence = False, 0.5
+
     emit(camera.camera_id, SourceKind.CAMERA, EventType.FACE_OBSERVED,
          waypoint.ts_ms, gid,
          {"candidate_id": candidate, "score": score, "margin": margin,
           "quality": quality, "pose_deviation_deg": pose,
-          "camera_id": camera.camera_id, "association_is_strong": True,
-          "enrolled": enrolled})
+          "camera_id": camera.camera_id, "association_is_strong": associated,
+          "track_confidence": track_confidence, "enrolled": enrolled})
 
 
 #: The simulator does not own a fold of its own. `app.ingest.Ingestor` is the

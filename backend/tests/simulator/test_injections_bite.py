@@ -16,6 +16,7 @@ import dataclasses
 import pytest
 
 from app.core.events import EventType
+from app.core.identity_fsm import PROVISIONAL_CONFIG, FaceObservation, RejectionReason, gate
 from app.simulator.engine import DrillPlan, observe
 from app.simulator.injections import NONE, Injections
 from tests.simulator.conftest import ALARM_MS, population
@@ -130,3 +131,55 @@ class TestDelayHasALength:
         missed = [event for event in stream.events
                   if event.ts_ms <= end_ms < stream.arrival_of(event)]
         assert missed
+
+
+class TestMisassociation:
+    """A real face, matched correctly, pinned to the wrong body.
+
+    The failure the P2.3b segfault leaves in place: with no shared tracker
+    there is nothing but geometry to attach a face to a person. Nothing about
+    the match is wrong, which is why no score threshold can catch it.
+    """
+
+    def weak_faces(self, site, agents, rate=0.5):
+        stream = observe(plan_for(site, agents,
+                                  Injections(misassociation_rate=rate)))
+        return [event for event in stream.events
+                if event.type is EventType.FACE_OBSERVED
+                and not event.payload["association_is_strong"]]
+
+    def test_it_happens_and_the_match_still_looks_strong(self, site, agents):
+        weak = self.weak_faces(site, agents)
+        assert weak
+        for event in weak:
+            assert event.payload["score"] >= 0.8
+            assert event.payload["margin"] >= 0.2
+
+    def test_the_gate_refuses_every_one_of_them_structurally(
+            self, site, agents):
+        """Not on score, and not on the confidence the association scales.
+
+        The injected track confidence is 0.5 against a minimum of 0.5, which is
+        the exact coincidence that let geometry-correlated faces through in
+        Phase 1. If the gate ever starts refusing these on confidence instead,
+        this test still passes and the structural rule stops being exercised --
+        so it asserts the reason, not just the refusal.
+        """
+        for event in self.weak_faces(site, agents):
+            payload = event.payload
+            observation = FaceObservation(
+                ts_ms=event.ts_ms,
+                candidate_id=payload["candidate_id"], score=payload["score"],
+                margin=payload["margin"], quality=payload["quality"],
+                pose_deviation_deg=payload["pose_deviation_deg"],
+                track_confidence=payload["track_confidence"],
+                camera_id=payload["camera_id"],
+                association_is_strong=payload["association_is_strong"])
+            assert gate(observation, PROVISIONAL_CONFIG) is (
+                RejectionReason.WEAK_ASSOCIATION)
+
+    def test_the_association_is_strong_by_default(self, site, agents):
+        stream = observe(plan_for(site, agents, NONE))
+        assert all(event.payload["association_is_strong"]
+                   for event in stream.events
+                   if event.type is EventType.FACE_OBSERVED)

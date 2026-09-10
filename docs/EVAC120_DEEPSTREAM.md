@@ -119,6 +119,27 @@ engine in the probe. If it survives past five seconds, the inference holds. If
 it still crashes, the inference is wrong and the four planned remedies are the
 route. That test costs one config change and one restart.
 
+### 2.5 What it costs while it is unfixed
+
+With no shared tracker, a face is attached to a body by geometry, and
+`identity_fsm.gate` refuses a geometric association outright rather than
+discounting it. The simulator injects that failure as `misassociation_rate`,
+and the shape is a cliff rather than a slope. Measured on a 200-person drill,
+seed 20260910, with nothing else injected:
+
+| Faces misassociated | Accounted | Falsely accounted |
+|---|---|---|
+| none | 170 | 0 |
+| half | 172 | 0 |
+| nine in ten | 143 | 0 |
+| all | 0 | 0 |
+
+Partial weakness is close to free, because the frames that survive still carry
+enough votes to confirm. Total weakness accounts for nobody through the cameras
+and falls back entirely on the wardens. Nothing is cleared falsely at any rate,
+which is the gate behaving as designed — the cost of this bug is measured in
+accountability, never in safety.
+
 ---
 
 ## 3. Proposed pipeline

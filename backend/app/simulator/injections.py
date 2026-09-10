@@ -55,6 +55,16 @@ class Injections:
     wrong_identity_rate: float = 0.0
     """An outright misidentification: a confident match on the wrong person."""
 
+    misassociation_rate: float = 0.0
+    """A real face, matched correctly, pinned to the wrong body.
+
+    The face and the body came from different trackers and were associated by
+    geometry, so when two people cross, one person's face lands on the other's
+    track. Everything about the observation looks strong except the one thing
+    that matters, which is why `identity_fsm.gate` refuses it structurally and
+    not on score. This is the failure the P2.3b segfault leaves in place: with
+    no shared tracker there is nothing but geometry to associate with."""
+
     # --- the tracker ----------------------------------------------------------
     track_fragmentation_rate: float = 0.0
     """One person becomes two global ids. Their evidence is split in half."""
@@ -112,6 +122,7 @@ REALISTIC = Injections(
     bad_pose_rate=0.10,
     lookalike_confusion_rate=0.30,
     wrong_identity_rate=0.01,
+    misassociation_rate=0.05,
     track_fragmentation_rate=0.08,
     id_switch_rate=0.02,
     occlusion_rate=0.10,
@@ -130,6 +141,7 @@ HOSTILE = Injections(
     bad_pose_rate=0.25,
     lookalike_confusion_rate=0.8,
     wrong_identity_rate=0.05,
+    misassociation_rate=0.25,
     track_fragmentation_rate=0.25,
     id_switch_rate=0.10,
     occlusion_rate=0.25,
