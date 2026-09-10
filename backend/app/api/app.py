@@ -328,24 +328,37 @@ def create_app(registry: DrillRegistry | None = None,
 
         Reports degraded when anything is wrong, so a chaos run can tell the
         difference between a service that stayed up and one that stayed up and
-        lied.
+        lied. A configuration gap counts as degraded: a node with no roster is
+        not healthy just because nothing has crashed.
         """
+        node = getattr(app.state, "edge", None)
         drill = app.state.registry.running()
-        if drill is None:
-            return {"status": "ok", "degraded": False, "drill": None,
-                    "replication_backlog": 0}
-        state = drill.ingestor.state
-        return {
+
+        report = {
             "status": "ok",
-            "degraded": state.health.is_degraded,
-            "blind": state.health.is_blind,
-            "drill": drill.drill_id,
-            "open_outages": len(state.health.open_now()),
-            "events_accepted": state.accepted,
-            "duplicates_dropped": state.duplicates_dropped,
-            "outstanding_gaps": len(state.tracker.outstanding_gaps()),
+            "degraded": False,
+            "drill": drill.drill_id if drill else None,
             "replication_backlog": 0,
         }
+
+        if node is not None:
+            report.update(node.health(now_ms()))
+            report["status"] = "ok"
+            report["drill"] = drill.drill_id if drill else None
+
+        if drill is not None:
+            state = drill.ingestor.state
+            report.update({
+                "degraded": (report.get("degraded", False)
+                             or state.health.is_degraded),
+                "blind": state.health.is_blind,
+                "open_outages": len(state.health.open_now()),
+                "events_accepted": state.accepted,
+                "duplicates_dropped": state.duplicates_dropped,
+                "outstanding_gaps": len(state.tracker.outstanding_gaps()),
+            })
+
+        return report
 
     _mount_frontend(app)
     return app

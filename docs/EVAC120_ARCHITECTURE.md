@@ -73,6 +73,7 @@ anywhere. Change any input and the answer changes with it.
 | `app/reporting` | 586 | `drill`, `infra` | Post-drill report and validation criteria |
 | `app/infra` | 582 | — | Permissions, audit log, retention policy |
 | `app/sync` | 700 | `core` | VisionTrack geometry into EVAC-120's model, and pulling it |
+| `app/service` | 560 | everything | The edge process: what runs, when, and what happens when it fails |
 | `frontend/` | 1323 | — | Command centre and warden PWA. No framework |
 
 10,330 lines of application code, 6,412 of tests, 712 tests.
@@ -167,7 +168,8 @@ Named rather than left to be discovered.
 
 | Missing | Consequence |
 |---|---|
-| A process that runs the consumer and the sync on a schedule | Both are built and tested; nothing calls them in a loop yet |
+| Postgres persistence | The geometry store and drill registry are in memory; a restart re-syncs and loses a running drill |
+| The HTTP transport to central | Events buffer durably and are never delivered |
 | Postgres projection persistence | Projections are in memory; a restart rebuilds them from the event stream |
 | Alembic migrations | Nothing is persisted yet, so there is nothing to migrate. `evac_events` is the first table |
 | JWT verification | The API reads identity from headers a gateway sets. Do not expose it beyond the edge node's network |

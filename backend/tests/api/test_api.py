@@ -477,3 +477,27 @@ class TestServingTheFrontEnds:
                      "/static/js/queue.js", "/static/js/render.js",
                      "/static/icons/icon-192.png"):
             assert client.get(path).status_code == 200, path
+
+
+class TestHealthReportsConfigurationGaps:
+    """A node with no roster is not healthy just because nothing has crashed."""
+
+    def test_a_bare_edge_node_makes_the_service_degraded(self, client):
+        from app.service.edge import build_edge
+
+        client.app.state.edge = build_edge({}, now_ms=T0)
+        body = client.get("/healthz").json()
+        assert body["degraded"] is True
+        assert body["configuration_gaps"]
+
+    def test_the_gaps_are_named_so_a_chaos_run_can_read_them(self, client):
+        from app.service.edge import build_edge
+
+        client.app.state.edge = build_edge({}, now_ms=T0)
+        gaps = "\n".join(client.get("/healthz").json()["configuration_gaps"])
+        assert "no roster source" in gaps
+
+    def test_without_an_edge_node_it_still_answers(self, client):
+        # The API can run alone, and a health endpoint that 500s when a
+        # collaborator is absent is worse than one that says so.
+        assert client.get("/healthz").status_code == 200

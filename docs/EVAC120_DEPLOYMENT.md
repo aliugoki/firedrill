@@ -119,10 +119,44 @@ window. See `EVAC120_RESILIENCE.md` §5.
 
 ## 4. Running it
 
+Two processes, on purpose. A crash in one must not take the other with it, and
+an operator who can still reach the board while ingest is restarting has more
+than one who can reach nothing.
+
 ```bash
 cd backend
+
+# the API and both front ends
 ../.venv/bin/uvicorn app.api.main:app --host 0.0.0.0 --port 8100
+
+# the background work: draining the stream, ageing the core, replicating,
+# refreshing geometry
+../.venv/bin/python -m app.service.main
 ```
+
+The edge process starts even when it is misconfigured, and logs each missing
+piece as a warning at startup rather than failing at the first drill. A process
+that exits because Redis is unset gives an operator nothing to look at; one that
+starts and says "there is no event stream" gives them the answer. `/healthz`
+reports the same gaps, so a monitoring system sees them too.
+
+Shutdown is graceful: on SIGTERM the supervisor stops taking new work, the
+outbox is flushed one last time, and only then does the process exit. A drill
+interrupted by a deploy should lose nothing.
+
+### 4.0 Background jobs and their clocks
+
+| Job | Every | Why that interval |
+|---|---|---|
+| `tick` | 1 s | A person becoming stale is a second-scale event. **Never backed off**, because slowing it under load is exactly when a stale track most needs ageing |
+| `consume` | 250 ms | The board is meant to be live |
+| `replicate` | 15 s | Also the producer half of the recovery point objective |
+| `sync` | 5 min | A floor plan changing mid-drill is not a thing that happens |
+
+A failing job backs off exponentially to a cap and never gives up: a dependency
+coming back must not need a human to notice. One job failing never stops
+another — a geometry sync that cannot reach VisionTrack must not stop the
+consumer draining events during a drill.
 
 The front ends are served by the same process at the same origin. That is
 required rather than convenient: a service worker can only control pages on its
@@ -191,12 +225,13 @@ truth; everything else is derived from it.
 
 Named rather than left to be discovered:
 
-- **The Redis consumer loop.** The fold is built and tested; the process that
-  drives it from a live stream is not. Events currently reach the system through
-  the API or the simulator.
-- **Postgres projection persistence.** Projections are computed in memory and
-  are correct; they are not yet written anywhere, so a restart mid-drill
-  rebuilds them from the event stream rather than reading them back.
+- **Postgres persistence for the geometry store and the drill registry.** Both
+  are in memory, so a restart re-syncs geometry and loses any drill that was
+  running. The event stream is the source of truth, but nothing reads it back
+  yet.
+- **The HTTP transport to central.** The outbox buffers durably and the
+  reconciler is built; what is missing is the credential and the endpoint
+  between them, so events accumulate locally rather than being delivered.
 - **JWT verification.** The API reads identity from headers a gateway sets. Do
   not expose it beyond the edge node's network until that gateway exists.
 - **The FaceTrack HTTP client.** Use `EVAC_ROSTER_FILE` until it lands.
