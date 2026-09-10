@@ -1,0 +1,256 @@
+"""The post-drill report and its verdict.
+
+The point of these is that a real drill has no oracle. Validation is against the
+manual roll-call, and a drill that did not produce one cannot judge the system
+however good the system's own numbers look.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from app.core.roster import ExpectationReason, Roster
+from app.drill import Drill
+from app.infra.audit import AuditAction, AuditLog
+from app.reporting.drill_report import build_report
+from app.reporting.validation import Criterion, Outcome, Thresholds, validate
+from app.warden.actions import ActionKind, WardenAction
+from app.warden.headcount import Headcount
+
+T0 = 1_788_000_000_000
+ASSEMBLY = frozenset({"assembly-north"})
+
+CLEAN = dict(
+    false_accounted=0, false_unaccounted=0, sweeps_completed=2, sweeps_expected=2,
+    zones_with_headcount=2, headcount_mismatches=0, timing_samples=200,
+    timing_coverage=0.95, p95_s=114.0, p95_reliable=True, blind_fraction=0.0)
+
+
+def drill_with(people=4, zone="assembly-north") -> Drill:
+    roster = Roster()
+    for i in range(people):
+        roster.add_employee(emp_id=f"EMP-{i:03d}", display_name=f"Person {i}",
+                            has_gallery_entry=True, department="Engineering",
+                            home_floor_id="floor-2", assigned_assembly_zone=zone,
+                            reason=ExpectationReason.ON_SHIFT)
+    drill = Drill(drill_id="d1", tenant_id="t", site_id="s", name="Q3 drill",
+                  roster=roster.snapshot(T0), created_ms=T0,
+                  assembly_zones=ASSEMBLY)
+    drill.start(T0)
+    return drill
+
+
+def confirm(drill: Drill, person_ref: str, ts_ms=T0 + 60_000, zone="assembly-north"):
+    drill.record_warden_action(WardenAction(
+        kind=ActionKind.CONFIRM_PRESENT, warden_id="warden-7",
+        device_id="tablet-3", zone_id=zone, ts_ms=ts_ms, subject=person_ref))
+
+
+class TestTheVerdictOrder:
+    """A safety failure outranks everything; missing evidence is not a pass."""
+
+    def test_a_clean_drill_passes(self):
+        assert validate(**CLEAN).outcome is Outcome.PASS
+
+    def test_one_false_accounted_fails_the_whole_drill(self):
+        result = validate(**{**CLEAN, "false_accounted": 1})
+        assert result.outcome is Outcome.FAIL
+        assert result.safety_failures
+        assert "not confirmed by any warden" in result.summary()
+
+    def test_a_safety_failure_outranks_missing_evidence(self):
+        # Both wrong. The report must lead with the dangerous one.
+        result = validate(**{**CLEAN, "false_accounted": 1, "sweeps_completed": 0})
+        assert result.outcome is Outcome.FAIL
+        assert result.safety_failures
+
+    def test_no_sweeps_is_inconclusive_not_a_pass(self):
+        # Not a soft pass: there was nothing to check the system against.
+        result = validate(**{**CLEAN, "sweeps_completed": 0})
+        assert result.outcome is Outcome.INCONCLUSIVE
+        assert "cannot judge the system" in result.summary()
+
+    def test_no_headcount_is_inconclusive(self):
+        result = validate(**{**CLEAN, "zones_with_headcount": 0})
+        assert result.outcome is Outcome.INCONCLUSIVE
+
+    def test_a_mostly_blind_drill_is_inconclusive(self):
+        # A test of the wardens, not of the system.
+        result = validate(**{**CLEAN, "blind_fraction": 0.4})
+        assert result.outcome is Outcome.INCONCLUSIVE
+        assert any("test of the wardens" in c.detail
+                   for c in result.missing_evidence)
+
+    def test_low_coverage_is_inconclusive(self):
+        result = validate(**{**CLEAN, "timing_coverage": 0.4})
+        assert result.outcome is Outcome.INCONCLUSIVE
+
+    def test_a_perfect_drill_with_no_evidence_still_cannot_pass(self):
+        # Every system number ideal, no warden did anything.
+        result = validate(**{
+            **CLEAN, "sweeps_completed": 0, "zones_with_headcount": 0})
+        assert result.outcome is not Outcome.PASS
+
+    def test_missing_the_target_is_a_fail_not_inconclusive(self):
+        # The drill could say, and the answer was no.
+        result = validate(**{**CLEAN, "p95_s": 180.0})
+        assert result.outcome is Outcome.FAIL
+
+    def test_too_few_samples_makes_the_p95_unmeasurable(self):
+        result = validate(**{**CLEAN, "timing_samples": 8, "p95_reliable": False})
+        failed = {c.criterion for c in result.failed}
+        assert Criterion.P95_MEASURABLE in failed
+
+    def test_a_headcount_disagreement_fails_the_drill(self):
+        result = validate(**{**CLEAN, "headcount_mismatches": 1})
+        assert result.outcome is Outcome.FAIL
+
+    def test_thresholds_are_marked_unvalidated(self):
+        assert Thresholds().calibrated is False
+        assert "no live drill has run" in "\n".join(validate(**CLEAN).describe())
+
+
+class TestFalseAccountedAgainstTheRollCall:
+    """The reference is the warden, not the truth, because a real building has
+    no truth to consult."""
+
+    def test_a_person_no_warden_confirmed_counts_as_false_accounted(self):
+        drill = drill_with(people=2)
+        # The system accounts for one via a warden at the zone, and the roll
+        # call covers only that one.
+        confirm(drill, "emp:EMP-000")
+        report = build_report(drill, now_ms=T0 + 600_000)
+        assert report.accounted == 1
+        assert report.false_accounted == ()
+
+    def test_a_warden_contradiction_is_a_false_accounted(self):
+        drill = drill_with(people=1)
+        confirm(drill, "emp:EMP-000")
+        # Then the same warden says they are not here after all.
+        drill.record_warden_action(WardenAction(
+            kind=ActionKind.NOT_HERE, warden_id="warden-7", device_id="tablet-3",
+            zone_id="assembly-north", ts_ms=T0 + 120_000,
+            subject="emp:EMP-000"))
+        report = build_report(drill, now_ms=T0 + 600_000)
+        # The later assertion wins, so the system no longer accounts for them.
+        assert report.accounted == 0
+        assert report.false_accounted == ()
+
+    def test_a_person_a_warden_confirmed_but_the_system_missed_is_false_unaccounted(self):
+        # A quality failure, not a safety one: it wastes a warden's time, but
+        # nobody is left in a building because of it.
+        drill = drill_with(people=2)
+        confirm(drill, "emp:EMP-000", zone="floor-3")  # not an assembly zone
+        report = build_report(drill, now_ms=T0 + 600_000)
+        assert len(report.false_unaccounted) == 1
+        assert report.false_unaccounted[0].warden_said == "confirmed present"
+
+    def test_the_two_directions_are_never_merged(self):
+        # Reporting them as one error rate would average a safety failure with
+        # an inconvenience.
+        drill = drill_with(people=2)
+        confirm(drill, "emp:EMP-000", zone="floor-3")
+        report = build_report(drill, now_ms=T0 + 600_000)
+        assert isinstance(report.false_accounted, tuple)
+        assert isinstance(report.false_unaccounted, tuple)
+        assert report.false_accounted is not report.false_unaccounted
+
+    def test_every_false_accounted_is_listed_in_full(self):
+        # Never a count on its own. Each one is a person somebody has to go and
+        # find.
+        drill = drill_with(people=1)
+        report = build_report(drill, now_ms=T0 + 600_000)
+        text = "\n".join(report.render())
+        assert "FALSE ACCOUNTED" in text
+
+
+class TestTheReport:
+    def test_it_leads_with_the_verdict(self):
+        drill = drill_with(people=2)
+        lines = build_report(drill, now_ms=T0 + 600_000).render()
+        joined = "\n".join(lines[:8])
+        assert any(word in joined for word in ("PASS", "FAIL", "INCONCLUSIVE"))
+
+    def test_it_reports_no_percentiles_rather_than_zero(self):
+        drill = drill_with(people=2)
+        report = build_report(drill, now_ms=T0 + 600_000)
+        assert report.p95_s is None
+        assert "no measurements" in "\n".join(report.render()).lower()
+
+    def test_it_says_the_thresholds_are_not_validated(self):
+        # These numbers describe what happened, not how well the system works.
+        drill = drill_with(people=2)
+        text = "\n".join(build_report(drill, now_ms=T0 + 600_000).render())
+        assert "no threshold in this system has been validated" in text
+
+    def test_it_counts_sweeps_and_headcounts_against_the_zones(self):
+        drill = drill_with(people=2)
+        report = build_report(drill, now_ms=T0 + 600_000)
+        assert report.sweeps_expected == 1
+        assert report.sweeps_completed == 0
+        assert report.zones_with_headcount == 0
+
+    def test_a_completed_sweep_and_count_are_recorded(self):
+        drill = drill_with(people=2)
+        for i in range(2):
+            confirm(drill, f"emp:EMP-{i:03d}")
+        drill.record_headcount(Headcount(
+            zone_id="assembly-north", warden_id="warden-7", device_id="tablet-3",
+            ts_ms=T0 + 120_000, physical_count=2, system_count=2))
+        drill.record_warden_action(WardenAction(
+            kind=ActionKind.SWEEP_COMPLETE, warden_id="warden-7",
+            device_id="tablet-3", zone_id="assembly-north", ts_ms=T0 + 180_000))
+        report = build_report(drill, now_ms=T0 + 600_000)
+        assert report.sweeps_completed == 1
+        assert report.zones_with_headcount == 1
+        assert report.headcount_mismatches == ()
+
+    def test_a_headcount_disagreement_is_quoted_in_the_report(self):
+        drill = drill_with(people=2)
+        for i in range(2):
+            confirm(drill, f"emp:EMP-{i:03d}")
+        drill.record_headcount(Headcount(
+            zone_id="assembly-north", warden_id="warden-7", device_id="tablet-3",
+            ts_ms=T0 + 120_000, physical_count=1, system_count=2))
+        report = build_report(drill, now_ms=T0 + 600_000)
+        assert report.headcount_mismatches
+        assert "not at the muster point" in report.headcount_mismatches[0]
+
+    def test_escalations_are_carried_into_the_report(self):
+        drill = drill_with(people=2)
+        drill.record_warden_action(WardenAction(
+            kind=ActionKind.ESCALATE, warden_id="warden-7", device_id="tablet-3",
+            zone_id="assembly-north", ts_ms=T0 + 60_000,
+            note="smoke in the west stairwell"))
+        report = build_report(drill, now_ms=T0 + 600_000)
+        assert "smoke in the west stairwell" in report.escalations
+
+    def test_manual_overrides_come_from_the_audit_log(self):
+        drill = drill_with(people=2)
+        audit = AuditLog()
+        audit.record(action=AuditAction.MANUAL_OVERRIDE, actor_id="commander-1",
+                     ts_ms=T0 + 300_000, drill_id="d1",
+                     subject="emp:EMP-000", summary="marked accounted by hand",
+                     before={"state": "UNACCOUNTED"}, after={"state": "ACCOUNTED"})
+        report = build_report(drill, now_ms=T0 + 600_000, audit=audit)
+        assert report.warden_overrides == 1
+
+    def test_warden_confirmations_are_counted(self):
+        drill = drill_with(people=3)
+        for i in range(2):
+            confirm(drill, f"emp:EMP-{i:03d}")
+        assert build_report(drill, now_ms=T0 + 600_000).warden_confirmations == 2
+
+    def test_the_report_renders_without_a_drill_ever_starting(self):
+        # A drill created and abandoned still has to produce something readable.
+        roster = Roster()
+        roster.add_employee(emp_id="EMP-1", display_name="A",
+                            has_gallery_entry=True,
+                            assigned_assembly_zone="assembly-north",
+                            reason=ExpectationReason.ON_SHIFT)
+        drill = Drill(drill_id="d2", tenant_id="t", site_id="s", name="abandoned",
+                      roster=roster.snapshot(T0), created_ms=T0,
+                      assembly_zones=ASSEMBLY)
+        lines = build_report(drill, now_ms=T0 + 1000).render()
+        assert lines
+        assert any("INCONCLUSIVE" in line for line in lines)

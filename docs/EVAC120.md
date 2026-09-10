@@ -22,8 +22,8 @@ of each phase. It is updated at every phase gate.
 | 1 | Pure-Python core + simulator, no cameras | Complete |
 | 2 | Single DeepStream pipeline on GPU host + calibration | Design + harness complete; GPU work blocked |
 | 3 | Edge/central resilience, projections, chaos suite | Complete |
-| 4 | Command Center + Warden Mobile PWA | **Built; live dry run blocked** |
-| 5 | Three live drills, validation report | Not started |
+| 4 | Command Center + Warden Mobile PWA | Built; live dry run blocked |
+| 5 | Three live drills, validation report | **Report and criteria built; live drills blocked** |
 
 ---
 
@@ -803,6 +803,92 @@ unreviewed:
 | No raw AI metrics on the board | asserted |
 | Service worker install list | every file verified to exist |
 | **Live dry run at Sialkot** | **blocked: needs real cameras, roster and a warden device** |
+
+---
+
+## 9E. Phase 5: the report is built, the drills are not
+
+Three live drills need a building, cameras, a roster and wardens. What does not
+need any of those is the analysis that runs afterwards, and building it now
+means the moment a real drill happens the assessment is ready rather than being
+written in hindsight by someone who already knows the answer.
+
+Full detail in `docs/EVAC120_VALIDATION.md`.
+
+### 9E.1 A real drill has no oracle
+
+The central problem. In simulation the agents know where they went, so "false
+accounted" is a set difference against ground truth. In a building on a Tuesday
+afternoon nobody has that list — which is exactly why the warden's physical
+roll-call exists.
+
+So validation is defined **against the manual roll-call**, not against truth.
+When the system and a warden disagree, the warden is right by definition. Not as
+a courtesy, as the reference.
+
+### 9E.2 The two disagreements are never merged
+
+**False accounted** means the system said safe and no warden confirmed it. A
+safety failure. Must be zero, and every instance is listed individually with the
+system's own reasoning beside it, because each one is a person somebody has to
+go and find.
+
+**False unaccounted** means a warden confirmed someone the system could not.
+A quality failure: it wastes a warden's time and erodes trust in the board, but
+nobody is left in a building because of it.
+
+Averaging them into an accuracy figure would hide the only one that matters.
+
+### 9E.3 INCONCLUSIVE is not a soft pass
+
+Three outcomes, and the third does the most work. A drill where the cameras were
+blind for half the time, or where no warden completed a sweep, cannot validate
+the system even if every number on the board is perfect. There was nothing to
+check the board against.
+
+Without this, a system accumulates a record of successful drills that prove
+nothing. A run where the wardens did not turn up and the cameras saw everything
+produces beautiful numbers and is worth exactly as much as a self-marked exam.
+
+Two criteria are evidentiary rather than quality, and the classification is the
+interesting part. **Taking a physical headcount** is evidentiary because walking
+a zone ticking people off the system's own list is checking the system against
+itself. And **coverage** guards against the easiest way to fake a P95: a
+percentile computed only over people tracked end to end improves when the slow,
+hard-to-track people fall out of the sample.
+
+### 9E.4 A worked example
+
+A 200-agent simulated drill under the realistic profile, driven through the real
+drill object rather than a test harness:
+
+```
+INCONCLUSIVE — only 83% of people were tracked from alarm to arrival
+
+  FALSE ACCOUNTED         0
+  false unaccounted       0
+  P50 64.0s  P90 104.8s  P95 123.4s  P99 195.3s
+  measured on             177 people (83% coverage)
+  slowest floor           basement at P95 158.9s
+  sweeps completed        2/2      blind for 20% of the drill
+```
+
+Nobody was falsely accounted, every zone was swept and counted, and the counts
+agreed. The system did well by the measures that matter most, and the drill
+still cannot validate it, because a camera was down for two minutes and 17% of
+people produced no timing at all.
+
+That is the intended behaviour. It says fix the coverage and run it again, not
+celebrate the zero.
+
+### 9E.5 Phase 5 gate
+
+| Check | Result |
+|---|---|
+| Full suite | **712 passed, 1 xfailed**, 185 s |
+| Report generator and criteria | built, 27 tests |
+| Worked example on simulated data | §9E.4 |
+| **Three live drills** | **blocked: needs a building, cameras, a roster and wardens** |
 
 ---
 
