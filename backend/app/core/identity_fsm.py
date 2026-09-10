@@ -62,6 +62,7 @@ class RejectionReason(str, Enum):
     LOW_QUALITY = "LOW_QUALITY"
     BAD_POSE = "BAD_POSE"
     LOW_TRACK_CONFIDENCE = "LOW_TRACK_CONFIDENCE"
+    WEAK_ASSOCIATION = "WEAK_ASSOCIATION"
     BELOW_SCORE_THRESHOLD = "BELOW_SCORE_THRESHOLD"
     BELOW_MARGIN = "BELOW_MARGIN"
 
@@ -84,6 +85,7 @@ class IdentityConfig:
     max_pose_deviation_deg: float
     min_track_confidence: float
     identity_expiry_ms: int
+    require_strong_association: bool = True
     calibrated: bool = False
     source: str = "uncalibrated"
 
@@ -113,6 +115,7 @@ PROVISIONAL_CONFIG = IdentityConfig(
     max_pose_deviation_deg=45.0,
     min_track_confidence=0.5,
     identity_expiry_ms=30_000,
+    require_strong_association=True,
     calibrated=False,
     source="DeepStream config_pipeline.example.toml, unvalidated",
 )
@@ -134,6 +137,16 @@ class FaceObservation:
     pose_deviation_deg: float = 0.0
     track_confidence: float = 1.0
     camera_id: str | None = None
+    association_is_strong: bool = True
+    """Whether the face and the body came from one tracker.
+
+    Set by `fusion.fuse`. When False the face was attached to a body by
+    geometry, which is the weak correlation that puts a name on the wrong person
+    when two people cross. It is a separate gate rather than only a confidence
+    multiplier, because a multiplier's effect depends on a numeric coincidence
+    between two independently-configured values, and this rule is too important
+    to rest on one.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +167,8 @@ def gate(obs: FaceObservation, config: IdentityConfig) -> RejectionReason:
     is not. Pure, so the simulator and the calibration harness share it."""
     if obs.candidate_id is None:
         return RejectionReason.NO_FACE
+    if config.require_strong_association and not obs.association_is_strong:
+        return RejectionReason.WEAK_ASSOCIATION
     if obs.track_confidence < config.min_track_confidence:
         return RejectionReason.LOW_TRACK_CONFIDENCE
     if obs.quality < config.min_face_quality:
