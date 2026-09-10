@@ -16,9 +16,12 @@ from __future__ import annotations
 
 import time
 import uuid
+from pathlib import Path
 from typing import Callable
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api import schemas
 from app.core.roster import RosterSnapshot
@@ -344,7 +347,42 @@ def create_app(registry: DrillRegistry | None = None,
             "replication_backlog": 0,
         }
 
+    _mount_frontend(app)
     return app
+
+
+def _mount_frontend(app: FastAPI) -> None:
+    """Serve the command centre and the warden PWA from the same origin.
+
+    Same origin matters for the PWA: a service worker can only control pages on
+    its own origin, and a warden's tablet has to start from cache with no
+    network at all. Serving the front end from a separate host would mean the
+    app cannot install, which is the one thing it must do.
+    """
+    root = Path(__file__).resolve().parents[3] / "frontend"
+    if not root.is_dir():
+        return
+
+    @app.get("/static/sw.js", include_in_schema=False)
+    def service_worker():
+        # Registered before the static mount, which would otherwise shadow it
+        # and drop the header. Without Service-Worker-Allowed the browser
+        # refuses a worker served from /static/ the scope /evac/, and the PWA
+        # silently loses its ability to start offline — the one thing it exists
+        # to do, failing in the one way nobody notices until a real drill.
+        return FileResponse(
+            root / "sw.js", media_type="application/javascript",
+            headers={"Service-Worker-Allowed": "/"})
+
+    app.mount("/static", StaticFiles(directory=root), name="static")
+
+    @app.get("/", include_in_schema=False)
+    def command_centre():
+        return FileResponse(root / "index.html")
+
+    @app.get("/evac/warden", include_in_schema=False)
+    def warden():
+        return FileResponse(root / "warden.html")
 
 
 # --- shaping ------------------------------------------------------------------

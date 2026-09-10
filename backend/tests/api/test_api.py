@@ -429,3 +429,51 @@ class TestOpenApi:
         description = spec["info"]["description"]
         assert "never replaces, certified fire" in description
         assert "final authority" in description
+
+
+class TestServingTheFrontEnds:
+    """Same origin, because a service worker can only control its own origin
+    and a warden's tablet has to start from cache with no network at all."""
+
+    def test_the_command_centre_is_served(self, client):
+        response = client.get("/")
+        assert response.status_code == 200
+        assert "EVAC-120" in response.text
+
+    def test_the_warden_pwa_is_served_at_its_own_path(self, client):
+        response = client.get("/evac/warden")
+        assert response.status_code == 200
+        assert "manifest.webmanifest" in response.text
+
+    def test_the_service_worker_is_allowed_a_root_scope(self, client):
+        # Without this header the browser refuses a worker served from /static/
+        # the scope /evac/, and the PWA silently loses its ability to start
+        # offline — failing in the one way nobody notices until a real drill.
+        response = client.get("/static/sw.js")
+        assert response.status_code == 200
+        assert response.headers.get("service-worker-allowed") == "/"
+
+    def test_the_manifest_declares_an_installable_app(self, client):
+        manifest = client.get("/static/manifest.webmanifest").json()
+        assert manifest["display"] == "standalone"
+        assert manifest["start_url"] == "/evac/warden"
+        assert any(icon["sizes"] == "512x512" for icon in manifest["icons"])
+        assert any(icon["purpose"] == "maskable" for icon in manifest["icons"])
+
+    def test_every_file_the_worker_caches_actually_exists(self, client):
+        # A service worker whose install list contains a 404 fails to install
+        # entirely, and the app then never works offline at all.
+        import re
+
+        source = client.get("/static/sw.js").text
+        shell = re.search(r"const SHELL = \[(.*?)\];", source, re.S).group(1)
+        paths = re.findall(r"'([^']+)'", shell)
+        assert paths
+        for path in paths:
+            assert client.get(path).status_code == 200, f"{path} is in SHELL but 404s"
+
+    def test_the_static_assets_are_served(self, client):
+        for path in ("/static/css/app.css", "/static/js/warden.js",
+                     "/static/js/queue.js", "/static/js/render.js",
+                     "/static/icons/icon-192.png"):
+            assert client.get(path).status_code == 200, path

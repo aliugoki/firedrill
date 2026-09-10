@@ -1,0 +1,10 @@
+{
+  "name": "evac120-frontend",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "description": "EVAC-120 command centre and warden PWA. No framework, no build step — see CLAUDE.md.",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  }
+}

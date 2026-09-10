@@ -65,11 +65,32 @@ confirmation). Nothing else may set it.
 - No new dependency without flagging it. This runs on an edge node.
 
 ## Frontend conventions
-- React + Vite + TS + Tailwind.
-- i18n en/ar, RTL-aware. Every UI string in both locale files.
-- Warden PWA is offline-first: service worker + IndexedDB, roster cached at
-  drill start, confirmations queued locally and synced on reconnect.
-- Command center colour states: GREEN accounted, YELLOW uncertain or manual,
+
+**No framework and no build step.** This is a deliberate reversal of the
+earlier plan to use React and Vite, and the reasoning is worth keeping.
+
+The warden PWA runs on a tablet at an assembly point, on an edge node with no
+Internet, and it must start from cache when the network is gone. A bundle the
+service worker has to cache is a bundle that must be rebuilt, versioned and
+invalidated correctly or the app silently stops working offline. Both surfaces
+are read-mostly with a handful of interactions, so a framework buys less here
+than it usually does, and a life-safety-adjacent tool with several hundred
+transitive dependencies is a liability rather than a convenience. What ships is
+what a site engineer can open and read.
+
+The cost is real and worth stating: no component model, no type checking, and
+manual DOM updates. If either surface grows past a few screens, revisit this.
+
+- Plain ES modules, served from the backend at the same origin. Same origin is
+  not optional: a service worker can only control pages on its own origin.
+- Pure logic lives in `render.js`, `queue.js` and `i18n.js` and is tested with
+  `node --test`. DOM glue lives in `command.js` and `warden.js` and is not.
+- i18n en/ar, RTL-aware. Every UI string in both tables; a missing one renders
+  the key rather than falling back to English, so it is obvious in testing.
+- Warden PWA is offline-first: service worker plus IndexedDB, roster cached at
+  drill start, confirmations queued locally with device-assigned sequence
+  numbers, synced on reconnect.
+- Command centre colour states: GREEN accounted, YELLOW uncertain or manual,
   ORANGE currently unobserved, RED unaccounted. **No raw AI metrics on the
   operator screen.**
 

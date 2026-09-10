@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EVAC-120 Command Centre</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+  <div class="safety-notice" id="safety"></div>
+  <header class="bar">
+    <h1 id="title">EVAC-120</h1>
+    <span id="drill-name"></span>
+    <span class="spacer"></span>
+    <span id="elapsed" style="font-variant-numeric:tabular-nums"></span>
+    <span id="health"></span>
+    <button id="lang">العربية</button>
+  </header>
+
+  <main>
+    <div id="stale-banner"></div>
+    <section id="verdict" class="verdict not-clear">
+      <h2>—</h2>
+      <ul></ul>
+    </section>
+
+    <section class="tiles" id="tiles"></section>
+
+    <div class="grid">
+      <div class="panel">
+        <h3 id="priority-title">Needs attention</h3>
+        <div id="priority"></div>
+      </div>
+      <div>
+        <div class="panel" style="margin-bottom:16px">
+          <h3 id="timing-title">Evacuation times</h3>
+          <div class="body" id="timing"></div>
+        </div>
+        <div class="panel">
+          <h3 id="zones-title">Assembly zones</h3>
+          <div id="zones"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div id="drawer-host"></div>
+  <script type="module" src="/static/js/command.js"></script>
+</body>
+</html>

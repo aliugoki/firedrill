@@ -1,0 +1,191 @@
+/**
+ * The command centre.
+ *
+ * Polls the board, renders it, and opens the explain drawer on demand. All the
+ * decisions live in render.js; this file is the DOM and the polling loop.
+ *
+ * The one rule it enforces on its own: a failed poll never blanks the screen.
+ * It keeps the last good picture and says how old it is, because a board that
+ * empties on a network blip looks exactly like a building that has emptied.
+ */
+
+import { Api, Freshness } from './api.js';
+import { createTranslator, isRtl, formatDuration } from './i18n.js';
+import {
+  healthLine, orderForWarden, staleness, tiles, timingLine, verdict,
+} from './render.js';
+
+const params = new URLSearchParams(location.search);
+let lang = params.get('lang') || localStorage.getItem('evac.lang') || 'en';
+let t = createTranslator(lang);
+
+// Phase 4 reads identity from the page. A gateway sets these headers in a real
+// deployment; the seam is left visible rather than hidden behind a fake login.
+const api = new Api().withIdentity({
+  userId: params.get('user') || 'commander-1',
+  permissions: ['evac:read', 'evac:operate'],
+});
+
+const boardFreshness = new Freshness(10_000);
+const timingFreshness = new Freshness(30_000);
+const zoneFreshness = new Freshness(30_000);
+
+let drillId = params.get('drill') || null;
+
+function applyLanguage() {
+  t = createTranslator(lang);
+  document.documentElement.lang = lang;
+  document.documentElement.dir = isRtl(lang) ? 'rtl' : 'ltr';
+  document.getElementById('safety').textContent = t('app.safety_notice');
+  document.getElementById('title').textContent = t('app.title');
+  document.getElementById('priority-title').textContent = t('board.priority');
+  document.getElementById('timing-title').textContent = t('board.timing');
+  document.getElementById('zones-title').textContent = t('board.zones');
+  document.getElementById('lang').textContent = lang === 'en' ? 'العربية' : 'English';
+}
+
+document.getElementById('lang').addEventListener('click', () => {
+  lang = lang === 'en' ? 'ar' : 'en';
+  localStorage.setItem('evac.lang', lang);
+  applyLanguage();
+  paint();
+});
+
+async function pickDrill() {
+  if (drillId) return drillId;
+  const drills = await api.listDrills();
+  const running = (Array.isArray(drills) ? drills : []).find((d) => d.status === 'RUNNING');
+  drillId = (running || (Array.isArray(drills) ? drills[0] : null))?.drill_id || null;
+  return drillId;
+}
+
+async function poll() {
+  try {
+    const id = await pickDrill();
+    if (!id) { boardFreshness.fail(new Error('no drill')); return; }
+    boardFreshness.succeed(await api.board(id));
+    timingFreshness.succeed(await api.timing(id));
+    zoneFreshness.succeed(await api.zones(id));
+  } catch (error) {
+    // Keep the last good picture. Blanking it would look like an empty
+    // building rather than a broken connection.
+    boardFreshness.fail(error);
+  }
+  paint();
+}
+
+function paint() {
+  const board = boardFreshness.value;
+  const banner = staleness(boardFreshness, t);
+  const host = document.getElementById('stale-banner');
+  host.innerHTML = banner ? `<div class="stale">${escape(banner.text)}</div>` : '';
+
+  const v = verdict(board, t);
+  const section = document.getElementById('verdict');
+  section.className = `verdict ${v.clear ? 'clear' : 'not-clear'}`;
+  section.querySelector('h2').textContent = v.headline;
+  section.querySelector('ul').innerHTML = v.clear
+    ? ''
+    : v.reasons.map((r) => `<li>${escape(r)}</li>`).join('');
+
+  document.getElementById('tiles').innerHTML = tiles(board, t)
+    .map((tile) => `<div class="tile ${tile.tone}">
+        <div class="n">${tile.value ?? '—'}</div>
+        <div class="k">${escape(tile.label)}</div>
+      </div>`)
+    .join('');
+
+  const health = healthLine(board?.health, t);
+  const healthEl = document.getElementById('health');
+  healthEl.className = `health ${health.tone}`;
+  healthEl.textContent = health.text;
+
+  document.getElementById('drill-name').textContent = board
+    ? `${board.status}` : '';
+  document.getElementById('elapsed').textContent = board
+    ? `${t('board.elapsed')} ${formatDuration(board.elapsed_ms, lang)}` : '';
+
+  paintPriority(board);
+  paintTiming();
+  paintZones();
+}
+
+function paintPriority(board) {
+  const host = document.getElementById('priority');
+  const rows = orderForWarden((board?.rows || []).filter(
+    (r) => r.state !== 'ACCOUNTED'));
+  if (!rows.length) {
+    host.innerHTML = `<div class="empty">${escape(t('board.no_priority'))}</div>`;
+    return;
+  }
+  host.innerHTML = rows.map((row) => `
+    <div class="row">
+      <span class="chip ${row.colour}">${escape(t('state.' + row.state, row.state))}</span>
+      <div class="who">
+        <div class="name">${escape(row.display_name)}</div>
+        <div class="meta">${escape(row.department || '')}${
+          row.last_zone_id
+            ? ` · ${escape(t('board.last_seen'))} ${escape(row.last_zone_id)}${
+                row.last_camera_id ? ` (${escape(row.last_camera_id)})` : ''}`
+            : ''}</div>
+        <div class="reason">${escape(row.reason)}</div>
+      </div>
+      <button data-explain="${escape(row.person_ref)}">?</button>
+    </div>`).join('');
+
+  host.querySelectorAll('[data-explain]').forEach((button) => {
+    button.addEventListener('click', () => openDrawer(button.dataset.explain));
+  });
+}
+
+function paintTiming() {
+  const line = timingLine(timingFreshness.value, t);
+  const host = document.getElementById('timing');
+  host.innerHTML = `<div>${escape(line.text)}</div>` +
+    (line.caveat ? `<div class="caveat">${escape(line.caveat)}</div>` : '');
+}
+
+function paintZones() {
+  const panels = zoneFreshness.value;
+  const host = document.getElementById('zones');
+  if (!Array.isArray(panels) || !panels.length) {
+    host.innerHTML = `<div class="empty">—</div>`;
+    return;
+  }
+  host.innerHTML = panels.map((panel) => `
+    <div class="row">
+      <span class="chip ${panel.is_clean ? 'GREEN' : 'YELLOW'}">${
+        panel.is_clean ? '✓' : '…'}</span>
+      <div class="who">
+        <div class="name">${escape(panel.zone_id)}</div>
+        <div class="meta">${panel.confirmed}/${panel.expected} ${
+          escape(t('warden.confirmed'))} · ${panel.outstanding} ${
+          escape(t('warden.outstanding'))}</div>
+        ${panel.blocking?.length
+          ? `<div class="reason">${escape(panel.blocking[0])}</div>` : ''}
+      </div>
+    </div>`).join('');
+}
+
+async function openDrawer(personRef) {
+  const host = document.getElementById('drawer-host');
+  host.innerHTML = `<div class="scrim"></div><aside class="drawer">
+    <h3>${escape(personRef)}</h3><pre>loading…</pre></aside>`;
+  host.querySelector('.scrim').addEventListener('click', () => { host.innerHTML = ''; });
+  try {
+    const explanation = await api.explain(drillId, personRef);
+    host.querySelector('pre').textContent = explanation.narrative.join('\n');
+  } catch (error) {
+    host.querySelector('pre').textContent = `could not load: ${error.message}`;
+  }
+}
+
+function escape(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+applyLanguage();
+poll();
+setInterval(poll, 3_000);

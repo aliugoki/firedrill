@@ -1,0 +1,19 @@
+{
+  "name": "EVAC-120 Warden",
+  "short_name": "Warden",
+  "description": "Floor warden accountability at the assembly point. Works offline.",
+  "start_url": "/evac/warden",
+  "scope": "/evac/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f1720",
+  "theme_color": "#0f1720",
+  "lang": "en",
+  "dir": "auto",
+  "categories": ["utilities", "productivity"],
+  "icons": [
+    { "src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icons/icon-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
