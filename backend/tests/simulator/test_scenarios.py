@@ -28,14 +28,43 @@ def plan_with(site, injections, *, count=120, seed=20260910) -> DrillPlan:
 
 
 class TestBaseline:
-    def test_a_clean_drill_finds_almost_everyone(self, site):
+    def test_a_clean_drill_finds_almost_everyone_it_can(self, site):
+        """A clean run that cannot account for people proves nothing about the
+        injected runs, so this is the floor everything else is measured from.
+
+        The denominator is people the cameras could possibly account for:
+        enrolled employees who actually reached an assembly zone. Visitors and
+        never-enrolled employees have no face in the gallery and can only be
+        accounted for by a warden, so counting them makes the threshold a
+        statement about the roster's enrolment rate rather than about the
+        pipeline.
+        """
         agents, result = drill(site, NONE)
-        truth = truly_reached_assembly(agents)
-        found = result.accounted_refs()
-        assert len(found) >= len(truth) * 0.8, (
-            "a clean run that cannot account for most people proves nothing "
-            "about the injected runs"
+        reachable = {
+            a.person_ref for a in agents
+            if a.reached_assembly and a.has_gallery_entry and not a.is_visitor
+        }
+        assert reachable
+        found = result.accounted_refs() & reachable
+        ratio = len(found) / len(reachable)
+        assert ratio >= 0.9, (
+            f"a clean run accounted for only {ratio:.1%} of the people it had "
+            f"every means to identify"
         )
+
+    def test_nobody_with_a_gallery_entry_is_quietly_dropped(self, site):
+        # The other half of the same statement. Someone enrolled who reached
+        # assembly and was still not accounted for must at least be on the
+        # board in a state that sends a human to check.
+        agents, result = drill(site, NONE)
+        by_ref = {a.person_ref: a for a in agents}
+        for ref in truly_reached_assembly(agents) - result.accounted_refs():
+            agent = by_ref[ref]
+            if agent.has_gallery_entry and not agent.is_visitor:
+                assert result.decisions[ref].needs_attention, (
+                    f"{ref} was enrolled, reached assembly, was not accounted "
+                    "for, and nothing asks anyone to look at them"
+                )
 
     def test_a_clean_drill_produces_a_usable_p95(self, site):
         _, result = drill(site, NONE)
@@ -120,6 +149,28 @@ class TestIdentitySwitchAndMisidentification:
         result = run_drill(plan_with(site, Injections(wrong_identity_rate=1.0)))
         named = {p.identity for p in result.state.identity if p.identity}
         assert named <= {"EMP-9999"}
+
+    def test_an_unenrolled_face_is_still_matched_against_the_gallery(self, site):
+        # A matcher does not know who is enrolled. It returns its nearest entry
+        # at a poor score, and how often that poor score is admitted anyway is
+        # the false-accept rate the calibration harness exists to measure.
+        from app.core.events import EventType
+
+        p = plan_with(site, NONE)
+        stream = observe(p)
+        unenrolled = [e for e in stream.events
+                      if e.type is EventType.FACE_OBSERVED
+                      and e.payload.get("enrolled") is False]
+        assert unenrolled, "unenrolled people must still produce face matches"
+        assert all(e.payload["candidate_id"] for e in unenrolled)
+
+    def test_an_unenrolled_face_is_subject_to_the_same_detector_failures(self, site):
+        # Detection failure, blur and pose do not care who is in the gallery.
+        from app.core.events import EventType
+
+        p = plan_with(site, Injections(face_loss_rate=1.0))
+        stream = observe(p)
+        assert not [e for e in stream.events if e.type is EventType.FACE_OBSERVED]
 
 
 class TestLookAlikes:

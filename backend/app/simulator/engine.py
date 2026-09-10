@@ -200,28 +200,44 @@ def _observe_agent(agent, plan, dice, stream, emit) -> None:
 
 
 def _observe_face(agent, gid, camera, waypoint, plan, dice, emit) -> None:
-    inj = plan.injections
+    """Emit one frame's face evidence, or the absence of it.
 
-    if not agent.has_gallery_entry or agent.is_visitor:
-        # No enrolled face. Not a failure: the expected outcome, and the only
-        # route to accounting for this person is a warden.
-        emit(camera.camera_id, SourceKind.CAMERA, EventType.FACE_UNAVAILABLE,
-             waypoint.ts_ms, gid, {"reason": "no gallery entry"})
-        return
+    Enrolled and unenrolled people go through the same path on purpose. A face
+    detector does not know who is in the gallery, so detection failure, blur and
+    pose affect both alike. Only the match that comes back differs: an enrolled
+    person's own entry, or the nearest stranger's.
+    """
+    inj = plan.injections
 
     if dice.hit("face_loss", inj.face_loss_rate):
         emit(camera.camera_id, SourceKind.CAMERA, EventType.FACE_UNAVAILABLE,
              waypoint.ts_ms, gid, {"reason": "no face detected"})
         return
 
-    candidate = agent.emp_id
-    score, margin, quality, pose = 0.82, 0.31, 0.92, 6.0
+    enrolled = agent.has_gallery_entry and not agent.is_visitor
 
+    if enrolled:
+        candidate = agent.emp_id
+        score, margin = 0.82, 0.31
+    else:
+        # Not enrolled, but the matcher does not know that. It returns its
+        # nearest gallery entry at a poor score — usually poor enough to be
+        # refused, occasionally not. Skipping straight to FACE_UNAVAILABLE here
+        # would make the false-accept rate against strangers unmeasurable, and
+        # that is the most dangerous error the system can make.
+        rng = dice.stream("unenrolled")
+        candidate = f"EMP-{rng.randrange(0, 500):04d}"
+        score = rng.gauss(0.22, 0.07)
+        margin = abs(rng.gauss(0.03, 0.03))
+
+    quality, pose = 0.92, 6.0
     if dice.hit("poor_quality", inj.poor_quality_rate):
         quality = 0.2
     if dice.hit("bad_pose", inj.bad_pose_rate):
         pose = 72.0
-    if agent.lookalike_of and dice.hit("lookalike", inj.lookalike_confusion_rate):
+
+    if enrolled and agent.lookalike_of and dice.hit(
+            "lookalike", inj.lookalike_confusion_rate):
         # The gallery cannot cleanly separate the pair, and the outcome varies
         # frame to frame. All three outcomes have to be reachable: only ever
         # flipping to the other person produces a confident wrong answer and no
@@ -234,6 +250,7 @@ def _observe_face(agent, gid, camera, waypoint, plan, dice, emit) -> None:
             margin = 0.06           # the wrong one wins, narrowly
         else:
             margin = 0.06           # the right one wins, narrowly
+
     if dice.hit("wrong_identity", inj.wrong_identity_rate):
         candidate = "EMP-9999"
 
@@ -241,7 +258,8 @@ def _observe_face(agent, gid, camera, waypoint, plan, dice, emit) -> None:
          waypoint.ts_ms, gid,
          {"candidate_id": candidate, "score": score, "margin": margin,
           "quality": quality, "pose_deviation_deg": pose,
-          "camera_id": camera.camera_id, "association_is_strong": True})
+          "camera_id": camera.camera_id, "association_is_strong": True,
+          "enrolled": enrolled})
 
 
 @dataclass

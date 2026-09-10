@@ -19,8 +19,8 @@ of each phase. It is updated at every phase gate.
 | Phase | Scope | State |
 |---|---|---|
 | 0 | Repo, vendored code, permissions, docs, tree map | Complete |
-| 1 | Pure-Python core + simulator, no cameras | **Complete — awaiting sign-off** |
-| 2 | Single DeepStream pipeline on GPU host + calibration | Not started |
+| 1 | Pure-Python core + simulator, no cameras | Complete |
+| 2 | Single DeepStream pipeline on GPU host + calibration | **Design + harness complete; GPU work blocked** |
 | 3 | Edge/central resilience, projections, chaos suite | Not started |
 | 4 | Command Center + Warden Mobile PWA | Not started |
 | 5 | Three live drills, validation report | Not started |
@@ -457,6 +457,112 @@ on a 500-agent realistic run:
 
 All three defects in (6) above were found by this review rather than by a test,
 which is why the brief asks for it.
+
+---
+
+## 9B. Phase 2: design and harness done, GPU work blocked
+
+The pipeline cannot be built here. The 26 GB DeepStream image is not present on
+this machine, and the project's own runbook advises against rebuilding it
+casually after a previous rebuild caused a libstdc++ ABI regression. So Phase 2
+split into what can be done without a GPU and what cannot.
+
+Full design in `docs/EVAC120_DEEPSTREAM.md`.
+
+### 9B.1 A cheaper way around the segfault
+
+The blocker is the P2.3b crash: a buffer probe downstream of an SGIE producing
+tensor user-meta segfaults after about five seconds, identically under nvinfer
+and under Triton. Four remedies are planned, and the cheapest begins with a
+26 GB rebuild.
+
+The DeepStream face pipeline in the sibling repository suggests a fifth. It runs
+in production with buffer probes attached, and **it has no SGIE at all**: one
+primary detector, with face embeddings computed inside the probe by a standalone
+ArcFace TensorRT engine. Its own module docstring says this is deliberate.
+
+The documented crash condition needs an SGIE. That pipeline never creates one,
+and it does not crash.
+
+This is an inference, not a reproduction, and the document says so plainly. The
+two pipelines differ in base image, models and DeepStream version, so removing
+the SGIE is not proven to be the operative difference. Moving inference into a
+Python probe also costs frame budget that an SGIE does not.
+
+What makes it worth stating is the cost of testing it: take the pipeline that
+crashes, remove the SGIE, keep the probe, embed in-probe. One config change and
+one restart. It either survives sixty seconds or it does not, and either result
+is informative. That is now step 1 of Phase 2, ahead of the four expensive
+remedies.
+
+### 9B.2 The calibration harness
+
+Built and tested: `app/calibration/`, 35 tests. Labelled observations in,
+validated thresholds out, or a refusal explaining why not.
+
+It refuses in every case where certifying would be a lie: too few observations,
+too few enrolled people, no observations of unenrolled people at all, a person
+leaking across the tune and validate halves, a held-out false-accept rate above
+the ceiling, drift beyond two points, or a set that is entirely simulated.
+
+Three decisions in it are worth naming.
+
+**The split is by person, not by observation.** The same face appears in dozens
+of frames. Splitting by frame puts near-duplicates on both sides, and the
+validate half then agrees with the tune half for reasons that have nothing to do
+with the threshold.
+
+**Unenrolled faces are mandatory, not optional.** Without observations of people
+who are not in the gallery, the false-accept rate cannot be measured at all.
+That is the error that marks a stranger safe under a colleague's name, so a set
+lacking them is refused outright rather than warned about.
+
+**An impossible ceiling raises rather than relaxes.** If no threshold pair holds
+the false-accept rate under the ceiling, that is a finding about the pipeline.
+The harness says so and stops. Loosening the ceiling afterwards would be
+choosing the number after seeing the answer.
+
+Run against a 300-agent simulated drill it produces a full report, selects an
+operating point, measures drift on 83 held-out people, and then declines to
+certify because the data is simulated. That refusal is the harness working.
+
+### 9B.3 A simulator gap the harness exposed
+
+The first harvest returned zero observations of unenrolled people, so the
+false-accept rate was unmeasurable. The simulator was emitting `FACE_UNAVAILABLE`
+for anyone without a gallery entry.
+
+That was wrong in a way that flattered the system. A real matcher does not know
+who is enrolled: it detects a stranger's face and returns its nearest gallery
+entry, usually at a poor score and occasionally not. Skipping to
+`FACE_UNAVAILABLE` meant the simulator could never produce the single most
+dangerous error, and no test could have caught it.
+
+Unenrolled people now go through the same detection, quality and pose path as
+everyone else and receive a nearest-match at a low score. The safety property
+still holds: zero false accounted across all three profiles.
+
+### 9B.4 Measured drill results after the change
+
+| Profile | False accounted | Accounted | Uncertain | Unaccounted | Manual | P50 | P95 |
+|---|---|---|---|---|---|---|---|
+| clean | **0** | 439 | 0 | 62 | 11 | 59.5 | 114.2 |
+| realistic | **0** | 444 | 14 | 47 | 7 | 64.1 | 125.2 |
+| hostile | **0** | 91 | 346 | 71 | 4 | 291.4 | 489.7 |
+
+Eleven people now need human verification on a clean run, up from zero. They are
+strangers whose nearest gallery match cleared the threshold, which is exactly
+the population a warden should be walking over to check. The system finding them
+is the point.
+
+### 9B.5 What is still blocked
+
+Everything requiring the GPU: reproducing the segfault, testing the §2.3
+inference, building the pipeline, and taking any benchmark. Everything requiring
+recorded footage: the calibration set, and therefore every certified threshold.
+
+**No configuration in this system is marked calibrated, and none will be until
+both exist.**
 
 ---
 
