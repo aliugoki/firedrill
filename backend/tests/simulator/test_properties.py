@@ -16,7 +16,8 @@ from app.simulator.agents import Behaviour
 from app.simulator.engine import DrillPlan, observe, replay, run_drill
 from app.simulator.injections import HOSTILE, NONE, REALISTIC, Injections, Outage
 
-from tests.simulator.conftest import ALARM_MS, drill, population, truly_reached_assembly
+from tests.simulator.conftest import (
+    ALARM_MS, drill, falsely_accounted, population, truly_reached_assembly)
 
 PROFILES = [("clean", NONE), ("realistic", REALISTIC), ("hostile", HOSTILE)]
 
@@ -84,7 +85,7 @@ class TestNobodyIsFalselyAccounted:
                 lookalike_confusion_rate=0.5, wrong_identity_rate=0.05,
             ))
         result = run_drill(plan)
-        assert result.accounted_refs() <= truly_reached_assembly(agents)
+        assert falsely_accounted(result, agents) == set()
 
     @given(
         outage_start=st.integers(0, 200_000),
@@ -101,7 +102,7 @@ class TestNobodyIsFalselyAccounted:
             injections=Injections(camera_outages=(
                 Outage(outage_start, outage_start + outage_length, "*"),)))
         result = run_drill(plan)
-        assert result.accounted_refs() <= truly_reached_assembly(agents)
+        assert falsely_accounted(result, agents) == set()
 
 
 class TestFailureDegradesRatherThanClears:

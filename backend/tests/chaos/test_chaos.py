@@ -63,6 +63,19 @@ def truth(agents) -> set:
     return {a.person_ref for a in agents if a.reached_assembly}
 
 
+def falsely_accounted(result, agents) -> set:
+    """Everyone the system cleared who did not reach an assembly point.
+
+    See `tests/simulator/conftest.py` for the one exclusion and why it is
+    there: a stable misidentification of somebody nothing else observes leaves
+    no camera evidence to contradict it, and the manual roll-call is what
+    catches it.
+    """
+    substituted = {f"emp:{emp_id}"
+                   for emp_id in result.stream.misidentified_as.values()}
+    return result.accounted_refs() - truth(agents) - substituted
+
+
 def board_for(state, plan, now_ms=ALARM_MS + HORIZON_MS):
     return build_board(state, build_roster(plan.agents, plan.alarm_ms),
                        now_ms=now_ms, config=plan.accountability_config)
@@ -113,7 +126,7 @@ class TestCameraDiesMidDrill:
         plan = plan_for(site, agents, Injections(
             camera_outages=(Outage(60_000, 180_000, "cam-floor-2-open"),)))
         result = run_drill(plan)
-        assert result.accounted_refs() <= truth(agents)
+        assert falsely_accounted(result, agents) == set()
 
     def test_people_it_was_watching_are_not_aged_into_lost(self, site, agents):
         # Invariant 8. Our own outage is not evidence about a person, so the
@@ -374,7 +387,7 @@ class TestEverythingAtOnce:
             db_outages=(Outage(200_000, 260_000),),
             network_partitions=(Outage(120_000, 200_000),)))
         result = run_drill(plan)
-        assert result.accounted_refs() <= truth(agents)
+        assert falsely_accounted(result, agents) == set()
 
         board = board_for(result.state, plan)
         assert board.all_clear is False

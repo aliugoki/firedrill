@@ -215,17 +215,27 @@ def build_population(
     # A few pairs who genuinely look alike. The identity margin gate has to
     # separate them, and when it cannot, the answer must be CONFLICT.
     #
-    # They are drawn from people who actually walk past a camera. Taking the
-    # first N agents instead put every pair on the guaranteed-behaviour slots at
-    # the head of the list, several of whom are absent from the building or
-    # never leave their desk, so the look-alike injection had nothing to act on
-    # and the conflict it exists to produce never appeared.
+    # They are drawn from people a camera actually sees. Taking the first N
+    # agents instead put every pair on the guaranteed-behaviour slots at the
+    # head of the list, several of whom are not in the building at all, so the
+    # look-alike injection had nothing to act on and the conflict it exists to
+    # produce never appeared.
+    #
+    # Only the genuinely absent are excluded now. Excluding the desk-bound as
+    # well was over-cautious -- they are observed at their desks for the whole
+    # drill -- and it removed the pairing that matters most: one of the pair
+    # reaches the assembly point while the other never leaves. That is the shape
+    # a false ACCOUNTED has, and while it could not be generated, no number of
+    # property runs could find one.
     observable = [a for a in agents
-                  if a.behaviour not in (Behaviour.ABSENT_FROM_SITE,
-                                         Behaviour.NEVER_LEAVES)
+                  if a.behaviour is not Behaviour.ABSENT_FROM_SITE
                   and a.has_gallery_entry]
-    for pair in range(min(lookalike_pairs, len(observable) // 2)):
-        a, b = observable[pair * 2], observable[pair * 2 + 1]
+    stays = [a for a in observable if a.behaviour is Behaviour.NEVER_LEAVES]
+    leaves = [a for a in observable if a.behaviour is not Behaviour.NEVER_LEAVES]
+    pairs = list(zip(stays, leaves))
+    spare = leaves[len(pairs):]
+    pairs += list(zip(spare[0::2], spare[1::2]))
+    for a, b in pairs[:lookalike_pairs]:
         a.lookalike_of = b.emp_id
         b.lookalike_of = a.emp_id
 

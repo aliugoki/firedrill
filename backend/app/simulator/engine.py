@@ -60,6 +60,11 @@ class DrillPlan:
     identity_config: IdentityConfig = ID_CONFIG
     presence_config: PresenceConfig = PRESENCE_CONFIG
     accountability_config: AccountabilityConfig = ACC_CONFIG
+    #: Force particular confusions: employee id -> the employee the matcher
+    #: insists they are. Merged over whatever `wrong_identity_rate` draws, so a
+    #: scenario can name the exact pairing it wants to reason about instead of
+    #: rolling dice until one appears.
+    misidentify: dict = field(default_factory=dict)
 
     @cached_property
     def enrolled_ids(self) -> tuple[str, ...]:
@@ -86,6 +91,11 @@ class ObservedStream:
     #: event id -> when it actually reached the ingest, for events the transport
     #: delayed. Absent means it arrived at its own timestamp.
     arrival_ms: dict[str, int] = field(default_factory=dict)
+    #: employee id -> the employee the matcher insists they are, for the whole
+    #: drill. Test-only ground truth, like `truth`: a stable misidentification
+    #: leaves no trace in the evidence, so a test that wants to reason about one
+    #: has to be told.
+    misidentified_as: dict[str, str] = field(default_factory=dict)
     dropped: int = 0
     degraded_windows: list[tuple[int, int, str]] = field(default_factory=list)
 
@@ -177,9 +187,12 @@ def observe(plan: DrillPlan) -> ObservedStream:
          None, {})
 
     switches = _plan_id_switches(plan, dice)
+    misidentified = _plan_misidentifications(plan, dice)
+    stream.misidentified_as = dict(misidentified)
     for agent in plan.agents:
         _observe_agent(agent, plan, dice, stream, emit,
-                       switches.get(agent.person_ref, ()))
+                       switches.get(agent.person_ref, ()),
+                       misidentified.get(agent.emp_id))
 
     # Late events arrive after everything else, which is what makes them late,
     # and among themselves in the order their delays actually finished.
@@ -315,7 +328,49 @@ def _normalise_owners(stream) -> None:
         stream.truth[gid] = collapsed[0][1]
 
 
-def _observe_agent(agent, plan, dice, stream, emit, switches=()) -> None:
+def _plan_misidentifications(plan, dice) -> dict[str, str]:
+    """Which people the matcher confidently gets wrong, and as whom.
+
+    Assigned per person, not per observation. A one-percent chance of a
+    different random name each frame is noise the identity machine dismisses in
+    one line, because no wrong name ever reaches `min_votes`. A real
+    misidentification is stable: this person's gallery embedding sits closer to
+    that person's than to their own, every frame, all drill. Stable is the only
+    version that can confirm the wrong name and account for somebody who never
+    left the building.
+
+    This used to emit the sentinel `EMP-9999`, which is on no roster and so
+    could never be mistaken for anybody. The most dangerous entry in the
+    catalogue could not be produced at all.
+    """
+    rate = plan.injections.wrong_identity_rate
+    enrolled = plan.enrolled_ids
+    victims: dict[str, str] = dict(plan.misidentify)
+    if rate <= 0 or len(enrolled) < 2:
+        return victims
+
+    by_emp = {agent.emp_id: agent for agent in plan.agents if agent.emp_id}
+    picker = dice.stream("wrong_identity_who")
+    for emp_id in enrolled:
+        if not dice.hit("wrong_identity", rate):
+            continue
+        if emp_id in plan.misidentify:
+            continue  # a named confusion is not overwritten by a drawn one
+        agent = by_emp[emp_id]
+        # Their look-alike if they have one, because that is what a gallery
+        # actually confuses. Anybody else enrolled otherwise.
+        if agent.lookalike_of and agent.lookalike_of != emp_id:
+            victims[emp_id] = agent.lookalike_of
+            continue
+        other = emp_id
+        while other == emp_id:
+            other = enrolled[picker.randrange(len(enrolled))]
+        victims[emp_id] = other
+    return victims
+
+
+def _observe_agent(agent, plan, dice, stream, emit, switches=(),
+                   wrong_as=None) -> None:
     inj = plan.injections
     _record_owner(stream, f"gp-{agent.person_ref}", plan.alarm_ms, agent.person_ref)
     # One fragment counter per track lineage this agent emits under. After an ID
@@ -358,10 +413,11 @@ def _observe_agent(agent, plan, dice, stream, emit, switches=()) -> None:
              {"zone_id": waypoint.zone_id, "zone_kind": waypoint.zone_kind.value,
               "camera_id": camera.camera_id})
 
-        _observe_face(agent, gid, camera, waypoint, plan, dice, emit)
+        _observe_face(agent, gid, camera, waypoint, plan, dice, emit, wrong_as)
 
 
-def _observe_face(agent, gid, camera, waypoint, plan, dice, emit) -> None:
+def _observe_face(agent, gid, camera, waypoint, plan, dice, emit,
+                  wrong_as=None) -> None:
     """Emit one frame's face evidence, or the absence of it.
 
     Enrolled and unenrolled people go through the same path on purpose. A face
@@ -413,8 +469,14 @@ def _observe_face(agent, gid, camera, waypoint, plan, dice, emit) -> None:
         else:
             margin = 0.06           # the right one wins, narrowly
 
-    if dice.hit("wrong_identity", inj.wrong_identity_rate):
-        candidate = "EMP-9999"
+    if enrolled and wrong_as is not None:
+        # Confident and wrong, which is a different failure from the look-alike
+        # case above. There the matcher cannot separate two people and says so
+        # through a thin margin; here it is sure, and it is sure of the wrong
+        # person, every frame. No score threshold refuses this and no amount of
+        # further camera evidence corrects it. Only a human does.
+        candidate = wrong_as
+        score, margin = 0.86, 0.33
 
     associated, track_confidence = True, 1.0
     if plan.enrolled_ids and dice.hit("misassociation", inj.misassociation_rate):

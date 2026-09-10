@@ -19,7 +19,8 @@ from app.simulator.agents import Behaviour, build_population, walk_all
 from app.simulator.engine import DrillPlan, observe, replay, run_drill
 from app.simulator.injections import Injections, NONE, Outage
 
-from tests.simulator.conftest import ALARM_MS, drill, population, truly_reached_assembly
+from tests.simulator.conftest import (
+    ALARM_MS, drill, falsely_accounted, population, truly_reached_assembly)
 
 
 def plan_with(site, injections, *, count=120, seed=20260910) -> DrillPlan:
@@ -127,7 +128,7 @@ class TestTrackFragmentation:
     def test_fragmentation_never_invents_a_safe_person(self, site):
         agents, _ = drill(site, NONE)
         result = run_drill(plan_with(site, Injections(track_fragmentation_rate=0.4)))
-        assert result.accounted_refs() <= truly_reached_assembly(agents)
+        assert falsely_accounted(result, agents) == set()
 
     def test_fragments_stay_visible_rather_than_being_merged_away(self, site):
         # Merging fragments back together would hide exactly the damage
@@ -142,13 +143,55 @@ class TestIdentitySwitchAndMisidentification:
     def test_an_outright_wrong_match_does_not_account_for_the_wrong_person(self, site):
         agents, _ = drill(site, NONE)
         result = run_drill(plan_with(site, Injections(wrong_identity_rate=1.0)))
-        assert result.accounted_refs() <= truly_reached_assembly(agents)
+        assert falsely_accounted(result, agents) == set()
 
-    def test_a_wrong_match_that_wins_does_not_name_a_real_employee(self, site):
-        # The injected wrong identity is a gallery id nobody holds.
-        result = run_drill(plan_with(site, Injections(wrong_identity_rate=1.0)))
-        named = {p.identity for p in result.state.identity if p.identity}
-        assert named <= {"EMP-9999"}
+    def test_a_wrong_match_names_a_real_employee(self, site):
+        """Otherwise it is not the failure it claims to be.
+
+        This injection used to emit `EMP-9999`, a gallery id nobody holds, so a
+        confident wrong match could never be mistaken for a person on the
+        roster and the most dangerous entry in the catalogue could not be
+        produced at all. What it costs, and what catches it, is
+        `tests/simulator/test_misidentification.py`.
+        """
+        agents, _ = drill(site, NONE)
+        on_the_roster = {a.emp_id for a in agents if a.emp_id}
+        plan = plan_with(site, Injections(wrong_identity_rate=1.0))
+        stream = observe(plan)
+
+        assert stream.misidentified_as
+        assert set(stream.misidentified_as.values()) <= on_the_roster
+        # And nobody is confused with themselves, which would be no failure.
+        assert all(wrong != right
+                   for right, wrong in stream.misidentified_as.items())
+
+    def test_the_confusion_is_stable_for_one_person(self, site):
+        # A different wrong name each frame is noise the identity machine
+        # dismisses in one line, because no wrong name ever reaches min_votes.
+        # A real misidentification is the same wrong name every time.
+        from app.core.events import EventType
+
+        plan = plan_with(site, Injections(wrong_identity_rate=1.0))
+        stream = observe(plan)
+        assert stream.misidentified_as
+
+        # Only the misidentified. An unenrolled person is matched against the
+        # nearest gallery entry, which really does differ frame to frame, and
+        # that is a separate and deliberate behaviour.
+        wrong_name = {f"emp:{emp}": name
+                      for emp, name in stream.misidentified_as.items()}
+        claimed: dict[str, set] = {}
+        for event in stream.events:
+            if event.type is not EventType.FACE_OBSERVED:
+                continue
+            person = stream.who(event.subject, event.ts_ms)
+            if person in wrong_name:
+                claimed.setdefault(person, set()).add(
+                    event.payload["candidate_id"])
+        assert claimed
+        for person, names in claimed.items():
+            assert names == {wrong_name[person]}, (
+                f"{person} was matched as {sorted(names)}")
 
     def test_an_unenrolled_face_is_still_matched_against_the_gallery(self, site):
         # A matcher does not know who is enrolled. It returns its nearest entry
@@ -204,7 +247,7 @@ class TestOcclusion:
     def test_being_hidden_behind_someone_is_not_being_absent(self, site):
         result = run_drill(plan_with(site, Injections(occlusion_rate=0.5)))
         agents, _ = drill(site, NONE)
-        assert result.accounted_refs() <= truly_reached_assembly(agents)
+        assert falsely_accounted(result, agents) == set()
 
     def test_total_occlusion_observes_nobody(self, site):
         result = run_drill(plan_with(site, Injections(occlusion_rate=1.0)))
@@ -269,7 +312,7 @@ class TestCameraOutage:
         outage = Injections(camera_outages=(Outage(0, 600_000, "cam-floor-3-open"),))
         result = run_drill(plan_with(site, outage))
         agents, _ = drill(site, NONE)
-        assert result.accounted_refs() <= truly_reached_assembly(agents)
+        assert falsely_accounted(result, agents) == set()
 
     def test_every_camera_down_accounts_for_nobody(self, site):
         result = run_drill(plan_with(
@@ -331,7 +374,7 @@ class TestInfrastructureOutage:
         agents, _ = drill(site, NONE)
         injections = Injections(**{field: (Outage(0, 10_000_000),)})
         result = run_drill(plan_with(site, injections))
-        assert result.accounted_refs() <= truly_reached_assembly(agents)
+        assert falsely_accounted(result, agents) == set()
 
 
 class TestPeopleWhoAreNotEmployees:

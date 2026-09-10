@@ -39,6 +39,37 @@ matters. Every false accounted is listed individually in the report, with the
 system's own reasoning beside it, because each one is a person somebody has to
 go and find.
 
+### Why the reference has to be a human, demonstrated
+
+There is one failure the cameras cannot see at all, and it is the worst one.
+Suppose the matcher is confident that A's face belongs to B -- not a thin
+margin, not a flicker, but the same confident answer on every frame, because
+A's gallery embedding genuinely sits closer to B's than to A's own. A walks to
+the muster point. Nothing else ever observes B.
+
+The identity machine has no second claim to conflict with, so no `CONFLICT`.
+The presence machine watched one person arrive and settle, so `ASSEMBLY_PRESENT`.
+Both halves of the `ACCOUNTED` test are satisfied and the board reports **B is
+safe**. It also reports **A unaccounted**, so a search team is sent for someone
+standing at the muster point while a person who never came to work that day is
+recorded as evacuated.
+
+No threshold refuses this, because nothing about the match is weak. No state
+machine catches it, because there is no contradiction in the evidence. More
+cameras make it worse, not better: every one of them agrees.
+
+What catches it is the roll-call. A warden at the assembly point confirms who is
+actually in front of them, B is not among them, and the report lists B as a
+false accounted and fails `NO_FALSE_ACCOUNTED`. That is the entire argument for
+measuring against a human rather than against the system's own confidence, and
+`backend/tests/simulator/test_misidentification.py` asserts both halves of it:
+that the cameras are fooled, and that the process is not.
+
+When the substituted person *is* observed -- their own track claiming their own
+name, overlapping in time -- the system does catch it, and refuses both. That
+is `resolve_identities`, and it is the only defence available before a human
+arrives.
+
 ---
 
 ## 3. Three outcomes, and the third is the important one
@@ -141,20 +172,20 @@ INCONCLUSIVE — this drill cannot judge the system: only 82% of people were tra
 
 Accountability against the manual roll-call
   expected                212
-  accounted for           194
+  accounted for           185
   unaccounted for         3
   uncertain               5
-  needing verification    10
+  needing verification    19
   unknown people          0
 
   FALSE ACCOUNTED         0   (system said safe, no warden confirmed)
-  false unaccounted       10   (warden confirmed, system could not)
+  false unaccounted       19   (warden confirmed, system could not)
 
 Evacuation times
-  P50 68.9s   P90 117.9s   P95 145.5s   P99 317.4s
+  P50 68.9s   P90 116.8s   P95 143.0s   P99 317.4s
   slowest individual      347.9s
-  measured on             174 people (82% coverage)
-  caveat: 38 of 212 people produced no timing (18% excluded). The percentiles describe only those who were tracked end to end.
+  measured on             173 people (82% coverage)
+  caveat: 39 of 212 people produced no timing (18% excluded). The percentiles describe only those who were tracked end to end.
   accountability settled  —
   slowest floor           floor-4 at P95 215.8s
 
@@ -189,10 +220,10 @@ INCONCLUSIVE — this drill cannot judge the system: only 82% of people were tra
         only 82% of people were tracked from alarm to arrival; 18% produced no timing at all, and a percentile that improves by losing the slow people is the easiest way to fake this number
   FAIL  SYSTEM_MOSTLY_SIGHTED  [20%]
         the system was blind for 20% of the drill; this is a test of the wardens, not of the system
-  PASS  P95_MEASURABLE  [174 samples]
+  PASS  P95_MEASURABLE  [173 samples]
         the sample supports a 95th percentile
-  FAIL  P95_WITHIN_TARGET  [145.5s]
-        P95 145.5s against a 120s target
+  FAIL  P95_WITHIN_TARGET  [143.0s]
+        P95 143.0s against a 120s target
 
 Thresholds are not validated: Phase 5 default, no live drill has run
 ```
@@ -209,7 +240,7 @@ fix the coverage and run it again, not to celebrate the zero.
 
 ## 7. Getting to P95 ≤ 120 s
 
-The simulated drill above sits at 145.5 s, and the fourth floor is the slowest
+The simulated drill above sits at 143.0 s, and the fourth floor is the slowest
 at 215.8 s. On simulated data that number means little, but the *shape* of the
 problem is the one a real building will have, and the actions divide into two
 kinds.
@@ -229,7 +260,7 @@ kinds.
 
 **Operational** — makes the evacuation faster:
 - The fourth floor is the slowest, at P95 215.8 s against a building P95 of
-  145.5 s. It is the longest stair descent in the model, and a floor that is
+  143.0 s. It is the longest stair descent in the model, and a floor that is
   slowest because of distance is an operational problem, not a software one
 - Reaction delay is the largest single component of an individual's time. Drill
   frequency and alarm audibility move it more than any software change

@@ -84,26 +84,50 @@ def resolve_identities(
     for entry in roster.entries:
         key = entry.emp_id or entry.person_ref
         gids = tuple(sorted(claimed.get(key, ())))
+        contested_gids = tuple(sorted(contested.get(key, ())))
         resolutions[entry.person_ref] = Resolution(
             entry=entry,
             claimed_by=gids,
-            contested_on=tuple(sorted(contested.get(key, ()))),
-            simultaneous=tuple(_simultaneous(state, gids)),
+            contested_on=contested_gids,
+            simultaneous=tuple(_simultaneous(state, gids, contested_gids)),
         )
     return resolutions
 
 
-def _simultaneous(state: IngestState, gids: tuple[str, ...]) -> list[str]:
-    """Tracks among `gids` whose observation windows overlap another's."""
-    if len(gids) < 2:
+def _simultaneous(state: IngestState, claimed: tuple[str, ...],
+                  contested: tuple[str, ...] = ()) -> list[str]:
+    """Tracks that cannot all be this person, because they overlap in time.
+
+    A contested track counts. What put it in CONFLICT is independent accepted
+    observations naming this person, so another track claiming the same name at
+    the same moment is the two-places-at-once case whatever the contested track
+    later turns out to be.
+
+    Leaving it out was a hole with the shape the whole system exists to close: a
+    look-alike's track, confirmed as somebody and standing at the assembly
+    point, accounted for a person whose own track was sitting in CONFLICT on
+    another floor at the same time. The board cleared them. The contested
+    employee got MANUAL_VERIFICATION_REQUIRED and the claimed one got ACCOUNTED,
+    from one pool of evidence, purely because one name also had a confirmed
+    track somewhere else.
+
+    Two contested tracks overlapping each other are not reported here: with no
+    claim at all, `decide` already refuses on `contested_on`.
+    """
+    everyone = tuple(claimed) + tuple(contested)
+    if len(everyone) < 2:
         return []
-    people = [state.presence.get(gid) for gid in gids]
+    claiming = set(claimed)
+    people = [state.presence.get(gid) for gid in everyone]
     clashing: set[str] = set()
     for i, a in enumerate(people):
         for b in people[i + 1:]:
-            if a.overlaps(b):
-                clashing.add(a.person_id)
-                clashing.add(b.person_id)
+            if not a.overlaps(b):
+                continue
+            if a.person_id not in claiming and b.person_id not in claiming:
+                continue
+            clashing.add(a.person_id)
+            clashing.add(b.person_id)
     return sorted(clashing)
 
 

@@ -42,3 +42,24 @@ def drill(site, injections: Injections, *, count: int = 120, seed: int = 2026091
 def truly_reached_assembly(agents) -> set:
     """Ground truth. Nothing in the core may read this; only tests may."""
     return {a.person_ref for a in agents if a.reached_assembly}
+
+
+def falsely_accounted(result, agents) -> set:
+    """Everyone the system cleared who did not reach an assembly point.
+
+    One case is excluded, and only one. When the matcher insists that A's face
+    belongs to B, every frame, and nothing else ever observes B, the camera
+    evidence contains nothing that contradicts it: the identity machine has no
+    second claim to conflict with, and the presence machine watched one person
+    walk to the muster point. No threshold and no state machine catches that.
+    The manual roll-call does, and `tests/simulator/test_misidentification.py`
+    is where that is asserted, in full, including the report failing on it.
+
+    Excluding it here keeps the camera-only property exactly true instead of
+    accidentally true. It used to pass because `wrong_identity_rate` emitted a
+    gallery id nobody holds, so the most dangerous entry in the catalogue could
+    never collide with a roster entry at all.
+    """
+    substituted = {f"emp:{emp_id}"
+                   for emp_id in result.stream.misidentified_as.values()}
+    return result.accounted_refs() - truly_reached_assembly(agents) - substituted
