@@ -218,6 +218,62 @@ Read as four rules:
 | Unknown person at an assembly zone | `UNCERTAIN` | Invariant 5. Somebody is safe; which employee is unknown, and forcing a match to tidy the numbers is the failure this system exists to prevent. |
 | Identity rejected by a warden | `MANUAL_VERIFICATION_REQUIRED` | The system's answer was wrong. The person still needs identifying. |
 
+### One rule that looks like an omission and is not
+
+Rule 8 has no deadline clause. A track that went stale before reaching assembly
+stays `UNCERTAIN` however long the drill runs, while a person last seen inside
+the building turns `UNACCOUNTED` at `unaccounted_after_ms`. Reading the two
+rows together, the person the system knows *least* about is painted in the
+calmer colour, which looks backwards.
+
+It is deliberate. The tracker losing somebody is a statement about the cameras,
+not about the person (invariant 1), and in this building it is the routine
+outcome rather than the alarming one -- every floor has a stairwell with no
+camera, so `LOST` is what walking downstairs looks like. Escalating all of them
+at the deadline would turn the board red for people who are merely on the
+stairs, and bury the ones with no evidence at all. `UNCERTAIN` is a
+needs-attention state; it is in the command centre's priority list either way.
+
+Changing this means arguing that a stale track is more urgent than a person
+seen calmly on floor two. That argument may hold in a building with full stair
+coverage. It does not hold here.
+
+### An open question: how wide is "degraded"?
+
+Rule 6 asks `health.is_blind`, which is true when **any** camera anywhere is
+down. Every person who has not already qualified as `ACCOUNTED` then reads
+`MANUAL_VERIFICATION_REQUIRED`, whatever floor they are on and whichever camera
+failed. Measured on a 200-person drill, seed 20260910, under the realistic
+profile whose only outage is one camera on floor 3 for two minutes:
+
+| Ninety seconds in | One camera down | No outage |
+|---|---|---|
+| `ACCOUNTED` | 70 | 73 |
+| `MANUAL_VERIFICATION_REQUIRED` | 106 | 3 |
+| `UNCERTAIN` | 36 | 61 |
+| `NOT_EVACUATED` | 0 | 64 |
+| `EVACUATING` | 0 | 11 |
+
+One camera out of twelve moves 103 people into "cannot decide while coverage is
+degraded". The board stops distinguishing the person on the stairs from the
+person nobody has ever seen, which is the distinction a commander is reading it
+for.
+
+It is conservative in the right direction -- nothing here can produce a false
+`ACCOUNTED`, because rule 6 sits below rules 3 and 4 -- and there is a real
+argument for it: someone last seen on a working camera may have walked into the
+dead one's area since, and an inference about where they went is drawn partly
+blind. There is also a narrower mechanism already in place and already correct,
+`presence.is_degraded`, which marks only the people the failed camera was
+actually watching, and `health.blinded_targets_at` exists to scope this by
+target and is currently used by nothing but its own test.
+
+**This is a decision, not a defect, and it has not been taken.** Narrowing rule
+6 to the people a failed camera was watching would keep the board legible
+during a partial outage at the cost of inferring, for some people, from a
+partly blind picture. Widening nothing keeps today's behaviour. Either way it
+should be chosen deliberately rather than inherited.
+
 ---
 
 ## 4. Where the invariants live

@@ -153,6 +153,12 @@ class PersonPresence:
     state_before_unobserved: PresenceState | None = None
     assembly_since_ms: int | None = None
     degraded_since_ms: int | None = None
+    #: Which outages are currently blinding us to this person. A set rather than
+    #: a flag because outages overlap: a site-wide camera failure covers the
+    #: same people as the single camera that failed a minute earlier, and with
+    #: one slot the first recovery cleared a degradation the second outage was
+    #: still causing.
+    degraded_by: set[str] = field(default_factory=set)
     _grace_credit_ms: int = 0
 
     # -- queries ---------------------------------------------------------------
@@ -209,6 +215,15 @@ class PersonPresence:
     def observe(self, sighting: ZoneSighting) -> PresenceTransition | None:
         """Fold in one sighting. Returns a transition if the state changed."""
         previous = self.state
+        # Being seen is direct evidence that coverage is back for this person,
+        # whichever camera failed. Waiting for the failed camera's own recovery
+        # was wrong: anyone who walked into a different camera's view kept the
+        # failed camera's id off their `last_known`, so the recovery never
+        # reached them and `is_degraded` stayed true for the rest of the drill.
+        # A grace clock that never runs can never say LOST, so the board showed
+        # them as briefly unobserved forever.
+        if self.degraded_since_ms is not None:
+            self.mark_visible(sighting.ts_ms)
         if self.first_sighting_ms is None:
             self.first_sighting_ms = sighting.ts_ms
         self.last_sighting_ms = sighting.ts_ms
@@ -294,25 +309,38 @@ class PersonPresence:
             f"unobserved for {stale - self._grace_credit_ms} ms, grace {self._grace_ms()} ms",
         )
 
-    def mark_degraded(self, now_ms: int, reason: str) -> PresenceTransition | None:
+    def mark_degraded(self, now_ms: int, reason: str, source: str = "*"
+                      ) -> PresenceTransition | None:
         """A camera or the pipeline covering this person failed.
 
         Does not change state. It stops the grace clock, and it makes the reason
         visible so the command centre can show CAMERA_DEGRADED rather than
         implying anything about the person.
         """
+        self.degraded_by.add(source)
         if self.degraded_since_ms is None:
             self.degraded_since_ms = now_ms
         return None
 
-    def mark_recovered(self, now_ms: int) -> None:
-        """Coverage is back. Time spent degraded is credited back to the grace
-        window, so a person is not declared stale for an outage they had no part
-        in."""
-        if self.degraded_since_ms is None:
+    def mark_recovered(self, now_ms: int, source: str = "*") -> None:
+        """One outage over this person ended.
+
+        Time spent degraded is credited back to the grace window, so a person is
+        not declared stale for an outage they had no part in. The credit is only
+        taken when the *last* outage closes: while any of them is still open we
+        are still blind, and taking the credit early restarted a grace clock
+        against a person nobody could see.
+        """
+        self.degraded_by.discard(source)
+        if self.degraded_by or self.degraded_since_ms is None:
             return
         self._grace_credit_ms += max(0, now_ms - self.degraded_since_ms)
         self.degraded_since_ms = None
+
+    def mark_visible(self, now_ms: int) -> None:
+        """Being seen ends every outage over this person at once."""
+        self.degraded_by.clear()
+        self.mark_recovered(now_ms)
 
     # -- internals -------------------------------------------------------------
 
@@ -356,21 +384,37 @@ class PresenceRegistry:
         return [t for t in (p.tick(now_ms) for p in self._people.values()) if t]
 
     def mark_camera_degraded(self, camera_id: str, now_ms: int, reason: str) -> int:
-        """Suspend the grace clock for everyone last seen on this camera."""
+        """Suspend the grace clock for everyone this camera was watching."""
         touched = 0
         for person in self._people.values():
-            if person.last_known and person.last_known.camera_id == camera_id:
-                person.mark_degraded(now_ms, reason)
+            if self._watched_by(person, camera_id):
+                person.mark_degraded(now_ms, reason, source=camera_id)
                 touched += 1
         return touched
 
     def mark_camera_recovered(self, camera_id: str, now_ms: int) -> int:
         touched = 0
         for person in self._people.values():
-            if person.last_known and person.last_known.camera_id == camera_id:
-                person.mark_recovered(now_ms)
+            if self._watched_by(person, camera_id):
+                person.mark_recovered(now_ms, source=camera_id)
                 touched += 1
         return touched
+
+    @staticmethod
+    def _watched_by(person: PersonPresence, camera_id: str) -> bool:
+        """Whether an outage on this camera is an outage over this person.
+
+        `"*"` means every camera, which is how a site-wide failure arrives from
+        the ingest. Comparing it to a person's last known camera id matched
+        nobody, so the most severe outage there is credited nothing and
+        everybody aged into LOST for a blindness that was entirely ours -- while
+        a single camera failing was handled correctly. Someone no camera has
+        ever seen is still excluded: they have no grace clock to suspend, and
+        marking them degraded would soften the one case that should not soften.
+        """
+        if person.last_known is None:
+            return False
+        return camera_id == "*" or person.last_known.camera_id == camera_id
 
     def in_state(self, state: PresenceState) -> list[PersonPresence]:
         return [p for p in self._people.values() if p.state is state]

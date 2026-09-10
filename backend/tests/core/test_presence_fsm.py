@@ -165,6 +165,102 @@ class TestDegradation:
         assert p.tick(T0 + 603_000) is None
         assert p.tick(T0 + 620_000).to_state is PresenceState.LOST
 
+    def test_being_seen_again_ends_the_degradation_by_itself(self):
+        """A sighting disproves "we cannot currently see this person".
+
+        The registry credits a recovery to whoever was last seen on the camera
+        that failed. Someone who walked into a different camera's view during
+        the outage is no longer on that list, so the recovery never reached
+        them: `is_degraded` stayed true for the rest of the drill, the grace
+        clock never ran, and the board showed them as briefly unobserved
+        forever instead of eventually LOST.
+        """
+        registry = PresenceRegistry(config(t_lost_ms=10_000))
+        registry.observe("gp-1", seen(ZoneKind.FLOOR, T0, camera_id="cam-a"))
+        registry.mark_camera_degraded("cam-a", T0 + 1_000, "camera offline")
+        registry.observe("gp-1", seen(ZoneKind.FLOOR, T0 + 2_000,
+                                      camera_id="cam-b"))
+        registry.mark_camera_recovered("cam-a", T0 + 30_000)
+
+        walked_away = registry.get("gp-1")
+        assert walked_away.is_degraded is False
+
+        walked_away.track_lost(T0 + 31_000)
+        assert [t.to_state for t in registry.tick(T0 + 90_000)] == [
+            PresenceState.LOST]
+
+    def test_a_sighting_still_credits_the_time_spent_blind(self):
+        # The credit is the point of the mechanism, so ending the degradation
+        # on a sighting must not throw it away and age the person early.
+        blinded = person(t_lost_ms=15_000)
+        blinded.observe(seen(ZoneKind.FLOOR, T0))
+        blinded.mark_degraded(T0 + 1_000, "camera offline")
+        blinded.observe(seen(ZoneKind.FLOOR, T0 + 601_000))
+        blinded.track_lost(T0 + 601_500)
+        assert blinded.tick(T0 + 621_000) is None
+
+        # The same twenty seconds, without an outage behind them, is LOST.
+        watched = person(t_lost_ms=15_000)
+        watched.observe(seen(ZoneKind.FLOOR, T0 + 601_000))
+        watched.track_lost(T0 + 601_500)
+        assert watched.tick(T0 + 621_000).to_state is PresenceState.LOST
+
+    def test_a_site_wide_camera_outage_covers_everyone_it_was_watching(self):
+        """`"*"` is how a whole-site failure arrives from the ingest.
+
+        Matching it against each person's last known camera id matched nobody,
+        so the most severe outage was the one that credited nothing: everyone
+        aged into LOST for a blindness that was entirely ours, while a single
+        camera failing was handled correctly.
+        """
+        registry = PresenceRegistry(config(t_lost_ms=10_000))
+        registry.observe("gp-1", seen(ZoneKind.FLOOR, T0, camera_id="cam-a"))
+        registry.observe("gp-2", seen(ZoneKind.FLOOR, T0, camera_id="cam-b"))
+        assert registry.mark_camera_degraded("*", T0 + 1_000, "all offline") == 2
+
+        for person_id in ("gp-1", "gp-2"):
+            registry.get(person_id).track_lost(T0 + 2_000)
+        assert registry.tick(T0 + 200_000) == []
+
+        registry.mark_camera_recovered("*", T0 + 200_000)
+        assert registry.tick(T0 + 201_000) == []
+        assert [t.to_state for t in registry.tick(T0 + 215_000)] == [
+            PresenceState.LOST, PresenceState.LOST]
+
+    def test_a_site_wide_outage_does_not_soften_someone_never_seen(self):
+        # They have no grace clock to suspend, and marking them degraded would
+        # turn "no observation at all" into "we had a camera problem".
+        registry = PresenceRegistry(config())
+        registry.get("gp-never-seen")
+        assert registry.mark_camera_degraded("*", T0, "all offline") == 0
+        assert registry.get("gp-never-seen").is_degraded is False
+
+    def test_one_outage_ending_does_not_clear_another_still_open(self):
+        """Outages overlap, and a single flag could not say so.
+
+        A camera fails, then every camera fails. The first one comes back while
+        the site-wide failure is still running, and with one slot that recovery
+        cleared the degradation, restarted the grace clock, and aged people out
+        while nobody could see them.
+        """
+        registry = PresenceRegistry(config(t_lost_ms=10_000))
+        registry.observe("gp-1", seen(ZoneKind.FLOOR, T0, camera_id="cam-a"))
+        registry.mark_camera_degraded("cam-a", T0 + 1_000, "one camera offline")
+        registry.mark_camera_degraded("*", T0 + 2_000, "all cameras offline")
+
+        lost_sight_of = registry.get("gp-1")
+        lost_sight_of.track_lost(T0 + 3_000)
+
+        registry.mark_camera_recovered("cam-a", T0 + 4_000)
+        assert lost_sight_of.is_degraded is True
+        assert registry.tick(T0 + 200_000) == []
+
+        registry.mark_camera_recovered("*", T0 + 200_000)
+        assert lost_sight_of.is_degraded is False
+        assert registry.tick(T0 + 201_000) == []
+        assert [t.to_state for t in registry.tick(T0 + 215_000)] == [
+            PresenceState.LOST]
+
     def test_degradation_is_visible_rather_than_silent(self):
         p = person()
         p.observe(seen(ZoneKind.FLOOR, T0))
