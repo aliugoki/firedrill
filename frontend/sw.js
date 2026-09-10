@@ -29,6 +29,11 @@ const SHELL = [
   '/static/warden.html',
   '/static/css/app.css',
   '/static/js/warden.js',
+  // `render.js` belongs here because `warden.js` imports it. Leaving it out
+  // meant a cold start with no signal failed to load the module graph at all,
+  // and the one thing this PWA exists to do -- open at an assembly point with
+  // no network -- did not happen.
+  '/static/js/render.js',
   '/static/js/queue.js',
   '/static/js/i18n.js',
   '/static/js/api.js',

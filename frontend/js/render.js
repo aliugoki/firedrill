@@ -151,7 +151,13 @@ export function orderForWarden(rows) {
 }
 
 /** What the sync indicator says. */
-export function syncStatus({ online, pending, stalenessMs }, t) {
+export function syncStatus({ online, pending, stalenessMs, fromCache }, t) {
+  if (fromCache) {
+    // Distinct from being offline: the device may have signal and still be
+    // reading a roster the service worker remembered, which is the case a
+    // warden is least likely to guess at.
+    return { tone: 'offline', text: `${t('warden.remembered')} · ${pending} ${t('warden.pending')}` };
+  }
   if (!online) {
     return { tone: 'offline', text: `${t('warden.offline')} · ${pending} ${t('warden.pending')}` };
   }

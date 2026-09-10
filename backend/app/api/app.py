@@ -285,17 +285,20 @@ def create_app(registry: DrillRegistry | None = None,
         """
         drill = drill_or_404(drill_id)
         accepted = duplicates = 0
-        rejected: list[str] = []
+        refusals: list[schemas.Refusal] = []
+
+        def refuse(item, reason: str) -> None:
+            refusals.append(schemas.Refusal(device_seq=item.device_seq,
+                                            reason=reason))
 
         for item in sorted(body.actions, key=lambda a: a.device_seq):
             if not caller.covers(item.zone_id):
-                rejected.append(
-                    f"seq {item.device_seq}: not assigned to {item.zone_id}")
+                refuse(item, f"not assigned to {item.zone_id}")
                 continue
             try:
                 kind = ActionKind(item.kind)
             except ValueError:
-                rejected.append(f"seq {item.device_seq}: unknown action {item.kind}")
+                refuse(item, f"unknown action {item.kind}")
                 continue
 
             action = WardenAction(
@@ -306,7 +309,7 @@ def create_app(registry: DrillRegistry | None = None,
             try:
                 validate(action)
             except WardenActionError as exc:
-                rejected.append(f"seq {item.device_seq}: {exc}")
+                refuse(item, str(exc))
                 continue
 
             queue = drill.warden.device(item.device_id, item.warden_id)
@@ -317,8 +320,9 @@ def create_app(registry: DrillRegistry | None = None,
             drill.record_warden_action(action)
             accepted += 1
 
-        return schemas.WardenSyncOut(accepted=accepted, duplicates=duplicates,
-                                     rejected=rejected)
+        return schemas.WardenSyncOut(
+            accepted=accepted, duplicates=duplicates, refusals=refusals,
+            rejected=[f"seq {r.device_seq}: {r.reason}" for r in refusals])
 
     @app.post("/api/evac/drills/{drill_id}/warden/headcount",
               response_model=schemas.HeadcountOut, tags=["warden"])

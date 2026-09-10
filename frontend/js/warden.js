@@ -64,6 +64,13 @@ function applyLanguage() {
   document.getElementById('sweep').textContent = t('warden.sweep');
   document.getElementById('escalate').textContent = t('warden.escalate');
   document.getElementById('search').placeholder = t('warden.search');
+  // Read by a screen reader, so they are strings like any other. They were
+  // hard-coded English in the markup, which is invisible until somebody using
+  // assistive technology in Arabic reaches them.
+  document.getElementById('headcount').setAttribute(
+    'aria-label', t('warden.headcount'));
+  document.getElementById('search').setAttribute(
+    'aria-label', t('warden.search'));
   paintTabs();
 }
 
@@ -149,6 +156,7 @@ async function paint() {
   const zone = zoneFreshness.value;
 
   const status = syncStatus({
+    fromCache: zoneFreshness.fromCache,
     online: navigator.onLine,
     pending: await queue.depth(),
     stalenessMs: await queue.stalenessMs(),

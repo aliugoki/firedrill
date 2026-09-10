@@ -154,13 +154,30 @@ class WardenSyncIn(BaseModel):
     actions: list[WardenActionIn]
 
 
+class Refusal(BaseModel):
+    """One action the server would not take, and why."""
+
+    device_seq: int
+    reason: str
+
+
 class WardenSyncOut(BaseModel):
     accepted: int
     duplicates: int
-    rejected: list[str]
-    """Actions the server refused, with the reason. A device must be able to
-    tell a rejected action from an accepted one, or a warden's screen will show
-    work that never landed."""
+    refusals: list[Refusal] = []
+    """Which actions were refused, keyed by the device's own sequence number.
+
+    Structured because the device deletes what it believes landed. It used to
+    read the sequence back out of `rejected` with a regular expression over the
+    prose, which made the wording of an error message a wire contract: rephrase
+    it and every refusal silently reads as an acceptance, and the device throws
+    away a warden's confirmation while telling them it synced."""
+
+    rejected: list[str] = []
+    """The same refusals as sentences, for display and for older devices. Kept
+    because a device and a server can be different versions -- the edge node
+    updates on its own schedule -- and losing confirmations during an upgrade is
+    exactly the failure this pair of fields exists to avoid."""
 
 
 class HeadcountIn(BaseModel):

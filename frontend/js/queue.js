@@ -74,12 +74,21 @@ export class OfflineQueue {
     return this._db;
   }
 
+  /**
+   * Run one transaction and resolve when it has committed, not when the last
+   * request inside it succeeded.
+   *
+   * `fn` may return a value, a promise, or a thunk. The thunk is for the case
+   * where what to resolve with is only known once a request inside the
+   * transaction has run: it is called at `oncomplete`, so the caller is told it
+   * worked only after the data is durable.
+   */
   async _tx(stores, mode, fn) {
     const db = await this.open();
     return new Promise((resolve, reject) => {
       const tx = db.transaction(stores, mode);
       let result;
-      tx.oncomplete = () => resolve(result);
+      tx.oncomplete = () => resolve(typeof result === 'function' ? result() : result);
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error);
       result = fn(...stores.map((name) => tx.objectStore(name)));
@@ -97,12 +106,6 @@ export class OfflineQueue {
       settle(meta.get('next_seq'), (result) => result?.value ?? 1));
   }
 
-  async _setNextSeq(value) {
-    await this._tx([META], 'readwrite', (meta) => {
-      meta.put({ key: 'next_seq', value });
-    });
-  }
-
   /**
    * Record an action. Returns the stored row, including its sequence number.
    *
@@ -112,17 +115,34 @@ export class OfflineQueue {
    */
   async enqueue(action) {
     if (!action || !action.kind) throw new Error('an action needs a kind');
-    const seq = await this.nextSeq();
-    const row = {
+    const base = {
       ...action,
       device_id: this.deviceId,
-      device_seq: seq,
       ts_ms: action.ts_ms ?? Date.now(),
       queued_offline: action.queued_offline ?? !this._isOnline(),
     };
-    await this._tx([STORE], 'readwrite', (store) => { store.put(row); });
-    await this._setNextSeq(seq + 1);
-    return row;
+
+    // Reading the sequence, storing the row and advancing the counter happen in
+    // one transaction, because `device_seq` is the key: two actions that draw
+    // the same number are one row, and the second silently replaces the first.
+    // Three separate transactions lost a confirmation two ways -- a warden
+    // double-tapping, and a tab closed between the row landing and the counter
+    // moving, after which the next action overwrote the last one.
+    return this._tx([META, STORE], 'readwrite', (meta, store) => {
+      let row;
+      const request = meta.get('next_seq');
+      request.onsuccess = () => {
+        const seq = request.result?.value ?? 1;
+        row = { ...base, device_seq: seq };
+        store.put(row);
+        meta.put({ key: 'next_seq', value: seq + 1 });
+      };
+      // No `onerror` here on purpose: an unhandled request error aborts the
+      // transaction, which is what `onabort` above turns into a rejection.
+      // Handling it locally would swallow the abort and leave the caller with
+      // a row that was never written.
+      return () => row;
+    });
   }
 
   async pending() {
@@ -174,9 +194,18 @@ export class OfflineQueue {
  */
 export function reconcileSync(sent, response) {
   const refusedSeqs = new Set();
-  for (const message of response.rejected || []) {
-    const match = /seq (\d+)/.exec(message);
-    if (match) refusedSeqs.add(Number(match[1]));
+  if (Array.isArray(response.refusals)) {
+    for (const refusal of response.refusals) refusedSeqs.add(refusal.device_seq);
+  } else {
+    // An older edge node, which reports refusals only as sentences. Reading the
+    // sequence back out of the prose makes the wording of an error message a
+    // wire contract: rephrase it and every refusal reads as an acceptance, and
+    // this function's caller deletes a warden's confirmation while telling them
+    // it synced. Kept only so an upgrade in progress does not lose work.
+    for (const message of response.rejected || []) {
+      const match = /seq (\d+)/.exec(message);
+      if (match) refusedSeqs.add(Number(match[1]));
+    }
   }
   const acknowledged = sent
     .map((row) => row.device_seq)
@@ -184,6 +213,8 @@ export function reconcileSync(sent, response) {
   return {
     acknowledged,
     refused: sent.filter((row) => refusedSeqs.has(row.device_seq)),
-    refusalMessages: response.rejected || [],
+    refusalMessages: (response.refusals || []).map(
+      (refusal) => `seq ${refusal.device_seq}: ${refusal.reason}`,
+    ).concat(response.refusals ? [] : response.rejected || []),
   };
 }

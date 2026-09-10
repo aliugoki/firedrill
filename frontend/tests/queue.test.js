@@ -31,6 +31,23 @@ describe('OfflineQueue', () => {
     assert.equal(await queue.depth(), 1);
   });
 
+  it('does not collide when two actions are taken at once', async () => {
+    // A warden double-tapping, or a confirm-all that fans out, must not have
+    // one confirmation silently overwrite another. `device_seq` is the key, so
+    // two rows that draw the same number are one row.
+    const queue = makeQueue();
+    await Promise.all([
+      queue.enqueue({ kind: 'CONFIRM_PRESENT', subject: 'emp:EMP-1' }),
+      queue.enqueue({ kind: 'CONFIRM_PRESENT', subject: 'emp:EMP-2' }),
+      queue.enqueue({ kind: 'CONFIRM_PRESENT', subject: 'emp:EMP-3' }),
+    ]);
+    const pending = await queue.pending();
+    assert.equal(pending.length, 3);
+    assert.deepEqual(pending.map((r) => r.device_seq), [1, 2, 3]);
+    assert.deepEqual(pending.map((r) => r.subject).sort(),
+      ['emp:EMP-1', 'emp:EMP-2', 'emp:EMP-3']);
+  });
+
   it('assigns sequences on the device, in the order taken', async () => {
     // Forty actions taken over ten minutes without signal must sync in the
     // order the warden took them.
@@ -131,6 +148,37 @@ describe('reconcileSync', () => {
       accepted: 2, duplicates: 0, rejected: ['seq 2: not assigned to that zone'],
     });
     assert.match(outcome.refusalMessages[0], /not assigned/);
+  });
+
+  it('reads refusals from the structured field, not from the prose', () => {
+    const outcome = reconcileSync(sent, {
+      accepted: 2, duplicates: 0,
+      refusals: [{ device_seq: 2, reason: 'not assigned to that zone' }],
+      rejected: ['seq 2: not assigned to that zone'],
+    });
+    assert.deepEqual(outcome.acknowledged, [1, 3]);
+    assert.match(outcome.refusalMessages[0], /not assigned/);
+  });
+
+  it('survives a server that rewords its refusals', () => {
+    // The wording is a message to a human, not a wire format. A server that
+    // rephrases it must not cause this device to delete the very actions the
+    // server refused.
+    const outcome = reconcileSync(sent, {
+      accepted: 2, duplicates: 0,
+      refusals: [{ device_seq: 2, reason: 'zone not yours' }],
+      rejected: ['action #2 was turned down: zone not yours'],
+    });
+    assert.deepEqual(outcome.acknowledged, [1, 3]);
+    assert.equal(outcome.refused[0].device_seq, 2);
+  });
+
+  it('still understands an older server that only sends sentences', () => {
+    const outcome = reconcileSync(sent, {
+      accepted: 2, duplicates: 0,
+      rejected: ['seq 2: not assigned to that zone'],
+    });
+    assert.deepEqual(outcome.acknowledged, [1, 3]);
   });
 
   it('treats a duplicate as done rather than retrying it forever', () => {

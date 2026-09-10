@@ -70,9 +70,13 @@ export class Api {
     }
 
     if (response.status === 204) return { fetched_at_ms: Date.now() };
+    // The service worker marks a response it served from cache. Without reading
+    // it, `fetched_at_ms` said "just now" for a roster that could be ten minutes
+    // old, and every freshness check downstream believed it.
+    const fromCache = response.headers?.get?.('X-EVAC-From-Cache') === '1';
     const payload = await response.json();
     if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
-      return { ...payload, fetched_at_ms: Date.now() };
+      return { ...payload, fetched_at_ms: Date.now(), from_cache: fromCache };
     }
     return payload;
   }
@@ -113,12 +117,14 @@ export class Freshness {
     this.staleAfterMs = staleAfterMs;
     this.value = null;
     this.fetchedAtMs = null;
+    this.fromCache = false;
     this.lastError = null;
   }
 
   succeed(value, now = Date.now()) {
     this.value = value;
     this.fetchedAtMs = now;
+    this.fromCache = Boolean(value && value.from_cache);
     this.lastError = null;
     return value;
   }
@@ -133,6 +139,10 @@ export class Freshness {
   }
 
   isStale(now = Date.now()) {
+    // An answer the service worker remembered is never current, however
+    // recently it was handed over. Keeping it is right -- a stale roster beats
+    // no roster -- but calling it fresh is not.
+    if (this.fromCache) return true;
     const age = this.ageMs(now);
     return age === null || age > this.staleAfterMs;
   }

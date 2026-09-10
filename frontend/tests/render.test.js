@@ -203,6 +203,32 @@ describe('the warden roster', () => {
   });
 });
 
+describe('a remembered answer', () => {
+  it('is never reported as current, however recently it arrived', () => {
+    const fresh = new Freshness(10_000);
+    fresh.succeed({ from_cache: true, fetched_at_ms: 1000 }, 1000);
+    assert.equal(fresh.isStale(1001), true);
+  });
+
+  it('does not make a live answer look stale afterwards', () => {
+    const fresh = new Freshness(10_000);
+    fresh.succeed({ from_cache: true }, 1000);
+    fresh.succeed({ from_cache: false }, 2000);
+    assert.equal(fresh.isStale(2001), false);
+  });
+
+  it('says so on the warden bar, distinctly from being offline', () => {
+    // The device may have signal and still be reading a roster the service
+    // worker remembered, which is the case a warden is least likely to guess.
+    const remembered = syncStatus(
+      { online: true, pending: 0, fromCache: true }, t);
+    const offline = syncStatus(
+      { online: false, pending: 0, fromCache: false }, t);
+    assert.notEqual(remembered.text, offline.text);
+    assert.match(remembered.text, /Remembered/);
+  });
+});
+
 describe('the sync indicator', () => {
   it('says work is saved on the device when offline', () => {
     const status = syncStatus({ online: false, pending: 3, stalenessMs: 0 }, t);
