@@ -1,0 +1,397 @@
+# EVAC-120 — Fire Drill & Evacuation Accountability
+
+**Operational target:** P95 building evacuation ≤ 120 s, **measured**. Never
+hard-coded, never asserted as a guarantee.
+
+> **Safety notice.** EVAC-120 supplements, and never replaces, certified
+> fire-detection and life-safety systems. It does not control alarms, doors, or
+> suppression. Its output is decision support for a human incident commander,
+> and a floor warden's physical count is the final authority.
+
+This document is the standing reference: the architecture decision, the verified
+facts about the systems EVAC-120 draws on, the tree map, and the running record
+of each phase. It is updated at every phase gate.
+
+---
+
+## 1. Status
+
+| Phase | Scope | State |
+|---|---|---|
+| 0 | Repo, vendored code, permissions, docs, tree map | **Complete — awaiting sign-off** |
+| 1 | Pure-Python core + simulator, no cameras | Not started |
+| 2 | Single DeepStream pipeline on GPU host + calibration | Not started |
+| 3 | Edge/central resilience, projections, chaos suite | Not started |
+| 4 | Command Center + Warden Mobile PWA | Not started |
+| 5 | Three live drills, validation report | Not started |
+
+---
+
+## 2. Architecture decision
+
+EVAC-120 is a **standalone repository** with its own database, API and frontend.
+
+This reverses the original brief, which specified a VisionTrack module family
+(`backend/app/modules/evac/`). The standalone decision was taken on 2026-09-10.
+What it buys and what it costs:
+
+**Gains.** EVAC-120 ships, migrates and fails independently of VisionTrack. A
+schema change here cannot break a live tracking deployment. The edge node runs
+one product, not two. Life-safety-adjacent code is not coupled to a CCTV SaaS
+release train.
+
+**Costs.** Code that VisionTrack already had must be copied rather than
+imported, so upstream fixes do not arrive automatically — hence
+`docs/EVAC120_PROVENANCE.md` and the re-vendor rule. Floor plans, zones, camera
+calibration and the roster now exist in two places and need a sync path.
+
+### 2.1 Data plane
+
+firedrill owns its Postgres schema. It treats VisionTrack and FaceTrack as
+**external producers**, never as a shared database.
+
+| Input | Source | Transport |
+|---|---|---|
+| Person tracks, global person id | VisionTrack workers | Redis streams `vt:tracks`, `vt:track_lifecycle` |
+| Face identity + accountability events | DeepStream pipeline (Phase 2) | Redis stream `vt:evac:events:<tenant>` |
+| Roster — who is expected | FaceTrack `user_data` | HTTP `GET /api/employees` |
+| Floor plans, zones, camera homographies | VisionTrack | Synced into firedrill's own tables |
+| Warden confirmations | Warden PWA | firedrill's own API |
+
+Nothing on the accountability path requires the Internet. If every upstream
+producer disappears mid-drill, the system degrades to
+`DEGRADED / MANUAL_VERIFICATION_REQUIRED` and the warden's count carries the
+drill. It never reports `ALL CLEAR` from silence.
+
+---
+
+## 3. Verified facts — 2026-09-10
+
+Each of the three source repositories was located by content, not by name, and
+each fact below was checked against the code rather than taken from the brief.
+
+| Role | Path | Confirmed by |
+|---|---|---|
+| FaceTrack — control plane, roster, gallery | `~/deploy/attendance-system` | `app/modules/pipeline/service.py` owns the `pipeline_jobs` queue |
+| DeepStream — face engine | `~/deploy/deepstream` | `main_enterprise.py` plus the canonical `utils/` set |
+| VisionTrack — tracking platform | `~/visiontrack/visiontrack` | Alembic head `0022_tenant_facetrack_feed` |
+
+### 3.1 Corrections to the brief
+
+**(a) Two "legacy" DeepStream files are load-bearing.** The brief says archive
+every `main_*.py` and `utils/probe*`. Two sit in the canonical import closure of
+`main_enterprise.py`: `main_udp.py` supplies `add_udp_rtsp_branches` and
+`get_dir_signature`; `utils/probe_git.py` supplies `pgie_src_filter_probe` and
+shared probe helpers to three canonical modules. Archiving them breaks the only
+working pipeline. Both were kept. DeepStream's own `ARCHITECTURE.md` already
+said so before Phase 0 began.
+
+**(b) There is no `zones` table in VisionTrack.** Zones are a JSONB array on
+`floor_plans`, and VisionTrack's `zones` module is a stub serving only a
+`_ping` route. firedrill defines its own zone table, so tagging a zone `FLOOR`,
+`EXIT`, `ASSEMBLY` or `BLIND` is a first-class column here rather than a schema
+change to someone else's JSON.
+
+**(c) Homographies live on `cameras.calibration`,** a JSONB column, not on
+`floor_plans`. The vendored `zone_resolve.py` already reads them from there.
+
+**(d) The FaceTrack roster has no department and no zone.** `user_data` carries
+`user_id`, `company_id`, `emp_id`, `first_name`, `last_name`, `image_path` and
+`feature_path`. `GET /api/employees` returns `emp_id`, `first_name`,
+`last_name`, `photo` and `present`. The warden UI needs department, home floor
+and warden-zone assignment; none exists upstream. firedrill must own those
+fields. This is a schema requirement for Phase 1's `roster.py`, not a
+FaceTrack change.
+
+### 3.2 Live infrastructure state
+
+| Service | State | Note |
+|---|---|---|
+| VisionTrack backend, Postgres, Redis, MinIO, frontend | up, healthy | 5 days |
+| `vt-ai-worker` | up | YOLOv8 + OSNet, production path, produces `vt:tracks` |
+| `vt-ai-worker-ds` | **not running** | DeepStream 7.1, blocked on the P2.3b segfault |
+| Milvus / etcd | **not running** | needed by VisionTrack's re-identification |
+| FaceTrack (`attendance-system`) | **crash-looping** | `asyncpg.exceptions.InvalidPasswordError: password authentication failed for user "postgres"` |
+
+FaceTrack is the roster source. Its outage blocks building `roster.py` against
+real data. It does not block the simulator.
+
+---
+
+## 4. State machines
+
+Three, never collapsed into one field. The full transition table with the
+triggering evidence for every transition is a Phase 1 deliverable,
+`docs/EVAC120_STATE_MACHINES.md`.
+
+**Presence.** `NOT_OBSERVED → IN_BUILDING → IN_TRANSIT → ASSEMBLY_PRESENT`,
+plus `TEMPORARILY_UNOBSERVED` (track lost under `T_lost`) and `LOST` (over
+`T_lost`). Zones are tagged `FLOOR`, `EXIT`, `ASSEMBLY` or `BLIND`.
+
+**Identity.** `UNKNOWN → CANDIDATE → CONFIRMED`, plus
+`TEMPORARILY_UNAVAILABLE` (confirmed earlier, face currently absent, track still
+reliable), `CONFLICT` and `REJECTED`. Keyed on the **global person id**, not a
+camera-local track id. Configurable: score threshold, top-1/top-2 margin,
+minimum votes, hysteresis, face quality and pose gates, identity expiry, track
+confidence.
+
+**Accountability.** `NOT_EVACUATED → EVACUATING → ACCOUNTED`, or `UNCERTAIN`,
+`UNACCOUNTED`, `MANUAL_VERIFICATION_REQUIRED`. Derived from presence, identity
+and the evidence ledger. `ACCOUNTED` requires assembly-zone presence AND
+(confirmed identity OR warden confirmation).
+
+---
+
+## 5. Event model
+
+Append-only `evac_events`, a Phase 3 Alembic revision:
+
+`event_id (uuid)`, `tenant_id`, `site_id`, `drill_id`, `source`
+(camera/edge/warden/system), `seq` (per source, monotonic), `type`, `pts_ms`
+(frame PTS for camera events, wall clock otherwise), `subject`
+(global_person_id / emp_id / camera_id / zone_id), `payload jsonb`,
+`ingested_at`.
+
+Unique on `(source, seq)`. Ingest is idempotent. A hole in the sequence emits
+`SEQUENCE_GAP`.
+
+Event types:
+
+```
+DRILL_CREATED DRILL_STARTED ALARM_ACTIVATED PERSON_DETECTED TRACK_CREATED
+TRACK_UPDATED TRACK_LOST FACE_OBSERVED FACE_UNAVAILABLE IDENTITY_CANDIDATE
+IDENTITY_CONFIRMED IDENTITY_RECONFIRMED IDENTITY_CONFLICT
+PERSON_EXITED_BUILDING PERSON_ENTERED_ASSEMBLY PERSON_LEFT_ASSEMBLY
+PERSON_ACCOUNTED PERSON_UNCERTAIN PERSON_UNACCOUNTED WARDEN_CONFIRMED
+WARDEN_REJECTED WARDEN_SWEEP_COMPLETE WARDEN_NOTE CAMERA_FAILURE
+CAMERA_RECOVERED SYSTEM_DEGRADED SYSTEM_RECOVERED SEQUENCE_GAP DRILL_COMPLETED
+```
+
+All read models — dashboard, warden lists, reports — are projections over this
+stream. Edge-to-central replication uses the store-and-forward pattern vendored
+from DeepStream.
+
+**Timestamp warning.** `pts_ms` starts at 0 for the first frame of a stream, and
+the vendored hold-time logic has a falsy-zero defect that a 0 timestamp
+triggers. Phase 1 must normalise to epoch milliseconds at the ingest boundary.
+Detail in `docs/EVAC120_PROVENANCE.md`.
+
+---
+
+## 6. Permissions
+
+Four core permissions in `backend/app/infra/permissions.py`, deliberately
+**role-shaped rather than CRUD-shaped**, because an evacuation has four kinds of
+actor.
+
+| Constant | Key | Grants |
+|---|---|---|
+| `EVAC_READ` | `evac:read` | Dashboards, drill history, reports |
+| `EVAC_OPERATE` | `evac:operate` | Create, start and stop a drill |
+| `EVAC_WARDEN` | `evac:warden` | Confirm, reject, sweep, headcount — scoped to assigned zones |
+| `EVAC_ADMIN` | `evac:admin` | Zones, thresholds, retention, warden assignments |
+
+Plus `drill:export` (reports leave the building carrying personal data, so it is
+separate from read), `audit:view`, and `system:admin` which no tenant role
+holds.
+
+**Separation of duty is the point of the seeded roles, not a side effect.** An
+Incident Commander runs the drill but cannot sign off a physical headcount —
+that is the warden's evidence and stays theirs. A Floor Warden confirms people
+but cannot start, stop or reconfigure a drill. A Safety Officer configures the
+system but does not operate a live drill. No default role holds every
+permission, and combining `evac:operate` with `evac:warden` defeats the
+two-source evidence model, so any deployment needing it must create a deliberate
+custom role.
+
+---
+
+## 7. Tree map after Phase 0
+
+```
+firedrill/
+├── README.md                      what this is, where things are
+├── CLAUDE.md                      conventions + the nine invariants
+├── .env.example                   28 variables, secrets marked REQUIRED
+├── .gitignore                     PII, secrets, local state
+├── docs/
+│   ├── EVAC120.md                 this file
+│   └── EVAC120_PROVENANCE.md      what was vendored, from where, what changed
+├── backend/
+│   ├── requirements.txt           numpy, pytest, pytest-cov, hypothesis
+│   ├── pytest.ini
+│   ├── app/
+│   │   ├── core/                  Phase 1 domain — contract written, no code yet
+│   │   ├── vendor/
+│   │   │   ├── visiontrack/       zones_math, zone_resolve, occupancy,
+│   │   │   │                      dwell, heatmap, rule_state        (1049 loc)
+│   │   │   └── deepstream/        recognition, outbox                (288 loc)
+│   │   ├── simulator/             Phase 1 contract
+│   │   ├── ingest/                Phase 3 contract
+│   │   ├── api/                   Phase 3-4 contract
+│   │   └── infra/
+│   │       └── permissions.py     4 core + 3 supporting, 4 seeded roles
+│   └── tests/
+│       ├── test_vendor_visiontrack.py    26 tests — geometry, hold-time, projection
+│       ├── test_vendor_deepstream.py     21 tests — gallery, voting, outbox
+│       ├── test_vendor_integrity.py      25 tests — imports + provenance headers
+│       └── test_permissions.py           22 tests — separation of duty
+├── frontend/                      Phase 4
+└── prototype/
+    └── fire_drill_system.jsx      early React mock — design reference only
+```
+
+The prototype is a self-contained React mock with randomly generated people. It
+is useful for the command-center layout and nothing else: its data model has a
+single flat `status` field including `"missing"`, which violates invariants 1
+and 4. It must not be used as a schema reference.
+
+---
+
+## 8. What Phase 0 built
+
+1. **The repository.** Layout above, `.gitignore`, `.env.example` with 28
+   variables and every secret marked `REQUIRED` with no default.
+2. **1393 lines of vendored code** from two repositories, each file carrying a
+   provenance header, with the four import rewrites the copy required and
+   nothing else changed.
+3. **94 tests** proving the vendored code works under the new import paths, that
+   the behaviour EVAC-120 depends on survived the copy, and that separation of
+   duty holds in the seeded roles.
+4. **Permission registry** with four seeded roles built around separation of
+   duty.
+5. **Package contracts** for `core/`, `simulator/`, `ingest/`, `api/` and
+   `infra/`, each naming what lands there and in which phase.
+6. **Documentation:** this file, the provenance record, `CLAUDE.md`, `README.md`.
+
+### 8.1 Work done in the source repositories
+
+**DeepStream** (branch `evac/phase-0`, staged, not committed). Archived 39
+legacy files with `git mv`, history preserved, keeping the two that are
+load-bearing and documenting why in `archive/README.md`. Removed a hard-coded
+credential in `tools/vt_uuids.py`, which defaulted the VisionTrack database
+password to the value in VisionTrack's compose file; the variable is now
+required with no default. Extended `.env.example` from 14 to 28 variables, three
+of them secrets that were read by code and documented nowhere. Updated
+`ARCHITECTURE.md`.
+
+**VisionTrack** (branch `fix/pytest-import-path`, staged, not committed). One
+file: `backend/pytest.ini`. `make test` ran pytest from `/app` with no ini file,
+so only `/app/tests` went on `sys.path` and all nine test modules failed to
+import with `ModuleNotFoundError: No module named 'app'`. Setting
+`pythonpath = .` fixes it without touching a test. An earlier evac module
+skeleton and permission entries were reverted when the architecture moved to a
+standalone repository.
+
+**FaceTrack.** Untouched.
+
+---
+
+## 9. Phase 0 gate results
+
+| Check | Result |
+|---|---|
+| firedrill test suite | **93 passed, 1 xfailed**, 0.77 s |
+| firedrill coverage | 58% of 576 statements |
+| Vendored files importing under rewritten paths | 8 of 8 |
+| Vendored files modified beyond import rewrites | 0 |
+| Vendored files still importing their source repo | 0 |
+| DeepStream canonical closure compiles | 14 of 14 |
+| DeepStream broken imports introduced by archiving | 0 |
+| DeepStream env coverage | 28 of 28 referenced variables documented |
+| VisionTrack backend tests | 66 passed, 0 failed |
+| Tree map documented | §7 |
+
+The one xfail is deliberate: a strict xfail pinning the upstream falsy-zero
+defect, so it flips to XPASS the moment it is fixed.
+
+### 9.1 What the tests actually assert
+
+**Geometry and hold-time, 26 tests.** Concave zones are not treated as bounding
+boxes. A half-drawn zone raises rather than silently swallowing a floor. A
+centroid is area-weighted, so an assembly label lands inside its own zone.
+Overlapping camera views union rather than sum, so nobody is double-counted at
+an assembly point. A transient spike never fires, and one sustained breach is
+one event rather than one per tick. The foot-point projection uses the
+bottom-centre of a bounding box, because using the centre puts a person half a
+body-length off, which at an exit line is the difference between inside and
+outside the building. An uncalibrated camera produces no position rather than
+a position of (0, 0), which would put everyone in whichever zone contains the
+floor-plan origin.
+
+**Identity and store-and-forward, 21 tests.** An empty gallery matches nothing.
+A failed embed matches nothing. The margin gate separates a confident match from
+a coin flip between two look-alike employees. An identity needs its minimum
+votes, an unknown face never votes, a commit is sticky against a later
+contradiction, and stale tracks are evicted by TTL. A failing writer loses no
+buffered events, and events replay in write order.
+
+Six of those pin the **limits** of the vendored code rather than its
+capabilities, because those limits are what Phase 1 exists to close. They assert
+that the vendored identity manager has only two outcomes, that it resolves
+conflict silently by majority vote, and that it keys identity on a camera-local
+track id. If someone later assumes that class is already the identity FSM, a
+test says otherwise.
+
+**Copy integrity, 25 tests.** Every vendored module imports, every vendored file
+still declares its origin, and no vendored module reaches back into its source
+repository. The tree is asserted to be non-empty first, so the parametrised
+tests cannot pass vacuously.
+
+**Separation of duty, 22 tests.** No seeded role both runs a drill and signs off
+its own headcount. The warden cannot start, stop or reconfigure a drill. The
+commander cannot confirm people. No default role holds every permission. Someone
+can read the audit log, because invariant 6 is worthless if no role can inspect
+the record.
+
+---
+
+## 10. Open risks
+
+1. **FaceTrack is down.** Postgres password authentication is failing.
+   `roster.py` cannot be built against real data until it is fixed. The
+   simulator does not depend on it.
+2. **The P2.3b segfault is unresolved, and it is a pyds bug rather than an
+   inference-plugin bug.** `~/visiontrack-checkpoints/p2-3-deferred/README.md`
+   proves it: nvinfer and nvinferserver crash identically with SIGSEGV whenever
+   any buffer probe is registered downstream of an SGIE producing tensor
+   user-meta. Phase 2 depends on exactly that probe. Four documented paths
+   forward: a pyds rebuild with a pinned version, a DeepStream 7.0 downgrade
+   test, a C-side probe that keeps Python off the buffer path, or an NVIDIA
+   reproducer.
+3. **The roster has no department, floor or warden assignment** (§3.1d).
+   firedrill must own those fields, and someone must populate them before a real
+   drill.
+4. **Floor plans, zones and camera calibration now live in two places.** The
+   sync path from VisionTrack is Phase 3 work and is a real source of drift.
+5. **No threshold is validated.** Nothing in Phases 1 and 2 may hard-code a
+   production number. Every one comes from the Phase 2 calibration set and is
+   recorded in `docs/EVAC120_CALIBRATION.md`.
+6. **The vendored falsy-zero defect meets frame PTS** (§5). Phase 1 must
+   normalise timestamps at the ingest boundary.
+
+---
+
+## 11. Deliverables checklist
+
+| Deliverable | Where | State |
+|---|---|---|
+| Architecture assessment | this file, §2-§3 | Done |
+| Tree map | this file, §7 | Done |
+| Vendoring provenance | `docs/EVAC120_PROVENANCE.md` | Done |
+| Security model — permissions | `app/infra/permissions.py`, §6 | Partial |
+| Integration plan | this file, §2.1 | Outline |
+| Component / data-flow diagram | `docs/EVAC120_ARCHITECTURE.md` | Phase 1 |
+| State-machine transition tables | `docs/EVAC120_STATE_MACHINES.md` | Phase 1 |
+| Event schema | `app/core/events.py` | Phase 1 |
+| Identity persistence algorithm | `app/core/identity_fsm.py` | Phase 1 |
+| Accountability algorithm | `app/core/accountability_fsm.py` | Phase 1 |
+| Test strategy | `backend/tests/` | Phase 1 |
+| Alembic schema | `backend/alembic/versions/` | Phase 3 |
+| DeepStream integration design | `docs/EVAC120_DEEPSTREAM.md` | Phase 2 |
+| Calibration report | `docs/EVAC120_CALIBRATION.md` | Phase 2 |
+| Benchmark report | `docs/EVAC120_BENCHMARKS.md` | Phase 2 |
+| Failure / recovery strategy | `docs/EVAC120_RESILIENCE.md` | Phase 3 |
+| OpenAPI spec for `/api/evac/*` | generated | Phase 3-4 |
+| Deployment guide | `docs/EVAC120_DEPLOYMENT.md` | Phase 4 |
+| Warden PWA install guide | `docs/EVAC120_WARDEN_PWA.md` | Phase 4 |

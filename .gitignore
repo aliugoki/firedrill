@@ -1,0 +1,36 @@
+# ===== Secrets =====
+.env
+*.env
+!.env.example
+
+# ===== PII: face images, embeddings, snapshots =====
+# Warden devices hold thumbnails only, purged at drill end. Nothing here.
+data/
+gallery/
+snapshots/
+*.npy
+
+# ===== Local state =====
+outbox/
+*.db
+*.sqlite
+*.sqlite3
+
+# ===== Python =====
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# ===== Node =====
+node_modules/
+dist/
+.vite/
+
+# ===== Editor / OS =====
+.DS_Store
+*.swp

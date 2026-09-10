@@ -1,0 +1,19 @@
+# EVAC-120 backend — Phase 0 baseline.
+# Deliberately minimal. Every addition must be flagged and justified: this runs
+# on a site edge node that must work with zero Internet.
+
+# --- Phase 0/1: pure-Python core, vendored identity code, simulator, tests ---
+numpy==2.2.1            # vendor/deepstream/recognition.py Gallery matmul
+pytest==8.3.4
+pytest-cov==6.0.0
+hypothesis==6.122.3     # Phase 1 property tests ("no injection yields ACCOUNTED
+                        # without qualifying evidence")
+
+# --- Phase 3 (not installed yet, listed so the target is visible) ---
+# fastapi              API surface
+# uvicorn              ASGI server
+# sqlalchemy[asyncio]  projections
+# asyncpg              Postgres driver
+# alembic              migrations, schema only
+# redis                consumes vt:evac:events:<tenant>
+# pydantic-settings    config
