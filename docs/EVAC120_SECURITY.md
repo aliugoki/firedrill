@@ -169,7 +169,13 @@ Stated plainly rather than left to be discovered.
   service. On an edge node serving a warden PWA, that matters: a service worker
   will not install over plain HTTP except on localhost.
 - **No rate limiting.** A device syncing in a loop can flood the ingest path.
-- **Central replication is unauthenticated** at the transport interface. The
-  interface exists; the credential does not.
+- **Central replication authenticates the site, not the node.** A per-site
+  shared secret proves the sender knows a token, not that it is the node it
+  claims to be, so a stolen token lets someone inject events for that site. On a
+  private link between an edge node and its own central this is proportionate;
+  over the open internet it is not. The comparison is constant-time, a node
+  authenticated for one site cannot write another's history, and central never
+  becomes authoritative — but none of that turns a shared secret into an
+  identity.
 - **The retention durations are not reviewed.** They are marked `calibrated=False`
   and are a starting point for a data-protection review, not its conclusion.

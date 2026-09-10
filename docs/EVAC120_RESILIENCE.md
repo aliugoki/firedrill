@@ -122,7 +122,19 @@ the test fails rather than the guarantee silently becoming false.
 It is a bounded, measured amount, and the bound is worth knowing before anyone
 relies on it.
 
-### 5.2 Convergence
+### 5.2 A rejected credential is not an outage
+
+The two look identical from the backlog depth alone, and they need opposite
+responses. An unreachable central comes back on its own, so the replicator
+retries with backoff. A wrong token never will, so the replicator **stops**,
+records why, and reports it separately in `/healthz`.
+
+Retrying a credential failure forever is the worse default: it fills the disk,
+never succeeds, and reports itself the whole time as a transient outage that
+somebody is presumably already handling. Nothing is lost while blocked — the
+events stay buffered — and a human clears it once the token is fixed.
+
+### 5.3 Convergence
 
 Central deduplicates on arrival and reports gaps rather than filling them. Its
 reconciliation report states plainly when the copy is incomplete, and says that

@@ -174,6 +174,12 @@ class Replicator:
     batch_size: int = 500
     stats: ReplicationStats = field(default_factory=ReplicationStats)
 
+    #: Set when central refuses the credential. Retrying will not fix a wrong
+    #: token, and a failure that cannot be resolved by waiting must not sit
+    #: behind exponential backoff pretending to be a transient outage — it needs
+    #: a human, and the only way they find out is if it stops and says so.
+    blocked_reason: str | None = None
+
     def enqueue(self, event: Event, now_ms: int | None = None) -> None:
         """Buffer an event for central. Never raises, never blocks a decision."""
         if self.outbox.add(event, now_ms):
@@ -186,6 +192,11 @@ class Replicator:
         does not raise: replication failing must never interrupt a drill, and an
         edge node with no link to central is still fully operational.
         """
+        if self.blocked_reason is not None:
+            # Nothing is lost: the events stay buffered. What stops is the
+            # pointless retrying that would hide the real problem.
+            return 0
+
         batch = self.outbox.pending(self.batch_size)
         if not batch:
             return 0
@@ -193,6 +204,11 @@ class Replicator:
         try:
             self.transport.send([record for _, record in batch])
         except Exception as exc:
+            if type(exc).__name__ == "ReplicationRejected":
+                self.blocked_reason = str(exc)
+                self.stats.last_failure_reason = self.blocked_reason
+                self.stats.failed_flushes += 1
+                return 0
             self.outbox.record_attempt(ids)
             self.stats.failed_flushes += 1
             self.stats.last_failure_reason = f"{type(exc).__name__}: {exc}"
@@ -212,6 +228,14 @@ class Replicator:
                 break
             total += sent
         return total
+
+    def unblock(self) -> None:
+        """Resume after a human has fixed the credential."""
+        self.blocked_reason = None
+
+    @property
+    def is_blocked(self) -> bool:
+        return self.blocked_reason is not None
 
     @property
     def backlog(self) -> int:

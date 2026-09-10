@@ -57,6 +57,11 @@ class EdgeNode:
             "outstanding_gaps": len(state.tracker.outstanding_gaps()),
             "replication_backlog": (self.replicator.backlog
                                     if self.replicator else 0),
+            # Surfaced separately from the backlog. A growing backlog with a
+            # reachable central is an outage that will resolve; a blocked one
+            # never will, and the two look identical from the depth alone.
+            "replication_blocked": (self.replicator.blocked_reason
+                                    if self.replicator else None),
             "geometry_ready": self.geometry.ready_for_a_drill(),
             "durable": self.events_store is not None,
             "recovered_drills": list(self.recovered_drills),
@@ -121,17 +126,20 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
     # --- replication to central ----------------------------------------------
     replicator = None
     central_url = env.get("EVAC_CENTRAL_URL", "")
-    if central_url:
-        from app.ingest.replication import InMemoryTransport
+    central_token = env.get("EVAC_CENTRAL_TOKEN", "")
+    if central_url and central_token and site_id:
+        from app.ingest.http_transport import HttpTransport
 
         outbox_dir = env.get("EVAC_OUTBOX_DIR", "./outbox")
-        # The HTTP transport lands with the central node's own API. Until then
-        # the outbox still buffers durably, so nothing is lost by the gap.
         replicator = Replicator(
-            outbox=Outbox(f"{outbox_dir}/{site_id or 'site'}.db"),
-            transport=InMemoryTransport())
-        gaps.append("central replication has no HTTP transport yet; events are "
-                    "buffered durably but not delivered")
+            outbox=Outbox(f"{outbox_dir}/{site_id}.db"),
+            transport=HttpTransport(url=central_url.rstrip("/")
+                                    + "/api/evac/replication/events",
+                                    token=central_token, site_id=site_id))
+    elif central_url:
+        gaps.append("EVAC_CENTRAL_URL is set but EVAC_CENTRAL_TOKEN is not; "
+                    "central refuses unauthenticated batches, so nothing would "
+                    "be delivered")
 
     # --- geometry -------------------------------------------------------------
     geometry = GeometryStore()

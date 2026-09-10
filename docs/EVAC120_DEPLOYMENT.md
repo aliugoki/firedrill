@@ -125,7 +125,10 @@ EVAC_OUTBOX_DIR=/var/lib/evac120/outbox
 EVAC_OUTBOX_FLUSH_SEC=15             # also the producer's exposure window
 
 EVAC_CENTRAL_URL=                    # unset on the central node itself
-EVAC_CENTRAL_TOKEN=                  # REQUIRED when CENTRAL_URL is set
+EVAC_CENTRAL_TOKEN=                  # REQUIRED when CENTRAL_URL is set.
+                                     # Without it the edge reports a gap rather
+                                     # than buffering forever against a central
+                                     # that will refuse every batch.
 
 EVAC_JWT_SECRET=                     # REQUIRED
 ```
@@ -251,9 +254,9 @@ truth; everything else is derived from it.
 
 Named rather than left to be discovered:
 
-- **The HTTP transport to central.** The outbox buffers durably and the
-  reconciler is built; the credential and the endpoint between them are not, so
-  events accumulate locally rather than being delivered.
+- **JWT verification.** The API reads caller identity from headers a gateway
+  is expected to set. Do not expose it beyond the edge node's network until
+  that gateway exists.
 - **JWT verification.** The API reads identity from headers a gateway sets. Do
   not expose it beyond the edge node's network until that gateway exists.
 - **The FaceTrack HTTP client.** Use `EVAC_ROSTER_FILE` until it lands.

@@ -92,7 +92,8 @@ def requires(permission: str) -> Callable:
 
 def create_app(registry: DrillRegistry | None = None,
                roster_provider: Callable[[str], RosterSnapshot] | None = None,
-               assembly_zones: frozenset = frozenset()) -> FastAPI:
+               assembly_zones: frozenset = frozenset(),
+               replica=None) -> FastAPI:
     app = FastAPI(
         title="EVAC-120",
         version="0.4.0",
@@ -359,6 +360,15 @@ def create_app(registry: DrillRegistry | None = None,
             })
 
         return report
+
+    if replica is not None:
+        # Only a central node mounts this. An edge node exposing a replication
+        # endpoint would let anything with the token write its history, and an
+        # edge node's history is the authoritative one.
+        from app.api.replication import build_router
+
+        app.state.replica = replica
+        app.include_router(build_router(replica))
 
     _mount_frontend(app)
     return app
