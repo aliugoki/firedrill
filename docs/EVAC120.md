@@ -71,8 +71,10 @@ not.
 
 **Seam 1 — DeepStream to firedrill.** The pipeline publishes typed events with
 per-source sequence numbers to `vt:evac:events:<tenant>`. firedrill consumes
-them. *Blocked* on the P2.3b segfault; the consumer half is built and tested,
-the producer half needs a working probe. Contract in
+them via `app/ingest/consumer.py`, using consumer groups so a restart
+redelivers rather than skips, acknowledging only after the fold, and claiming
+what a dead consumer stranded. *Blocked* only on the producer: the P2.3b
+segfault means nothing publishes to that stream yet. Contract in
 `EVAC120_DEEPSTREAM.md` §3.1; event shapes in §5 below.
 
 **Seam 2 — FaceTrack to firedrill.** The roster, fetched at drill start and
@@ -86,10 +88,11 @@ an exported roster with no network at all.
 **Seam 3 — VisionTrack geometry to firedrill.** Floor plans, zone polygons and
 camera homographies, synced into firedrill's tables. Zones additionally need a
 kind — `FLOOR`, `EXIT`, `ASSEMBLY` or `BLIND` — which VisionTrack has no concept
-of, so the sync is a transformation rather than a copy. *Not blocked.* The
-transformation is built and tested in `app/sync/`, against the shapes a live
-VisionTrack instance actually holds; what remains is the runner that reads its
-Postgres and writes firedrill's.
+of, so the sync is a transformation rather than a copy. *Not blocked, and now
+built:* `app/sync/` holds the transformation and the runner, tested against the
+shapes a live VisionTrack instance actually holds. It reads VisionTrack
+read-only, and a site that has synced once runs drills with VisionTrack switched
+off entirely.
 
 **Seam 4 — edge to central.** One-directional, asynchronous, never on the
 critical path. Built and tested, including convergence after a partition.
