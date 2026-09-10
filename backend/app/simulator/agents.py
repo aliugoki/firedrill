@@ -23,6 +23,7 @@ Everything is driven by a seeded RNG, so a failing test reproduces exactly.
 
 from __future__ import annotations
 
+import hashlib
 import random
 from dataclasses import dataclass, field
 from enum import Enum
@@ -31,6 +32,20 @@ from app.simulator.site import Site, Zone
 from app.core.presence_fsm import ZoneKind
 
 Point = tuple[float, float]
+
+
+def stable_seed(*parts) -> int:
+    """A seed derived from strings that is the same in every process.
+
+    `hash()` on a str is salted per interpreter by PYTHONHASHSEED, so
+    `random.Random(hash((seed, name)))` produces different streams on different
+    runs. The simulator claimed to be deterministic for a given seed and was
+    not: two runs of the same drill produced different trajectories, and a test
+    that failed in one process passed in the next. A failing run has to
+    reproduce, so the digest is taken explicitly.
+    """
+    material = "|".join(str(p) for p in parts).encode()
+    return int.from_bytes(hashlib.sha256(material).digest()[:4], "big")
 
 
 class Behaviour(str, Enum):
@@ -251,7 +266,7 @@ def walk(
     The stairwell leg is the interesting one: it is a blind zone, so a correct
     system loses the track there and must not conclude anything from that.
     """
-    rng = random.Random(hash((seed, agent.person_ref)) & 0xFFFFFFFF)
+    rng = random.Random(stable_seed(seed, agent.person_ref))
     trajectory: list[Waypoint] = []
 
     def add(ts_ms: int, floor_id: str, point: Point) -> None:

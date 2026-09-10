@@ -288,17 +288,42 @@ class TestCameraOutage:
 
 
 class TestInfrastructureOutage:
+    """Not every outage is the same kind of outage.
+
+    An earlier version of these tests assumed Redis, Postgres and the network
+    all fail identically, and asserted all three force manual verification. Two
+    of the three do not, and treating them alike was wrong in a way that
+    mattered: it would make the system blind itself over a database it does not
+    need to see through.
+    """
+
+    def test_losing_the_event_bus_blinds_the_system(self, site):
+        # Redis carries the observations. Without it the system sees nothing.
+        result = run_drill(plan_with(
+            site, Injections(redis_outages=(Outage(0, 10_000_000),))))
+        assert result.state.health.is_blind is True
+
+    @pytest.mark.parametrize("field,component", [
+        ("db_outages", "DATABASE"),
+        ("network_partitions", "CENTRAL_LINK"),
+    ])
+    def test_losing_storage_or_central_does_not_blind_the_system(
+        self, site, field, component
+    ):
+        # The core holds its state in memory and the projections are
+        # recomputable from the ledger. Losing Postgres costs durability;
+        # losing central costs reporting. Neither costs sight.
+        result = run_drill(plan_with(
+            site, Injections(**{field: (Outage(0, 10_000_000),)})))
+        assert result.state.health.is_degraded is True
+        assert result.state.health.is_blind is False
+
     @pytest.mark.parametrize("field", ["redis_outages", "db_outages",
                                        "network_partitions"])
-    def test_an_outage_forces_manual_verification_rather_than_a_guess(
-        self, site, field
-    ):
-        # Redis, Postgres and the network each fail the same way: the system
-        # stops being able to see, and says so.
-        injections = Injections(**{field: (Outage(0, 10_000_000),)})
-        result = run_drill(plan_with(site, injections))
-        states = {d.state for d in result.decisions.values()}
-        assert AccountabilityState.MANUAL_VERIFICATION_REQUIRED in states
+    def test_every_outage_is_recorded_with_its_own_component(self, site, field):
+        result = run_drill(plan_with(
+            site, Injections(**{field: (Outage(30_000, 90_000),)})))
+        assert len(result.state.health.degradations) == 1
 
     @pytest.mark.parametrize("field", ["redis_outages", "db_outages",
                                        "network_partitions"])

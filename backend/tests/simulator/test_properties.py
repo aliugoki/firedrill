@@ -209,3 +209,59 @@ class TestGapsAreReportedNotRepaired:
                          injections=NONE)
         state = replay(observe(plan).events, plan)
         assert state.tracker.outstanding_gaps() == []
+
+
+class TestTheSimulatorIsActuallyDeterministic:
+    """A failing run has to reproduce, or the suite is telling stories.
+
+    The simulator seeded its per-agent RNG with `hash((seed, person_ref))`.
+    Python salts str hashing per interpreter, so two runs of the same drill
+    produced different trajectories and a test could pass in one process and
+    fail in the next. These pin the fix.
+    """
+
+    def test_the_same_seed_produces_the_same_population(self, site):
+        from app.simulator.agents import build_population
+
+        a = build_population(site, count=80, seed=99)
+        b = build_population(site, count=80, seed=99)
+        assert [x.behaviour for x in a] == [x.behaviour for x in b]
+        assert [x.home_floor_id for x in a] == [x.home_floor_id for x in b]
+        assert [x.reaction_ms for x in a] == [x.reaction_ms for x in b]
+
+    def test_the_same_seed_produces_the_same_trajectories(self, site):
+        from app.simulator.agents import build_population, walk_all
+
+        def walked():
+            agents = build_population(site, count=80, seed=99)
+            walk_all(agents, site, alarm_ms=ALARM_MS, seed=99)
+            return [(a.person_ref, len(a.trajectory), a.assembly_arrival_ms)
+                    for a in agents]
+
+        assert walked() == walked()
+
+    def test_seeding_does_not_depend_on_process_hash_randomisation(self, site):
+        # The actual bug. `hash()` on a str is salted per interpreter, so a
+        # seed derived from one is not a seed at all.
+        from app.simulator.agents import stable_seed
+
+        assert stable_seed(7, "emp:EMP-0001") == stable_seed(7, "emp:EMP-0001")
+        assert stable_seed(7, "emp:EMP-0001") != stable_seed(7, "emp:EMP-0002")
+        assert stable_seed(7, "x") != stable_seed(8, "x")
+        # A value fixed by the digest, so a change of algorithm is visible.
+        assert stable_seed(7, "emp:EMP-0001") == 601652484
+
+    def test_different_seeds_produce_different_drills(self, site):
+        from app.simulator.agents import build_population
+
+        a = build_population(site, count=80, seed=1)
+        b = build_population(site, count=80, seed=2)
+        assert [x.home_floor_id for x in a] != [x.home_floor_id for x in b]
+
+    def test_two_runs_of_a_drill_reach_the_same_conclusions(self, site):
+        agents = population(site, 60, 20260910)
+        plan = DrillPlan(site=site, agents=agents, alarm_ms=ALARM_MS,
+                         injections=REALISTIC)
+        first, second = run_drill(plan), run_drill(plan)
+        assert first.accounted_refs() == second.accounted_refs()
+        assert first.timing.building.p95 == second.timing.building.p95

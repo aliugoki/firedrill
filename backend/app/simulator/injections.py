@@ -13,6 +13,8 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 
+from app.simulator.agents import stable_seed
+
 
 @dataclass(frozen=True, slots=True)
 class Outage:
@@ -145,7 +147,7 @@ class Dice:
     def stream(self, name: str) -> random.Random:
         rng = self._streams.get(name)
         if rng is None:
-            rng = random.Random(hash((self.seed, name)) & 0xFFFFFFFF)
+            rng = random.Random(stable_seed(self.seed, name))
             self._streams[name] = rng
         return rng
 

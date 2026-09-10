@@ -1,0 +1,196 @@
+# EVAC-120 failure and recovery
+
+The system's job during a failure is to be **honestly less useful**, never
+quietly wrong. Every design decision here follows from that, and from invariant
+8: any infrastructure failure degrades to `DEGRADED` or
+`MANUAL_VERIFICATION_REQUIRED`, never to a false `ALL CLEAR`.
+
+---
+
+## 1. Where authority lives
+
+The **edge node is the authority** during a drill. It holds the accountability
+core in memory, decides every person's state, and never waits on anything
+outside the building to do so. Central is a replica for administration and
+reporting, and it is explicitly forbidden from being used for accountability
+when its copy is incomplete.
+
+This is the zero-Internet requirement expressed as an ownership rule rather than
+as a feature. A site whose uplink is severed mid-drill loses reporting and loses
+nothing else.
+
+---
+
+## 2. What each failure costs
+
+The distinction that matters is whether a failure **blinds** the system. A
+blinded system cannot infer anything from silence; a merely degraded one can
+still see, and only loses durability or reach.
+
+| Failure | Blinds? | Immediate effect | What the operator sees |
+|---|---|---|---|
+| One camera | Yes, for its coverage | Grace clock suspends for people it was watching | `CAMERA_DEGRADED`, that camera named |
+| Every camera | Yes, totally | No new observations at all | Blind fraction climbs; all-clear blocked |
+| DeepStream pipeline | Yes | Event production stops | `SYSTEM_DEGRADED`, pipeline named |
+| Redis (event bus) | Yes | Events stop arriving; gaps on resume | `SEQUENCE_GAP` in each person's evidence |
+| Postgres (projections) | **No** | Read models stop persisting | `SYSTEM_DEGRADED`, but counts keep updating |
+| Link to central | **No** | Replication buffers locally | Backlog depth rises; drill unaffected |
+| FaceTrack (roster) | **No** | Roster snapshot cannot be refreshed | Roster marked unverified; all-clear blocked |
+
+Two rows in that table are the ones people get wrong.
+
+**A Postgres outage is not blinding.** The core holds its state in memory and
+the projections are recomputable from the ledger. Treating a database failure as
+a sight failure would make the system blind itself over something it does not
+need to see through. The simulator originally made exactly this mistake, and a
+chaos test caught it.
+
+**A severed link to central is not an incident.** It is the designed operating
+mode of a site with no Internet.
+
+---
+
+## 3. Health is stored as intervals, not as a flag
+
+A boolean answers "is the system degraded now?". That is the least useful
+version of the question, because by the time anyone reads a report the outage is
+over and the flag reads healthy.
+
+`HealthLog` stores closed intervals with a cause, which makes three questions
+answerable:
+
+- **Was the system degraded at 10:42:15?** The moment a particular call was made.
+- **How much of the drill was degraded?** Overlapping outages are unioned, not
+  summed, so three cameras down at once is one blind period rather than three.
+- **Which cameras were dark when this person was last seen?** The question a
+  warden actually asks at the assembly point, and the one that turns "we don't
+  know where they are" into "the camera on their floor was down for two minutes".
+
+Every drill report carries a caveat generated from this. Above 50% blind, the
+caveat says plainly that the manual roll-call is the authority and the system's
+counts describe the minority of the drill it was watching.
+
+---
+
+## 4. Ingest guarantees
+
+One fold, `app.ingest.Ingestor`, used by both the edge service and the
+simulator. A property proved against the simulator is therefore a property of
+the production path rather than of a lookalike.
+
+**Idempotent.** `(source, seq)` is an event's identity. Redis Streams redeliver
+on consumer restart, so folding the same events twice must reach the same state,
+and a chaos test asserts exactly that against a doubled stream.
+
+**Gap-detecting, never gap-filling.** A hole produces a `SEQUENCE_GAP` in the
+affected person's evidence and nothing else. Interpolating across it would
+manufacture observations, which is the precise inverse of invariant 1. A gap
+that a late event fills stops being reported; one that is never filled stays
+visible for the life of the drill.
+
+**Order-tolerant.** Batches are sorted by timestamp before folding, because a
+batch drained from a stream contains several cameras whose clocks interleave,
+and applying them in arrival order would let a later sighting be overwritten by
+an earlier one.
+
+---
+
+## 5. Replication and the recovery point objective
+
+Edge to central is one-directional, asynchronous, and never on the critical
+path. Durability comes from a SQLite WAL buffer with `synchronous=FULL`, which
+fsyncs on commit. That is slower, and it is the entire reason the buffer is
+worth having.
+
+### 5.1 The numbers
+
+| Scenario | Events lost | Why |
+|---|---|---|
+| Edge process crashes | **0** | Everything committed is on disk and replayed on restart |
+| Edge loses power | **0** | `synchronous=FULL` fsyncs before returning |
+| Link to central drops | **0** | Buffered locally; delivered on reconnect |
+| Central is rebuilt | **0** | Edge replays its whole buffer |
+| **Edge disk fails** | Everything central has not acknowledged | The only unbounded loss, and the argument for a short flush interval |
+| **Producer crashes mid-flight** | Up to one flush interval | Events produced but not yet committed |
+
+The last two are the real RPO, and they are reported by `measure_rpo` from live
+counters rather than asserted here. That matters: the fsync claim is only true
+while the pragma is set, so a test asserts the pragma directly. Change it, and
+the test fails rather than the guarantee silently becoming false.
+
+"We buffer events" invites the belief that nothing can be lost. Something can.
+It is a bounded, measured amount, and the bound is worth knowing before anyone
+relies on it.
+
+### 5.2 Convergence
+
+Central deduplicates on arrival and reports gaps rather than filling them. Its
+reconciliation report states plainly when the copy is incomplete, and says that
+the edge node's copy is authoritative and central must not be used for
+accountability until it is not.
+
+A chaos test asserts convergence in the strong sense: after a partition and a
+flood, central does not merely hold the same number of events, it reaches the
+same accountability conclusions as the edge.
+
+---
+
+## 6. Recovery behaviour
+
+| Component | Recovery | Compensation |
+|---|---|---|
+| Camera | On `CAMERA_RECOVERED` | Time spent degraded is credited back to each affected person's grace window |
+| Pipeline | On `SYSTEM_RECOVERED` | Ingest resumes; the gap in sequence numbers is reported |
+| Redis | Consumer reconnects and replays from its last acknowledged id | Duplicates dropped; gaps reported |
+| Postgres | Projections rebuilt from the ledger | Nothing lost; the ledger is the source of truth |
+| Central link | Replicator drains the backlog | Reconciler deduplicates the flood |
+
+The camera credit is worth spelling out. Without it, a ten-minute camera failure
+would age every person it covered into `LOST` the instant it came back, turning
+one outage into a wave of false alarms at exactly the moment the operator
+regained sight.
+
+---
+
+## 7. The chaos suite
+
+Two layers, because they prove different things.
+
+**`backend/tests/chaos/`** kills each component in a simulated drill and asserts
+the software's response: nobody falsely cleared, the board reports degraded
+while it is degraded, and state converges on replay. These run in the normal
+test suite, in seconds, with no infrastructure.
+
+**`scripts/evac_chaos.sh`** kills real containers against a live stack. Its
+assertions are coarser by necessity: that the service stayed up, kept answering,
+and reported itself degraded. What it proves that the pytest layer cannot is
+that the failures are the ones that actually happen.
+
+A service that stays up and reports healthy while blind is the failure both
+layers exist to catch.
+
+### Scenarios
+
+| Scenario | pytest class | Container |
+|---|---|---|
+| One camera dies mid-drill | `TestCameraDiesMidDrill` | `mediamtx` |
+| Every camera dies | `TestEveryCameraDies` | — |
+| DeepStream container dies | `TestThePipelineDies` | `vt-ai-worker-ds` |
+| Redis dies | `TestTheEventBusDies` | `vt-redis` |
+| Postgres dies | `TestTheDatabaseDies` | `firedrill-postgres` |
+| Link to central severed | `TestTheLinkToCentralDies` | network disconnect |
+| Partition then flood | `TestNetworkPartitionThenReplay` | — |
+| All of it at once | `TestEverythingAtOnce` | — |
+
+---
+
+## 8. What is not yet built
+
+The edge service's process wrapper: the Redis consumer loop, the HTTP health
+endpoint that `evac_chaos.sh` polls, and the Postgres projection writer. The
+logic they wrap is built and tested; what is missing is the deployment shell
+around it, which lands with the API in Phase 4.
+
+Until then `scripts/evac_chaos.sh` skips every scenario on a host where the
+containers do not exist, which is the honest behaviour: it reports skipped, not
+passed.

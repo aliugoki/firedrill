@@ -20,8 +20,8 @@ of each phase. It is updated at every phase gate.
 |---|---|---|
 | 0 | Repo, vendored code, permissions, docs, tree map | Complete |
 | 1 | Pure-Python core + simulator, no cameras | Complete |
-| 2 | Single DeepStream pipeline on GPU host + calibration | **Design + harness complete; GPU work blocked** |
-| 3 | Edge/central resilience, projections, chaos suite | Not started |
+| 2 | Single DeepStream pipeline on GPU host + calibration | Design + harness complete; GPU work blocked |
+| 3 | Edge/central resilience, projections, chaos suite | **Complete — awaiting sign-off** |
 | 4 | Command Center + Warden Mobile PWA | Not started |
 | 5 | Three live drills, validation report | Not started |
 
@@ -563,6 +563,149 @@ recorded footage: the calibration set, and therefore every certified threshold.
 
 **No configuration in this system is marked calibrated, and none will be until
 both exist.**
+
+---
+
+## 9C. Phase 3 results
+
+Ingest, projections, replication and the chaos suite. Full detail in
+`docs/EVAC120_RESILIENCE.md`.
+
+### 9C.1 One fold, not two
+
+The biggest change is structural. The simulator had its own copy of the
+event-to-state fold, and the roster-to-track resolution that the board depends
+on. Both now live in `app/ingest/`, and the simulator drives them.
+
+That matters more than it sounds. A property proved against the simulator is now
+a property of the production path, rather than of a lookalike that happens to
+behave similarly today. It also removes the last place where the simulator could
+quietly know something the real system cannot.
+
+### 9C.2 Health is intervals, not a flag
+
+`HealthLog` stores closed outage intervals with a cause, not a boolean. A
+boolean answers "is the system degraded now?", which is the least useful version
+of the question: by the time anyone reads a report, the outage is over and the
+flag reads healthy.
+
+Intervals answer the questions that matter. Was the system blind at the moment
+it made this call. How much of the drill was it blind for, with overlapping
+outages unioned rather than summed, so three cameras down at once is one blind
+period. And which cameras were dark when this person was last seen, which is
+what turns "we don't know where they are" into "the camera on their floor was
+down for two minutes".
+
+### 9C.3 What each failure actually costs
+
+Two rows of that table are the ones that are easy to get wrong, and the chaos
+suite pins both.
+
+**A Postgres outage does not blind the system.** The core holds its state in
+memory and projections are recomputable from the ledger. Treating a database
+failure as a sight failure would make the system blind itself over something it
+does not need to see through.
+
+**A severed link to central is not an incident.** It is the designed operating
+mode of a site with no Internet. The edge keeps deciding and buffers for later.
+
+The simulator was getting the first one wrong: it emitted every infrastructure
+outage as a generic pipeline failure, so a database outage read as blinding, and
+three overlapping outages collapsed into one because the health log treats a
+repeat failure of the same component as the same ongoing outage. A chaos test
+caught it by counting outages. Each kind now carries its real component.
+
+### 9C.4 Recovery point objective
+
+| Scenario | Events lost |
+|---|---|
+| Edge process crashes | 0 |
+| Edge loses power | 0 |
+| Link to central drops | 0 |
+| Central is rebuilt from scratch | 0 |
+| Edge disk fails | Everything central has not acknowledged |
+| Producer crashes mid-flight | Up to one flush interval |
+
+The zeroes come from a SQLite WAL buffer with `synchronous=FULL`, which fsyncs
+on commit. That claim is only true while the pragma is set, so a test asserts
+the pragma directly: change it and the test fails rather than the guarantee
+silently becoming false.
+
+The last two rows are the real RPO, reported by `measure_rpo` from live counters
+rather than from prose. "We buffer events" invites the belief that nothing can
+be lost. Something can. It is bounded and measured, and the bound is worth
+knowing before anyone relies on it.
+
+### 9C.5 The all-clear cannot be declared while blind
+
+`LiveBoard.all_clear` requires every expected person accounted for **and** no
+open outage **and** a roster that was verified against its source. A blind
+system cannot produce an all-clear however good its counts look, which is the
+single failure invariant 8 exists to prevent.
+
+`blocking_all_clear()` is never empty when the board is not clear, so an
+operator always has the reason on screen rather than an absence of a green
+light.
+
+### 9C.6 Chaos suite
+
+Two layers. `backend/tests/chaos/` kills each component in a simulated drill and
+asserts the software's response in seconds with no infrastructure.
+`scripts/evac_chaos.sh` kills real containers against a live stack, where the
+assertions are coarser but the failures are real.
+
+A service that stays up and reports healthy while blind is the failure both
+layers exist to catch.
+
+| Scenario | Asserted |
+|---|---|
+| One camera dies mid-drill | Board degrades, recovers, outage stays in the record, nobody aged into LOST |
+| Every camera dies | Nobody newly cleared; caveat defers to the manual roll-call |
+| DeepStream pipeline dies | Board degrades; all-clear blocked |
+| Redis dies | Gaps reported as evidence, never filled |
+| Postgres dies | System not blinded; accountability keeps working; all-clear still blocked |
+| Link to central severed | Drill unaffected; nothing lost; central converges to the same conclusions |
+| Partition then flood | Backlog drains; central complete; redelivery harmless |
+| All of it at once | Nobody falsely cleared; every person keeps a state and a reason |
+
+`scripts/evac_chaos.sh` skips every scenario on a host without the containers,
+reporting skipped rather than passed. It has been syntax-checked and dry-run;
+it has not been run against a live stack, because the edge service's process
+wrapper lands with the API in Phase 4.
+
+### 9C.7 A determinism bug the chaos suite exposed
+
+Two tests passed in isolation and failed in the full suite. The cause was not
+test pollution: the simulator seeded each agent's RNG with
+`hash((seed, person_ref))`, and Python salts string hashing per interpreter.
+Two runs of the same drill produced different trajectories.
+
+That makes the whole suite untrustworthy in a specific way. A failing run could
+not be reproduced, and a passing run proved nothing about the next one. Seeds
+are now derived from an explicit digest, pinned by a test that asserts a fixed
+value so a change of algorithm is visible rather than silent.
+
+### 9C.8 Conservative recovery, found the same way
+
+A chaos assertion counting outages failed because a 15% event-drop rate ate a
+`CAMERA_RECOVERED`. The system's response was correct: it kept believing the
+camera was down and refused an all-clear indefinitely.
+
+That is the right direction to fail in. Staying degraded when the camera has
+actually recovered costs an operator some confidence; falsely recovering would
+let a blind system declare an all-clear. Only one of those is survivable, and
+there is now a test asserting the system picks it.
+
+### 9C.9 Phase 3 gate
+
+| Check | Result |
+|---|---|
+| Full suite | **538 passed, 1 xfailed**, 182 s |
+| Coverage | 88% overall, 97% on `app/core` |
+| Chaos suite | 28 tests, all green |
+| Container chaos script | syntax-checked and dry-run; skips on a host without the stack |
+| RPO documented | `docs/EVAC120_RESILIENCE.md` §5 |
+| False accounted, all profiles | **0** |
 
 ---
 
