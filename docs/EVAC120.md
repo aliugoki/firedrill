@@ -21,8 +21,8 @@ of each phase. It is updated at every phase gate.
 | 0 | Repo, vendored code, permissions, docs, tree map | Complete |
 | 1 | Pure-Python core + simulator, no cameras | Complete |
 | 2 | Single DeepStream pipeline on GPU host + calibration | Design + harness complete; GPU work blocked |
-| 3 | Edge/central resilience, projections, chaos suite | **Complete — awaiting sign-off** |
-| 4 | Command Center + Warden Mobile PWA | Not started |
+| 3 | Edge/central resilience, projections, chaos suite | Complete |
+| 4 | Command Center + Warden Mobile PWA | **Built; live dry run blocked** |
 | 5 | Three live drills, validation report | Not started |
 
 ---
@@ -706,6 +706,103 @@ there is now a test asserting the system picks it.
 | Container chaos script | syntax-checked and dry-run; skips on a host without the stack |
 | RPO documented | `docs/EVAC120_RESILIENCE.md` §5 |
 | False accounted, all profiles | **0** |
+
+---
+
+## 9D. Phase 4 results
+
+Everything except the gate. The gate is an end-to-end dry run on the Sialkot
+office with real cameras, a real roster and a real warden device, and that needs
+hardware and people rather than code.
+
+### 9D.1 What was built
+
+| Piece | Where | Tests |
+|---|---|---|
+| Warden domain: actions, headcount, sweep | `app/warden/` | 70 |
+| Drill lifecycle and the two-part all-clear | `app/drill.py` | via API |
+| HTTP surface, 14 endpoints, OpenAPI | `app/api/` | 48 |
+| Audit log and retention policy | `app/infra/` | 29 |
+| Command centre | `frontend/index.html` | 45 shared |
+| Warden PWA, offline-capable | `frontend/warden.html` | with the above |
+
+Documents: `EVAC120_SECURITY.md`, `EVAC120_DEPLOYMENT.md`,
+`EVAC120_WARDEN_PWA.md`.
+
+### 9D.2 The headcount asymmetry
+
+The most important decision in the phase. If the system counted more people than
+the warden did, it believes people are safe who are not standing there, which is
+the exact failure the product exists to prevent. It escalates at a difference of
+one, and its tolerance defaults to zero. If the warden counted more, there are
+unbadged people present — worth investigating, not alarming.
+
+A single absolute difference against one threshold would let the dangerous
+direction hide inside a tolerance chosen to accommodate the harmless one.
+
+### 9D.3 Complete is not clean
+
+Completing a sweep is always accepted, even when the system disagrees. Refusing
+it would be the software overruling the human it designated the final authority.
+
+But a clean zone needs four things: the sweep finished, nobody unresolved, a
+physical headcount actually taken, and that count agreeing. Walking a zone
+ticking people off the system's own list is checking the system against itself,
+so a sweep with no independent count cannot be clean. That was a bug found by a
+test, where `is_clean` said yes while `blocking_clean` explained why not.
+
+The all-clear now has two halves, and both are required. The board's counts are
+one; every zone swept and agreeing is the other.
+
+### 9D.4 No framework on the front end
+
+A reversal of the earlier plan, recorded in `CLAUDE.md` rather than left
+implicit. The warden tablet must start from cache with no network, and a bundle
+the service worker caches is a bundle that must be rebuilt, versioned and
+invalidated correctly or the app silently stops working offline. Both surfaces
+are read-mostly, and a life-safety tool with several hundred transitive
+dependencies is a liability. The cost is stated too: no component model, no type
+checking, manual DOM updates.
+
+Two bugs came out of testing the offline queue against a working in-memory
+IndexedDB rather than a mock of itself. It hung forever on an IndexedDB error
+because only `onsuccess` was wired — on a tablet that looks like the app
+thinking rather than failing, and a warden moves on. And it read
+`navigator.onLine` from a global, which Node 22 makes read-only; that was a
+signal, and the check is now injected.
+
+### 9D.5 Evidence is not biometrics
+
+The distinction the retention policy turns on. "A face matched EMP-482 at 10:41
+above threshold on camera 9" is evidence a report needs for years. The 512-float
+embedding that produced it is needed for as long as the matching takes. Keeping
+it because it is in the same pipeline is how a drill system becomes a biometric
+database nobody signed up for.
+
+Embeddings and crops are purged immediately after use. Warden thumbnails go at
+drill end, synced or not. The evidence ledger outlives the faces by a year, and
+the audit log outlives the evidence, so each layer can account for the one below.
+
+Three enforcement details matter more than the durations, which are marked
+unreviewed:
+
+- Constructing a policy that omits a data class raises. An item nobody decided
+  about lives forever by default.
+- A purge that fails is not recorded as a purge. Recording a deletion that did
+  not happen would make the policy a lie that passes its own verification.
+- `verify` treats overdue biometric material as a finding, not a warning.
+
+### 9D.6 Phase 4 gate
+
+| Check | Result |
+|---|---|
+| Backend suite | **685 passed, 1 xfailed**, 202 s |
+| Frontend suite | 45 passed |
+| Endpoints | 14, OpenAPI generated |
+| Separation of duty | asserted per route |
+| No raw AI metrics on the board | asserted |
+| Service worker install list | every file verified to exist |
+| **Live dry run at Sialkot** | **blocked: needs real cameras, roster and a warden device** |
 
 ---
 
