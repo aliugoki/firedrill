@@ -1,0 +1,431 @@
+"""The HTTP surface, and the separation of duty it enforces."""
+
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.api.app import create_app
+from app.core.roster import ExpectationReason, Roster
+from app.drill import DrillRegistry
+from app.infra.permissions import EVAC_ADMIN, EVAC_OPERATE, EVAC_READ, EVAC_WARDEN
+
+T0 = 1_788_000_000_000
+ASSEMBLY = frozenset({"assembly-north", "assembly-south"})
+
+
+def roster_provider(site_id: str):
+    roster = Roster()
+    for i in range(6):
+        roster.add_employee(
+            emp_id=f"EMP-{i:03d}", display_name=f"Person {i}",
+            has_gallery_entry=True, department="Engineering",
+            home_floor_id="floor-2",
+            assigned_assembly_zone="assembly-north" if i < 4 else "assembly-south",
+            reason=ExpectationReason.ON_SHIFT)
+    return roster.snapshot(T0)
+
+
+@pytest.fixture
+def client() -> TestClient:
+    return TestClient(create_app(registry=DrillRegistry(),
+                                 roster_provider=roster_provider,
+                                 assembly_zones=ASSEMBLY))
+
+
+def headers(*permissions, user="user-1", zones=""):
+    return {"X-User-Id": user, "X-Permissions": ",".join(permissions),
+            "X-Zones": zones}
+
+
+OPERATOR = headers(EVAC_READ, EVAC_OPERATE, user="commander-1")
+VIEWER = headers(EVAC_READ, user="viewer-1")
+WARDEN = headers(EVAC_READ, EVAC_WARDEN, user="warden-7", zones="assembly-north")
+ADMIN = headers(EVAC_READ, EVAC_ADMIN, user="officer-1")
+
+
+def make_drill(client) -> str:
+    response = client.post("/api/evac/drills", headers=OPERATOR, json={
+        "name": "Q3 drill", "site_id": "site-1", "tenant_id": "tenant-1"})
+    assert response.status_code == 201
+    return response.json()["drill_id"]
+
+
+class TestAuthentication:
+    def test_an_anonymous_caller_is_refused(self, client):
+        assert client.get("/api/evac/drills").status_code == 401
+
+    def test_a_caller_without_the_permission_is_refused(self, client):
+        response = client.get("/api/evac/drills", headers=headers("some:other"))
+        assert response.status_code == 403
+        assert EVAC_READ in response.json()["detail"]
+
+
+class TestSeparationOfDuty:
+    """Not decoration. Collapsing these roles defeats the two-source evidence
+    model the whole system rests on."""
+
+    def test_a_warden_cannot_start_a_drill(self, client):
+        drill_id = make_drill(client)
+        response = client.post(f"/api/evac/drills/{drill_id}/start", headers=WARDEN)
+        assert response.status_code == 403
+        assert EVAC_OPERATE in response.json()["detail"]
+
+    def test_a_warden_cannot_stop_one(self, client):
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        assert client.post(f"/api/evac/drills/{drill_id}/complete",
+                           headers=WARDEN).status_code == 403
+
+    def test_an_operator_cannot_sign_off_a_headcount(self, client):
+        # The warden's physical count is their evidence and stays theirs.
+        drill_id = make_drill(client)
+        response = client.post(
+            f"/api/evac/drills/{drill_id}/warden/headcount", headers=OPERATOR,
+            json={"zone_id": "assembly-north", "warden_id": "commander-1",
+                  "device_id": "desktop", "ts_ms": T0, "physical_count": 4})
+        assert response.status_code == 403
+        assert EVAC_WARDEN in response.json()["detail"]
+
+    def test_an_operator_cannot_confirm_people(self, client):
+        drill_id = make_drill(client)
+        response = client.post(
+            f"/api/evac/drills/{drill_id}/warden/sync", headers=OPERATOR,
+            json={"actions": []})
+        assert response.status_code == 403
+
+    def test_a_safety_officer_does_not_operate_a_live_drill(self, client):
+        drill_id = make_drill(client)
+        assert client.post(f"/api/evac/drills/{drill_id}/start",
+                           headers=ADMIN).status_code == 403
+
+    def test_a_viewer_can_only_read(self, client):
+        drill_id = make_drill(client)
+        assert client.get(f"/api/evac/drills/{drill_id}/board",
+                          headers=VIEWER).status_code == 200
+        assert client.post(f"/api/evac/drills/{drill_id}/start",
+                           headers=VIEWER).status_code == 403
+
+
+class TestWardenZoneScoping:
+    """A warden confirming people at a zone they are not standing in is making
+    the one claim the system trusts above its own cameras, about a place they
+    cannot see."""
+
+    def test_a_warden_cannot_read_another_zone(self, client):
+        drill_id = make_drill(client)
+        response = client.get(
+            f"/api/evac/drills/{drill_id}/warden/assembly-south", headers=WARDEN)
+        assert response.status_code == 403
+        assert "not assigned" in response.json()["detail"]
+
+    def test_a_warden_cannot_count_another_zone(self, client):
+        drill_id = make_drill(client)
+        response = client.post(
+            f"/api/evac/drills/{drill_id}/warden/headcount", headers=WARDEN,
+            json={"zone_id": "assembly-south", "warden_id": "warden-7",
+                  "device_id": "tablet-3", "ts_ms": T0, "physical_count": 2})
+        assert response.status_code == 403
+
+    def test_actions_for_another_zone_are_rejected_individually(self, client):
+        # A device syncing a mixed batch must be told exactly what was refused.
+        drill_id = make_drill(client)
+        response = client.post(
+            f"/api/evac/drills/{drill_id}/warden/sync", headers=WARDEN,
+            json={"actions": [
+                {"kind": "CONFIRM_PRESENT", "warden_id": "warden-7",
+                 "device_id": "tablet-3", "zone_id": "assembly-north",
+                 "ts_ms": T0, "device_seq": 1, "subject": "emp:EMP-000"},
+                {"kind": "CONFIRM_PRESENT", "warden_id": "warden-7",
+                 "device_id": "tablet-3", "zone_id": "assembly-south",
+                 "ts_ms": T0, "device_seq": 2, "subject": "emp:EMP-004"}]})
+        body = response.json()
+        assert body["accepted"] == 1
+        assert len(body["rejected"]) == 1
+        assert "assembly-south" in body["rejected"][0]
+
+    def test_a_warden_with_no_assigned_zones_is_unrestricted(self, client):
+        # A roving supervisor. Explicit, not a default that erodes.
+        drill_id = make_drill(client)
+        roving = headers(EVAC_READ, EVAC_WARDEN, user="warden-9")
+        assert client.get(f"/api/evac/drills/{drill_id}/warden/assembly-south",
+                          headers=roving).status_code == 200
+
+
+class TestDrillLifecycle:
+    def test_a_drill_can_be_created_started_and_completed(self, client):
+        drill_id = make_drill(client)
+        assert client.post(f"/api/evac/drills/{drill_id}/start",
+                           headers=OPERATOR).json()["status"] == "RUNNING"
+        assert client.post(f"/api/evac/drills/{drill_id}/complete",
+                           headers=OPERATOR).json()["status"] == "COMPLETE"
+
+    def test_a_drill_cannot_be_started_twice(self, client):
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        assert client.post(f"/api/evac/drills/{drill_id}/start",
+                           headers=OPERATOR).status_code == 409
+
+    def test_two_drills_cannot_run_on_one_site(self, client):
+        # Two simultaneous evacuations of one building would split the roster.
+        first = make_drill(client)
+        second = make_drill(client)
+        client.post(f"/api/evac/drills/{first}/start", headers=OPERATOR)
+        response = client.post(f"/api/evac/drills/{second}/start", headers=OPERATOR)
+        assert response.status_code == 409
+        assert first in response.json()["detail"]
+
+    def test_a_drill_cannot_be_completed_before_it_starts(self, client):
+        drill_id = make_drill(client)
+        assert client.post(f"/api/evac/drills/{drill_id}/complete",
+                           headers=OPERATOR).status_code == 409
+
+    def test_an_unknown_drill_is_a_404(self, client):
+        assert client.get("/api/evac/drills/nope", headers=VIEWER).status_code == 404
+
+    def test_a_drill_without_a_roster_source_is_refused(self):
+        # A drill with no roster has no denominator and cannot account for
+        # anyone. Better to refuse than to show a confident zero.
+        bare = TestClient(create_app(registry=DrillRegistry()))
+        response = bare.post("/api/evac/drills", headers=OPERATOR, json={
+            "name": "x", "site_id": "s", "tenant_id": "t"})
+        assert response.status_code == 503
+        assert "no denominator" in response.json()["detail"]
+
+
+class TestTheBoard:
+    def test_the_board_reports_the_roster_as_the_denominator(self, client):
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        board = client.get(f"/api/evac/drills/{drill_id}/board",
+                           headers=VIEWER).json()
+        assert board["expected"] == 6
+        assert board["accounted"] == 0
+        assert len(board["rows"]) == 6
+
+    def test_no_raw_ai_metrics_reach_the_operator(self, client):
+        # Scores and margins are real and are in the explain drawer. Putting
+        # them on the live board invites second-guessing a threshold mid-drill.
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        board = client.get(f"/api/evac/drills/{drill_id}/board",
+                           headers=VIEWER).json()
+        blob = str(board).lower()
+        for forbidden in ("score", "margin", "embedding", "cosine", "votes"):
+            assert forbidden not in blob
+
+    def test_every_row_carries_a_state_a_colour_and_a_reason(self, client):
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        rows = client.get(f"/api/evac/drills/{drill_id}/board",
+                          headers=VIEWER).json()["rows"]
+        for row in rows:
+            assert row["colour"] in {"GREEN", "YELLOW", "ORANGE", "RED"}
+            assert row["reason"].strip()
+
+    def test_the_all_clear_is_blocked_and_says_why(self, client):
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        board = client.get(f"/api/evac/drills/{drill_id}/board",
+                           headers=VIEWER).json()
+        assert board["all_clear"] is False
+        assert board["blocking_all_clear"]
+
+    def test_an_unstarted_drill_says_so_in_the_blockers(self, client):
+        drill_id = make_drill(client)
+        board = client.get(f"/api/evac/drills/{drill_id}/board",
+                           headers=VIEWER).json()
+        assert "the drill has not been started" in board["blocking_all_clear"]
+
+    def test_the_priority_list_is_available_and_capped(self, client):
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        rows = client.get(f"/api/evac/drills/{drill_id}/priority?limit=3",
+                          headers=VIEWER).json()
+        assert len(rows) <= 3
+
+    def test_zone_panels_cover_every_assembly_zone(self, client):
+        drill_id = make_drill(client)
+        panels = client.get(f"/api/evac/drills/{drill_id}/zones",
+                            headers=VIEWER).json()
+        assert {p["zone_id"] for p in panels} == {"assembly-north", "assembly-south"}
+
+
+class TestTiming:
+    def test_an_empty_drill_reports_no_percentiles_rather_than_zero(self, client):
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        timing = client.get(f"/api/evac/drills/{drill_id}/timing",
+                            headers=VIEWER).json()
+        assert timing["building"]["p95"] is None
+        assert timing["meets_target"] is None
+        assert "No measurements" in timing["building"]["caveat"]
+
+    def test_the_target_is_reported_alongside_the_result(self, client):
+        drill_id = make_drill(client)
+        timing = client.get(f"/api/evac/drills/{drill_id}/timing",
+                            headers=VIEWER).json()
+        assert timing["target_p95_s"] == 120.0
+
+
+class TestWardenFlow:
+    def _running(self, client) -> str:
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        return drill_id
+
+    def test_a_warden_gets_their_zone_roster_and_the_system_health(self, client):
+        # Health on the warden's screen too, so they know when to rely on their
+        # own count rather than the list in front of them.
+        drill_id = self._running(client)
+        body = client.get(f"/api/evac/drills/{drill_id}/warden/assembly-north",
+                          headers=WARDEN).json()
+        assert len(body["roster"]) == 4
+        assert body["system_health"]["degraded"] is False
+        assert body["panel"]["zone_id"] == "assembly-north"
+
+    def test_confirming_people_accounts_for_them(self, client):
+        drill_id = self._running(client)
+        actions = [
+            {"kind": "CONFIRM_PRESENT", "warden_id": "warden-7",
+             "device_id": "tablet-3", "zone_id": "assembly-north",
+             "ts_ms": T0 + i, "device_seq": i + 1, "subject": f"emp:EMP-{i:03d}"}
+            for i in range(4)]
+        response = client.post(f"/api/evac/drills/{drill_id}/warden/sync",
+                               headers=WARDEN, json={"actions": actions})
+        assert response.json()["accepted"] == 4
+        board = client.get(f"/api/evac/drills/{drill_id}/board",
+                           headers=VIEWER).json()
+        assert board["accounted"] == 4
+
+    def test_a_redelivered_batch_is_deduplicated(self, client):
+        # Offline devices retry. A warden must not confirm someone twice.
+        drill_id = self._running(client)
+        actions = [{"kind": "CONFIRM_PRESENT", "warden_id": "warden-7",
+                    "device_id": "tablet-3", "zone_id": "assembly-north",
+                    "ts_ms": T0, "device_seq": 1, "subject": "emp:EMP-000"}]
+        client.post(f"/api/evac/drills/{drill_id}/warden/sync", headers=WARDEN,
+                    json={"actions": actions})
+        again = client.post(f"/api/evac/drills/{drill_id}/warden/sync",
+                            headers=WARDEN, json={"actions": actions}).json()
+        assert again["accepted"] == 0
+        assert again["duplicates"] == 1
+
+    def test_an_offline_action_is_accepted_and_flagged(self, client):
+        drill_id = self._running(client)
+        response = client.post(
+            f"/api/evac/drills/{drill_id}/warden/sync", headers=WARDEN,
+            json={"actions": [{
+                "kind": "CONFIRM_PRESENT", "warden_id": "warden-7",
+                "device_id": "tablet-3", "zone_id": "assembly-north",
+                "ts_ms": T0, "device_seq": 1, "subject": "emp:EMP-000",
+                "queued_offline": True}]})
+        assert response.json()["accepted"] == 1
+
+    def test_a_malformed_action_is_rejected_with_its_reason(self, client):
+        drill_id = self._running(client)
+        response = client.post(
+            f"/api/evac/drills/{drill_id}/warden/sync", headers=WARDEN,
+            json={"actions": [{
+                "kind": "WRONG_PERSON", "warden_id": "warden-7",
+                "device_id": "tablet-3", "zone_id": "assembly-north",
+                "ts_ms": T0, "device_seq": 1, "subject": "emp:EMP-000"}]})
+        body = response.json()
+        assert body["accepted"] == 0
+        assert "name the identity" in body["rejected"][0]
+
+    def test_an_unknown_action_kind_is_rejected_not_crashed_on(self, client):
+        drill_id = self._running(client)
+        response = client.post(
+            f"/api/evac/drills/{drill_id}/warden/sync", headers=WARDEN,
+            json={"actions": [{
+                "kind": "DELETE_EVERYTHING", "warden_id": "warden-7",
+                "device_id": "tablet-3", "zone_id": "assembly-north",
+                "ts_ms": T0, "device_seq": 1}]})
+        assert "unknown action" in response.json()["rejected"][0]
+
+
+class TestHeadcount:
+    def _running(self, client) -> str:
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        return drill_id
+
+    def test_a_matching_count_asks_for_nothing(self, client):
+        drill_id = self._running(client)
+        response = client.post(
+            f"/api/evac/drills/{drill_id}/warden/headcount", headers=WARDEN,
+            json={"zone_id": "assembly-north", "warden_id": "warden-7",
+                  "device_id": "tablet-3", "ts_ms": T0, "physical_count": 0})
+        body = response.json()
+        assert body["kind"] == "MATCH"
+        assert "No action" in body["recommended_action"]
+
+    def test_the_system_counting_more_escalates(self, client):
+        drill_id = self._running(client)
+        actions = [{"kind": "CONFIRM_PRESENT", "warden_id": "warden-7",
+                    "device_id": "tablet-3", "zone_id": "assembly-north",
+                    "ts_ms": T0 + i, "device_seq": i + 1,
+                    "subject": f"emp:EMP-{i:03d}"} for i in range(4)]
+        client.post(f"/api/evac/drills/{drill_id}/warden/sync", headers=WARDEN,
+                    json={"actions": actions})
+        response = client.post(
+            f"/api/evac/drills/{drill_id}/warden/headcount", headers=WARDEN,
+            json={"zone_id": "assembly-north", "warden_id": "warden-7",
+                  "device_id": "tablet-3", "ts_ms": T0 + 60_000,
+                  "physical_count": 3})
+        body = response.json()
+        assert body["severity"] == "ESCALATE"
+        assert body["missing_from_the_muster_point"] == 1
+        assert "Do not declare all clear" in body["recommended_action"]
+
+
+class TestExplain:
+    def test_a_person_with_no_evidence_explains_honestly(self, client):
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        body = client.get(
+            f"/api/evac/drills/{drill_id}/people/emp:EMP-000/explain",
+            headers=VIEWER).json()
+        narrative = "\n".join(body["narrative"])
+        assert "Absence of evidence is not evidence of absence" in narrative
+
+    def test_someone_not_on_the_roster_is_a_404(self, client):
+        drill_id = make_drill(client)
+        assert client.get(
+            f"/api/evac/drills/{drill_id}/people/emp:NOBODY/explain",
+            headers=VIEWER).status_code == 404
+
+
+class TestHealthEndpoint:
+    def test_it_answers_with_no_drill_running(self, client):
+        body = client.get("/healthz").json()
+        assert body["status"] == "ok"
+        assert body["degraded"] is False
+
+    def test_it_reports_the_running_drill(self, client):
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        body = client.get("/healthz").json()
+        assert body["drill"] == drill_id
+        assert body["degraded"] is False
+
+    def test_it_needs_no_authentication(self, client):
+        # The chaos script polls it from outside, and a health endpoint that
+        # needs a token cannot tell you the token service is down.
+        assert client.get("/healthz").status_code == 200
+
+
+class TestOpenApi:
+    def test_the_spec_is_generated(self, client):
+        spec = client.get("/openapi.json").json()
+        assert spec["info"]["title"] == "EVAC-120"
+        paths = spec["paths"]
+        assert "/api/evac/drills" in paths
+        assert "/api/evac/drills/{drill_id}/board" in paths
+
+    def test_the_safety_notice_is_in_the_spec(self, client):
+        spec = client.get("/openapi.json").json()
+        description = spec["info"]["description"]
+        assert "never replaces, certified fire" in description
+        assert "final authority" in description

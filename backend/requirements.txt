@@ -9,11 +9,17 @@ pytest-cov==6.0.0
 hypothesis==6.122.3     # Phase 1 property tests ("no injection yields ACCOUNTED
                         # without qualifying evidence")
 
-# --- Phase 3 (not installed yet, listed so the target is visible) ---
-# fastapi              API surface
-# uvicorn              ASGI server
-# sqlalchemy[asyncio]  projections
+# --- Phase 4: the API surface ---
+# FastAPI earns its place by generating the OpenAPI spec the brief requires and
+# by validating request bodies at the boundary, which is where a malformed
+# warden action should be rejected rather than three layers in. It is also the
+# stack VisionTrack already runs, so the deployment story is familiar.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+httpx==0.28.1           # test client only
+
+# --- Phase 4/5 (not installed yet, listed so the target is visible) ---
+# sqlalchemy[asyncio]  projection persistence
 # asyncpg              Postgres driver
 # alembic              migrations, schema only
 # redis                consumes vt:evac:events:<tenant>
-# pydantic-settings    config
