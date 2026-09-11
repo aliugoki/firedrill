@@ -59,6 +59,29 @@ is explicit rather than a default that erodes: an empty list means "everywhere",
 so a misconfigured assignment fails open, and that is the wrong direction. Sites
 should assign zones explicitly and treat an unassigned warden as a finding.
 
+### 1.3 Tenant scoping
+
+Every drill lookup is scoped to the caller's tenant. A drill belonging to
+another tenant answers **404**, not 403: if the two differed, the id space would
+become a directory of other sites' drills. Creating one under a tenant the
+caller does not belong to is 403 and says so, because refusing to file a new
+drill discloses nothing.
+
+A caller carrying **no** tenant at all sees every tenant, the same compromise
+§1.2 makes for an unassigned warden, and the same wrong direction. Two things
+follow for anyone deploying this:
+
+- Put `tenant_id` in the token. A signed token carries it as a claim; a gateway
+  that has already authenticated the caller sends `X-Tenant-Id` alongside the
+  other identity headers. Until this commit a gateway had no way to say which
+  tenant it had authenticated, so every gateway caller was tenantless and every
+  tenant check passed.
+- Treat a tenantless caller as a finding, exactly as with an unassigned warden.
+
+A single-site edge node has one tenant and nothing to separate. The central
+replica is where this matters, and the central replica is the one place several
+sites share a process.
+
 ---
 
 ## 2. What is reachable without a token, and why

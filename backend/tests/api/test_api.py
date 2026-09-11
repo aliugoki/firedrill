@@ -33,12 +33,22 @@ def roster_provider(site_id: str):
 #: default, where headers are refused.
 GATEWAY = AuthSettings(trust_headers=True)
 
+#: The signed-token deployment, which is the only one that can carry a tenant.
+JWT = AuthSettings(secret="a-test-signing-secret")
+
 
 @pytest.fixture
 def client() -> TestClient:
     return TestClient(create_app(registry=DrillRegistry(),
                                  roster_provider=roster_provider,
                                  assembly_zones=ASSEMBLY, auth=GATEWAY))
+
+
+@pytest.fixture
+def jwt_client() -> TestClient:
+    return TestClient(create_app(registry=DrillRegistry(),
+                                 roster_provider=roster_provider,
+                                 assembly_zones=ASSEMBLY, auth=JWT))
 
 
 def headers(*permissions, user="user-1", zones=""):
@@ -590,3 +600,96 @@ class TestHealthReportsConfigurationGaps:
         # The API can run alone, and a health endpoint that 500s when a
         # collaborator is absent is worse than one that says so.
         assert client.get("/healthz").status_code == 200
+
+
+class TestTenantScope:
+    """CLAUDE.md: tenant-scope every query.
+
+    A drill id is a UUID, so this is not the easiest hole to walk through, but
+    "hard to guess" is not an access control. Two sites on one central replica
+    is the whole reason `tenant_id` exists.
+    """
+
+    def _drill_for(self, client, tenant: str) -> str:
+        token = issue("commander-1", JWT,
+                      permissions=[EVAC_READ, EVAC_OPERATE], tenant_id=tenant)
+        response = client.post(
+            "/api/evac/drills", headers={"Authorization": f"Bearer {token}"},
+            json={"tenant_id": tenant, "site_id": "site-1", "name": "theirs"})
+        assert response.status_code == 201, response.text
+        return response.json()["drill_id"]
+
+    def _as(self, tenant: str) -> dict:
+        token = issue("commander-2", JWT,
+                      permissions=[EVAC_READ, EVAC_OPERATE], tenant_id=tenant)
+        return {"Authorization": f"Bearer {token}"}
+
+    def test_another_tenants_drill_is_not_readable(self, jwt_client):
+        drill_id = self._drill_for(jwt_client, "tenant-a")
+        response = jwt_client.get(f"/api/evac/drills/{drill_id}",
+                                  headers=self._as("tenant-b"))
+        assert response.status_code == 404
+
+    def test_another_tenants_board_is_not_readable(self, jwt_client):
+        drill_id = self._drill_for(jwt_client, "tenant-a")
+        response = jwt_client.get(f"/api/evac/drills/{drill_id}/board",
+                                  headers=self._as("tenant-b"))
+        assert response.status_code == 404
+
+    def test_another_tenants_drill_cannot_be_started(self, jwt_client):
+        drill_id = self._drill_for(jwt_client, "tenant-a")
+        response = jwt_client.post(f"/api/evac/drills/{drill_id}/start",
+                                   headers=self._as("tenant-b"))
+        assert response.status_code == 404
+
+    def test_the_listing_shows_only_your_own(self, jwt_client):
+        self._drill_for(jwt_client, "tenant-a")
+        response = jwt_client.get("/api/evac/drills", headers=self._as("tenant-b"))
+        assert response.status_code == 200
+        assert response.json() == []
+
+    def test_your_own_drill_is_still_readable(self, jwt_client):
+        # The guard for the four above: they must be failing on the tenant, not
+        # on something that refuses everybody.
+        drill_id = self._drill_for(jwt_client, "tenant-a")
+        assert jwt_client.get(f"/api/evac/drills/{drill_id}",
+                              headers=self._as("tenant-a")).status_code == 200
+        assert len(jwt_client.get("/api/evac/drills",
+                                  headers=self._as("tenant-a")).json()) == 1
+
+    def test_a_drill_cannot_be_created_under_somebody_elses_tenant(
+            self, jwt_client):
+        token = issue("commander-1", JWT,
+                      permissions=[EVAC_READ, EVAC_OPERATE], tenant_id="tenant-a")
+        response = jwt_client.post(
+            "/api/evac/drills", headers={"Authorization": f"Bearer {token}"},
+            json={"tenant_id": "tenant-b", "site_id": "site-1", "name": "theirs"})
+        assert response.status_code == 403
+
+
+class TestAGatewayCanSayWhichTenant:
+    """Until it could, every gateway-fronted caller was tenantless, so every
+    tenant check passed and §1.3 of the security document was aspirational."""
+
+    def test_the_header_scopes_the_listing(self, client):
+        made = client.post("/api/evac/drills", headers=OPERATOR,
+                           json={"tenant_id": "tenant-a", "site_id": "site-1",
+                                 "name": "theirs"})
+        assert made.status_code == 201
+
+        theirs = dict(headers(EVAC_READ, user="viewer-2"))
+        theirs["X-Tenant-Id"] = "tenant-b"
+        assert client.get("/api/evac/drills", headers=theirs).json() == []
+
+        ours = dict(headers(EVAC_READ, user="viewer-3"))
+        ours["X-Tenant-Id"] = "tenant-a"
+        assert len(client.get("/api/evac/drills", headers=ours).json()) == 1
+
+    def test_no_header_still_sees_everything(self, client):
+        # Documented in EVAC120_SECURITY.md §1.3 as a finding, not a feature.
+        # Asserted so that changing it is a deliberate act with a failing test
+        # rather than a silent shift in who can read what.
+        client.post("/api/evac/drills", headers=OPERATOR,
+                    json={"tenant_id": "tenant-a", "site_id": "site-1",
+                          "name": "theirs"})
+        assert len(client.get("/api/evac/drills", headers=VIEWER).json()) == 1

@@ -219,9 +219,25 @@ class TestCentralIsNeverTheAuthority:
     def test_the_status_endpoint_needs_no_credential(self, central):
         # A monitoring system needs completeness without holding a replication
         # secret. It exposes counts, never a person.
-        _, client = central
+        replica, client = central
+        replica.accept("site-1", [_to_wire(event(1))])
         assert client.get(
             "/api/evac/replication/status/site-1").status_code == 200
+
+    def test_it_does_not_allocate_state_for_a_site_it_has_never_heard_of(
+            self, central):
+        """The read side creates nothing.
+
+        It used to call the same create-on-miss lookup the write side does, so
+        anyone who could reach central -- no credential needed -- could make it
+        allocate a reconciler for every site id they cared to invent.
+        """
+        replica, client = central
+        assert client.get(
+            "/api/evac/replication/status/site-1").status_code == 404
+        assert client.get(
+            "/api/evac/replication/status/invented").status_code == 404
+        assert replica.reconcilers == {}
 
 
 class TestAnEdgeNodeDoesNotReceive:

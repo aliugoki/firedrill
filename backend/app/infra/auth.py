@@ -155,7 +155,7 @@ def verify(token: str, settings: AuthSettings, *, now: int | None = None) -> Cal
 
 
 def from_headers(user_id: str, permissions: str, zones: str,
-                 settings: AuthSettings) -> Caller:
+                 settings: AuthSettings, tenant_id: str = "") -> Caller:
     """Take the caller a gateway has already established.
 
     Refuses unless `trust_headers` is on. The failure message names the setting,
@@ -173,6 +173,9 @@ def from_headers(user_id: str, permissions: str, zones: str,
         user_id=user_id,
         permissions=frozenset(p.strip() for p in permissions.split(",") if p.strip()),
         zones=frozenset(z.strip() for z in zones.split(",") if z.strip()),
+        # A gateway had no way to say which tenant it had authenticated, so
+        # every gateway caller was tenantless and every tenant check passed.
+        tenant_id=tenant_id.strip() or None,
         via="gateway")
 
 

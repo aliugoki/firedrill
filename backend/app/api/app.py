@@ -61,6 +61,7 @@ def get_caller(
     x_user_id: str = Header(default=""),
     x_permissions: str = Header(default=""),
     x_zones: str = Header(default=""),
+    x_tenant_id: str = Header(default=""),
 ) -> Caller:
     settings: AuthSettings = getattr(request.app.state, "auth",
                                      AuthSettings(trust_headers=False))
@@ -76,7 +77,8 @@ def get_caller(
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc))
 
     try:
-        return from_headers(x_user_id, x_permissions, x_zones, settings)
+        return from_headers(x_user_id, x_permissions, x_zones, settings,
+                            tenant_id=x_tenant_id)
     except AuthError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc))
 
@@ -116,12 +118,27 @@ def create_app(registry: DrillRegistry | None = None,
     app.state.roster_provider = roster_provider
     app.state.assembly_zones = assembly_zones
 
-    def drill_or_404(drill_id: str) -> Drill:
+    def drill_or_404(drill_id: str, caller: Caller) -> Drill:
+        """The drill, if it is this caller's to see.
+
+        A drill belonging to another tenant is 404 rather than 403: the answer
+        must not differ between a drill that does not exist and one the caller
+        may not have, or the id space becomes a directory of other sites.
+
+        A caller with no tenant at all sees everything. That fails open, which
+        is the wrong direction, and it is the same compromise `Caller.covers`
+        makes for an unassigned warden -- recorded in docs/EVAC120_SECURITY.md
+        rather than left to be discovered.
+        """
         try:
-            return app.state.registry.get(drill_id)
+            drill = app.state.registry.get(drill_id)
         except KeyError:
             raise HTTPException(status.HTTP_404_NOT_FOUND,
                                 f"no drill {drill_id}")
+        if caller.tenant_id and drill.tenant_id != caller.tenant_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND,
+                                f"no drill {drill_id}")
+        return drill
 
     # --- drills ---------------------------------------------------------------
 
@@ -134,6 +151,13 @@ def create_app(registry: DrillRegistry | None = None,
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 "no roster source is configured; a drill without a roster has "
                 "no denominator and cannot account for anyone")
+        if caller.tenant_id and body.tenant_id != caller.tenant_id:
+            # Unlike a read, this is 403 and says so. Nothing is disclosed by
+            # refusing to file a new drill under a tenant the caller is not.
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                f"caller belongs to {caller.tenant_id} and cannot create a "
+                f"drill for {body.tenant_id}")
         roster = app.state.roster_provider(body.site_id)
         drill = Drill(
             drill_id=str(uuid.uuid4()), tenant_id=body.tenant_id,
@@ -145,18 +169,19 @@ def create_app(registry: DrillRegistry | None = None,
     @app.get("/api/evac/drills", response_model=list[schemas.DrillSummary],
              tags=["drills"])
     def list_drills(caller: Caller = Depends(requires(EVAC_READ))):
-        return [_summary(d) for d in app.state.registry.list()]
+        return [_summary(drill) for drill in app.state.registry.list()
+                if not caller.tenant_id or drill.tenant_id == caller.tenant_id]
 
     @app.get("/api/evac/drills/{drill_id}", response_model=schemas.DrillSummary,
              tags=["drills"])
     def get_drill(drill_id: str, caller: Caller = Depends(requires(EVAC_READ))):
-        return _summary(drill_or_404(drill_id))
+        return _summary(drill_or_404(drill_id, caller))
 
     @app.post("/api/evac/drills/{drill_id}/start",
               response_model=schemas.DrillSummary, tags=["drills"])
     def start_drill(drill_id: str,
                     caller: Caller = Depends(requires(EVAC_OPERATE))):
-        drill = drill_or_404(drill_id)
+        drill = drill_or_404(drill_id, caller)
         running = app.state.registry.running()
         if running is not None and running.drill_id != drill_id:
             # Two simultaneous evacuations of one building is not a scenario;
@@ -174,7 +199,7 @@ def create_app(registry: DrillRegistry | None = None,
               response_model=schemas.DrillSummary, tags=["drills"])
     def complete_drill(drill_id: str,
                        caller: Caller = Depends(requires(EVAC_OPERATE))):
-        drill = drill_or_404(drill_id)
+        drill = drill_or_404(drill_id, caller)
         try:
             drill.complete(now_ms())
         except DrillError as exc:
@@ -186,7 +211,7 @@ def create_app(registry: DrillRegistry | None = None,
     @app.get("/api/evac/drills/{drill_id}/board", response_model=schemas.BoardOut,
              tags=["board"])
     def get_board(drill_id: str, caller: Caller = Depends(requires(EVAC_READ))):
-        drill = drill_or_404(drill_id)
+        drill = drill_or_404(drill_id, caller)
         at = now_ms()
         return _board_out(drill, at)
 
@@ -194,13 +219,13 @@ def create_app(registry: DrillRegistry | None = None,
              response_model=list[schemas.PersonRowOut], tags=["board"])
     def get_priority(drill_id: str, limit: int = 50,
                      caller: Caller = Depends(requires(EVAC_READ))):
-        drill = drill_or_404(drill_id)
+        drill = drill_or_404(drill_id, caller)
         return [_row_out(r) for r in drill.board(now_ms()).priority(limit=limit)]
 
     @app.get("/api/evac/drills/{drill_id}/timing", response_model=schemas.TimingOut,
              tags=["board"])
     def get_timing(drill_id: str, caller: Caller = Depends(requires(EVAC_READ))):
-        drill = drill_or_404(drill_id)
+        drill = drill_or_404(drill_id, caller)
         timing = drill.timing(now_ms())
         return schemas.TimingOut(
             building=_percentiles(timing.building),
@@ -214,7 +239,7 @@ def create_app(registry: DrillRegistry | None = None,
              response_model=schemas.ExplanationOut, tags=["board"])
     def explain_person(drill_id: str, person_ref: str,
                        caller: Caller = Depends(requires(EVAC_READ))):
-        drill = drill_or_404(drill_id)
+        drill = drill_or_404(drill_id, caller)
         explanation = drill.explain(person_ref)
         if explanation is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND,
@@ -233,7 +258,7 @@ def create_app(registry: DrillRegistry | None = None,
              response_model=schemas.BottlenecksOut, tags=["board"])
     def get_bottlenecks(drill_id: str,
                         caller: Caller = Depends(requires(EVAC_READ))):
-        drill = drill_or_404(drill_id)
+        drill = drill_or_404(drill_id, caller)
         panel = drill.bottlenecks(now_ms())
         return schemas.BottlenecksOut(
             exits=[schemas.ExitMeasureOut(
@@ -250,7 +275,7 @@ def create_app(registry: DrillRegistry | None = None,
     @app.get("/api/evac/drills/{drill_id}/zones",
              response_model=list[schemas.ZonePanelOut], tags=["board"])
     def get_zones(drill_id: str, caller: Caller = Depends(requires(EVAC_READ))):
-        return [schemas.ZonePanelOut(**p) for p in drill_or_404(drill_id).zone_panels()]
+        return [schemas.ZonePanelOut(**p) for p in drill_or_404(drill_id, caller).zone_panels()]
 
     # --- warden ---------------------------------------------------------------
 
@@ -258,7 +283,7 @@ def create_app(registry: DrillRegistry | None = None,
              response_model=schemas.WardenZoneOut, tags=["warden"])
     def warden_zone(drill_id: str, zone_id: str,
                     caller: Caller = Depends(requires(EVAC_WARDEN))):
-        drill = drill_or_404(drill_id)
+        drill = drill_or_404(drill_id, caller)
         if not caller.covers(zone_id):
             raise HTTPException(status.HTTP_403_FORBIDDEN,
                                 f"you are not assigned to {zone_id}")
@@ -283,7 +308,7 @@ def create_app(registry: DrillRegistry | None = None,
         that syncs forty actions and has one refused must be able to tell which,
         or a warden's screen shows work that never landed.
         """
-        drill = drill_or_404(drill_id)
+        drill = drill_or_404(drill_id, caller)
         accepted = duplicates = 0
         refusals: list[schemas.Refusal] = []
 
@@ -328,7 +353,7 @@ def create_app(registry: DrillRegistry | None = None,
               response_model=schemas.HeadcountOut, tags=["warden"])
     def warden_headcount(drill_id: str, body: schemas.HeadcountIn,
                          caller: Caller = Depends(requires(EVAC_WARDEN))):
-        drill = drill_or_404(drill_id)
+        drill = drill_or_404(drill_id, caller)
         if not caller.covers(body.zone_id):
             raise HTTPException(status.HTTP_403_FORBIDDEN,
                                 f"you are not assigned to {body.zone_id}")

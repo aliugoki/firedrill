@@ -56,11 +56,21 @@ class CentralReplica:
     store: object | None = None
 
     def reconciler(self, site_id: str) -> Reconciler:
+        """The site's reconciler, creating it on first use.
+
+        Only reachable from an authenticated write. `known` is the read-side
+        lookup, because creating on miss from an unauthenticated path lets
+        anyone who can reach central allocate a reconciler per made-up site id.
+        """
         reconciler = self.reconcilers.get(site_id)
         if reconciler is None:
             reconciler = Reconciler()
             self.reconcilers[site_id] = reconciler
         return reconciler
+
+    def known(self, site_id: str) -> Reconciler | None:
+        """The site's reconciler, or None. Creates nothing."""
+        return self.reconcilers.get(site_id)
 
     def authenticate(self, site_id: str, token: str) -> bool:
         """Constant-time comparison against the site's own token.
@@ -146,8 +156,16 @@ def build_router(replica: CentralReplica) -> APIRouter:
         Deliberately unauthenticated in the same way `/healthz` is: it exposes
         counts and completeness, never a person, and a monitoring system needs
         it without holding a replication credential.
+
+        A site central has never heard from is 404. It used to be created on the
+        way past, so an unauthenticated caller could make central allocate a
+        reconciler for every site id they cared to invent.
         """
-        report = replica.reconciler(site_id).report()
+        reconciler = replica.known(site_id)
+        if reconciler is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND,
+                                f"central holds nothing for site {site_id}")
+        report = reconciler.report()
         return {
             "site_id": site_id,
             "events_held": report.events_held,
