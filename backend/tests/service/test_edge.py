@@ -286,3 +286,39 @@ class TestRecoveringOnStartup:
 
     def _env(self, tmp_path):
         return full_env(tmp_path)
+
+
+class TestRecoveryThatCouldNotRead:
+    """An empty board and an unreadable database look identical to a caller
+    that only counts what came back.
+
+    This is the startup path for a node that may have restarted mid-evacuation,
+    so the difference has to survive to the operator.
+    """
+
+    class Unreadable:
+        last_error = "OperationalError: database is locked"
+
+        def unfinished(self, site_id):
+            return []
+
+        def save(self, drill):
+            return False
+
+    def test_it_is_raised_rather_than_read_as_nothing_to_do(self):
+        from app.drill import DrillRegistry, RecoveryUnavailable
+
+        with pytest.raises(RecoveryUnavailable, match="database is locked"):
+            DrillRegistry().recover(
+                drill_store=self.Unreadable(), events_store=None,
+                site_id="site-1", now_ms=0)
+
+    def test_a_genuinely_empty_store_is_not_an_error(self):
+        from app.drill import DrillRegistry
+
+        class Empty(self.Unreadable):
+            last_error = None
+
+        assert DrillRegistry().recover(
+            drill_store=Empty(), events_store=None,
+            site_id="site-1", now_ms=0) == []

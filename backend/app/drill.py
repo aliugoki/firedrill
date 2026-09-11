@@ -49,6 +49,15 @@ class DrillError(RuntimeError):
     """An operation the drill's lifecycle does not allow."""
 
 
+class RecoveryUnavailable(RuntimeError):
+    """The store could not say which drills were running.
+
+    Distinct from there being none. An empty board and an unreadable database
+    look identical to a caller who only counts what came back, and this is the
+    startup path for a node that may have restarted mid-evacuation.
+    """
+
+
 @dataclass
 class Drill:
     drill_id: str
@@ -323,8 +332,17 @@ class DrillRegistry:
         """
         from app.store.drills import roster_from_json
 
+        rows = drill_store.unfinished(site_id)
+        if not rows and getattr(drill_store, "last_error", None):
+            # An empty list here means one of two things and the caller cannot
+            # tell them apart: nothing was running, or the database could not
+            # be read. The second must not come back as a clean, empty board.
+            raise RecoveryUnavailable(
+                f"could not read which drills were running: "
+                f"{drill_store.last_error}")
+
         recovered = []
-        for row in drill_store.unfinished(site_id):
+        for row in rows:
             if row["drill_id"] in self.drills:
                 continue
             drill = Drill(

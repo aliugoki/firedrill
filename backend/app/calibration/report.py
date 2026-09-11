@@ -157,6 +157,7 @@ def certify(
     refusals: list[str] = []
     caveats: list[str] = []
 
+    chose_an_operating_point = True
     try:
         point = sweep.choose(false_accept_ceiling=false_accept_ceiling)
     except NoAcceptableOperatingPoint as exc:
@@ -170,6 +171,7 @@ def certify(
         # problems, and reporting one hides the other.
         point = _no_operating_point(sweep, false_accept_ceiling)
         refusals.append(str(exc))
+        chose_an_operating_point = False
 
     combined = CalibrationSet(
         observations=list(sweep.split.tune.observations)
@@ -196,7 +198,7 @@ def certify(
 
     if point.on_validate is None:
         refusals.append("no held-out half, so generalisation is unmeasured")
-    elif not refusals or "no threshold pair" not in refusals[0]:
+    elif chose_an_operating_point:
         if point.generalises is False:
             refusals.append(
                 f"on held-out people the false-accept rate is "

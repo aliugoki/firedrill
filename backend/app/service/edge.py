@@ -176,7 +176,7 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
         try:
             import sqlalchemy as sa
 
-            from app.drill import DrillRegistry
+            from app.drill import DrillRegistry, RecoveryUnavailable
             from app.store.drills import DrillStore
             from app.store.events import EventStore
 
@@ -195,6 +195,14 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
                         site_id=site_id, now_ms=now_ms,
                         assembly_zones=_assembly_zones(env)):
                     recovered.append(drill.drill_id)
+        except RecoveryUnavailable as exc:
+            # The database opened; the recovery query failed. Persistence stays
+            # on, because the next write may well succeed, but the board must
+            # not come up looking like a building with no drill in it.
+            gaps.append(
+                f"{exc}. A drill that was running when this node stopped has "
+                "not been reloaded, and the board is empty for that reason "
+                "rather than because the building is")
         except Exception as exc:
             gaps.append(
                 f"the database could not be opened ({type(exc).__name__}); "

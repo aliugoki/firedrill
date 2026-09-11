@@ -92,9 +92,17 @@ class EventConsumer:
         except StreamUnavailable as exc:
             self._mark_degraded(str(exc))
             return False
-        except Exception:
-            # Already exists is the common case and is not an error.
-            return True
+        except Exception as exc:
+            # Redis answers BUSYGROUP when the group is already there, which
+            # happens on every restart and is not an error. Everything else was
+            # being reported as success too: a key that exists as the wrong
+            # type, an ACL refusal, out of memory. The consumer then polled a
+            # group that does not exist, and the operator was told "cannot
+            # read" rather than what actually went wrong.
+            if "BUSYGROUP" in str(exc):
+                return True
+            self._mark_degraded(f"{type(exc).__name__}: {exc}")
+            return False
 
     def poll_once(self, now_ms: int) -> int:
         """One read-fold-acknowledge cycle. Returns events applied."""

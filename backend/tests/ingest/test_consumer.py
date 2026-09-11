@@ -306,3 +306,28 @@ class TestGroupSetup:
         stream.up = False
         assert consumer.ensure_group() is False
         assert consumer.is_degraded is True
+
+
+class TestGroupSetupFailures:
+    """Only "the group is already there" counts as success.
+
+    Everything else was reported as success too, so the consumer went on to
+    poll a group that does not exist and the operator was told "cannot read"
+    rather than what actually went wrong.
+    """
+
+    def test_a_wrong_type_key_is_reported_rather_than_shrugged_off(
+            self, consumer, stream):
+        def refuse(_stream, _group):
+            raise RuntimeError("WRONGTYPE Operation against a key holding "
+                               "the wrong kind of value")
+
+        stream.create_group = refuse
+        assert consumer.ensure_group() is False
+        assert consumer.is_degraded is True
+        assert "WRONGTYPE" in consumer.stats.last_error
+
+    def test_an_existing_group_is_still_not_an_error(self, consumer):
+        consumer.ensure_group()
+        assert consumer.ensure_group() is True
+        assert consumer.is_degraded is False
