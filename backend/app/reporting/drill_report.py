@@ -61,6 +61,9 @@ class DrillReport:
     uncertain: int
     needing_verification: int
     unknown_people: int
+    unknown_by_zone: dict = field(default_factory=dict)
+    """Where the wardens found them. A total with no location tells a safety
+    officer somebody was there and nothing about where to start asking."""
     excluded_from_the_count: dict = field(default_factory=dict)
 
     false_accounted: tuple = ()
@@ -132,6 +135,9 @@ class DrillReport:
             f"  needing verification    {self.needing_verification}",
             f"  unknown people          {self.unknown_people}",
         ]
+
+        for zone, count in sorted(self.unknown_by_zone.items()):
+            lines.append(f"    at {zone:<21}{count}")
 
         if self.excluded_from_the_count:
             # Not part of `expected`, so no row above mentions them and nobody
@@ -342,6 +348,7 @@ def build_report(
         needing_verification=board.count(
             AccountabilityState.MANUAL_VERIFICATION_REQUIRED),
         unknown_people=board.unknown_people,
+        unknown_by_zone=warden.unknowns_by_zone(),
         excluded_from_the_count=board.excluded_from_the_count,
         false_accounted=tuple(false_accounted),
         false_unaccounted=tuple(false_unaccounted),

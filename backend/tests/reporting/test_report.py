@@ -663,3 +663,47 @@ class TestTheReportCountsWhatTheStoreLost:
         assert report.outages >= 1
         # Storage costs the record, not the view.
         assert report.blind_fraction == 0.0
+
+
+class TestThePeopleWhoWereOnNobodysList:
+    """A visitor who never signed in, a contractor, somebody from next door.
+
+    They are not in `expected`, so no row on the board mentions them and no
+    count includes them. The board carried a field for it and no caller ever
+    filled it, so the operator tile, the warden tab and this report line read
+    zero on every drill ever run -- including drills where a warden had tagged
+    somebody standing in front of them.
+
+    Counted by wardens rather than cameras on purpose. Fragmentation turns one
+    person into several tracks, and a track count presented as a headcount is
+    an invented number on a life-safety screen.
+    """
+
+    def tag(self, drill, zone="assembly-north", note="contractor"):
+        drill.record_warden_action(WardenAction(
+            kind=ActionKind.TAG_UNKNOWN, warden_id="warden-7",
+            device_id="tablet-3", zone_id=zone, ts_ms=T0 + 60_000, note=note))
+
+    def test_the_board_counts_them(self):
+        drill = drill_with(people=2)
+        assert drill.board(T0 + 60_000).unknown_people == 0
+        self.tag(drill)
+        self.tag(drill, note="visitor, no badge")
+        assert drill.board(T0 + 60_000).unknown_people == 2
+
+    def test_the_report_says_where_they_were(self):
+        drill = drill_with(people=2)
+        self.tag(drill)
+        self.tag(drill, zone="assembly-south", note="delivery driver")
+
+        report = build_report(drill, now_ms=T0 + 120_000)
+        assert report.unknown_people == 2
+        text = "\n".join(report.render())
+        assert "unknown people          2" in text
+        assert "at assembly-north" in text
+        assert "at assembly-south" in text
+
+    def test_a_drill_with_none_says_zero_rather_than_omitting_the_line(self):
+        report = build_report(drill_with(people=2), now_ms=T0 + 120_000)
+        assert report.unknown_by_zone == {}
+        assert "unknown people          0" in "\n".join(report.render())

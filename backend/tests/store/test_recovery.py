@@ -257,3 +257,82 @@ class TestADrillRunsWithoutAStore:
         drill.start(T0)  # must not raise
         assert drill.status is DrillStatus.RUNNING
         assert drill_store.last_error is not None
+
+
+class TestTheWardensWorkSurvivesARestart:
+    """`recover` said warden state was rebuilt. Only the ingest fold was.
+
+    The fold understands confirmations and rejections, which is why a person
+    accounted for by a warden came back. It understands nothing about sweeps,
+    headcount context, notes, escalations or tagged unknowns, so a node that
+    restarted mid-drill came back with every zone unswept and asked its wardens
+    to walk the building again -- during an evacuation.
+    """
+
+    def _worked_zone(self, stores) -> Drill:
+        from app.warden.actions import ActionKind, WardenAction
+
+        drill = make_drill(stores)
+        drill.start(T0)
+        for kind, extra in (
+            (ActionKind.CONFIRM_PRESENT, {"subject": "emp:EMP-000"}),
+            (ActionKind.NOT_HERE, {"subject": "emp:EMP-001"}),
+            (ActionKind.TAG_UNKNOWN, {"note": "contractor, lift engineer"}),
+            (ActionKind.SWEEP_COMPLETE, {}),
+        ):
+            drill.record_warden_action(WardenAction(
+                kind=kind, warden_id="warden-7", device_id="tablet-3",
+                zone_id="assembly-north", ts_ms=T0 + 60_000, **extra))
+        # A different zone, because escalation outranks completion and a zone
+        # carrying both would not prove the completion came back.
+        drill.record_warden_action(WardenAction(
+            kind=ActionKind.ESCALATE, warden_id="warden-9",
+            device_id="tablet-4", zone_id="assembly-south", ts_ms=T0 + 70_000,
+            note="smoke in the north stairwell"))
+        return drill
+
+    def _restarted(self, stores) -> Drill:
+        fresh = make_drill(stores, drill_id="d1")
+        fresh.start(T0)
+        fresh.recover(T0 + 120_000)
+        return fresh
+
+    def test_a_completed_sweep_is_still_completed(self, stores):
+        self._worked_zone(stores)
+        sweep = self._restarted(stores).warden.sweeps["assembly-north"]
+        assert sweep.is_complete is True
+        assert sweep.confirmed == {"emp:EMP-000"}
+        assert sweep.not_here == {"emp:EMP-001"}
+
+    def test_a_tagged_unknown_is_not_forgotten(self, stores):
+        self._worked_zone(stores)
+        assert self._restarted(stores).warden.tagged_unknowns() == 1
+
+    def test_an_escalation_survives(self, stores):
+        # The one action that says a warden needs help. Losing it on a restart
+        # loses the request, and nobody is told it was lost.
+        self._worked_zone(stores)
+        escalated = self._restarted(stores).warden.escalations()
+        assert [s.escalation_reason for s in escalated] == [
+            "smoke in the north stairwell"]
+
+    def test_the_device_can_carry_on_where_it_left_off(self, stores):
+        # Its next sequence number is past everything already replayed, so a
+        # device that reconnects is not treated as resending old work.
+        self._worked_zone(stores)
+        fresh = self._restarted(stores)
+        # Four actions came from this tablet, so the next one it sends is 5.
+        # Without the replay the queue starts at 1 and its next action collides
+        # with work already stored.
+        assert fresh.warden.device("tablet-3", "warden-7").next_seq == 5
+
+    def test_recovery_does_not_duplicate_the_evidence_it_recovers(self, stores):
+        # Re-recording each action would write it to the store again with a
+        # fresh sequence, which is worse than losing it.
+        events_store, _ = stores
+        self._worked_zone(stores)
+        before = events_store.count("d1")
+        self._restarted(stores)
+        # Not one row more. The fresh drill's own start event carries the same
+        # sequence as the original's, and the uniqueness constraint rejects it.
+        assert events_store.count("d1") == before

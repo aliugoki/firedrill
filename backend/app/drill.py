@@ -35,7 +35,7 @@ from app.core.timing import DrillTiming, measure, summarise, summarise_by
 from app.ingest.health import Component
 from app.ingest.ingestor import Ingestor
 from app.ingest.projections import LiveBoard, build_board, resolve_identities
-from app.warden.actions import WardenAction, to_event
+from app.warden.actions import WardenAction, from_event, to_event
 from app.warden.headcount import Headcount
 from app.warden.state import WardenState
 
@@ -201,7 +201,12 @@ class Drill:
         return build_board(
             self.ingestor.state, self.roster, now_ms=now_ms,
             warden_evidence=self.warden.all_evidence(),
-            config=self.accountability_config)
+            config=self.accountability_config,
+            # No caller ever passed this, so the operator tile, the warden tab
+            # and the report line all read zero on every drill ever run --
+            # including drills where a warden had tagged somebody standing in
+            # front of them who was on nobody's list.
+            unknown_people=self.warden.tagged_unknowns())
 
     def explain(self, person_ref: str) -> Explanation | None:
         """Why one person is in the state they are in.
@@ -315,14 +320,41 @@ class Drill:
 
         The fold is deterministic and idempotent, so a recovered drill reaches
         exactly the state it had. Warden state is rebuilt too, because warden
-        actions are events like any other.
+        actions are events like any other -- which this said before it was
+        true. Only the ingest fold was replayed, and the fold knows about
+        confirmations and rejections and nothing else a warden does. A node
+        that restarted mid-drill came back with every zone unswept, every note
+        gone, and its wardens asked to walk the building again.
         """
         if self.events_store is None:
             return 0
         events = self.events_store.replay(self.drill_id)
         applied = self.ingestor.feed_batch(events)
+        self._replay_warden_actions(events)
         self.ingestor.tick(now_ms)
         return applied
+
+    def _replay_warden_actions(self, events: list[Event]) -> None:
+        """Fold the warden half of the log back into `self.warden`.
+
+        Applied rather than re-recorded: `record_warden_action` would write
+        each one to the store again and hand it a fresh device sequence, and a
+        recovery that duplicates the evidence it is recovering is worse than
+        one that loses it.
+
+        Device sequences are advanced past what was replayed so a device that
+        reconnects after the restart is not treated as sending numbers it has
+        already sent.
+        """
+        for event in events:
+            if event.source_kind is not SourceKind.WARDEN:
+                continue
+            action = from_event(event)
+            if action is None:
+                continue
+            self.warden.apply(action)
+            queue = self.warden.device(action.device_id, action.warden_id)
+            queue.next_seq = max(queue.next_seq, event.seq + 1)
 
     def _system_event(self, event_type: EventType, now_ms: int) -> Event:
         self._system_seq += 1

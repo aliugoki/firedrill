@@ -252,6 +252,11 @@ class LiveBoard:
     rows: tuple[PersonRow, ...]
     health: HealthSummary
     roster_trustworthy: bool
+    #: People a warden tagged at an assembly point who were on no list: a
+    #: visitor who never signed in, a contractor, somebody from next door.
+    #: Counted by a human looking at them, not by a tracker -- fragmentation
+    #: turns one person into several tracks, and a track count presented as a
+    #: headcount is an invented number on a life-safety screen.
     unknown_people: int = 0
     #: On the roster and not in `expected`, by reason. Nobody looks for these
     #: people and no row mentions them, so the number reaches the operator here

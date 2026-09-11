@@ -51,6 +51,28 @@ class WardenState:
             self.devices[device_id] = queue
         return queue
 
+    def tagged_unknowns(self) -> int:
+        """People at assembly points who were not on any warden's list.
+
+        A visitor who never signed in, a contractor, somebody from the building
+        next door. They are not in `expected`, so no row on the board mentions
+        them and no count includes them -- this is the only number that says
+        the building held people the roster did not know about.
+
+        Wardens, not cameras. A camera can only offer tracks it could not put a
+        name to, and fragmentation makes five tracks out of one person, so a
+        track count presented as a headcount would be an invented number on a
+        life-safety screen. A warden standing in front of somebody is counting
+        people.
+        """
+        return sum(sweep.unknown_tagged for sweep in self.sweeps.values())
+
+    def unknowns_by_zone(self) -> dict:
+        """Where they were tagged. Only zones with any."""
+        return {zone_id: sweep.unknown_tagged
+                for zone_id, sweep in sorted(self.sweeps.items())
+                if sweep.unknown_tagged}
+
     # -- applying actions ------------------------------------------------------
 
     def apply(self, action: WardenAction) -> None:

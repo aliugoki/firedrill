@@ -219,6 +219,53 @@ def to_event(
     )
 
 
+def from_event(event: Event) -> WardenAction | None:
+    """The inverse of `to_event`, for rebuilding warden state after a restart.
+
+    `Drill.recover` promised warden state was rebuilt "because warden actions
+    are events like any other", and replayed the events into the ingest fold
+    only. The fold knows about confirmations and rejections, which is why an
+    ACCOUNTED person came back; it knows nothing about sweeps, notes,
+    escalations or tagged unknowns, so a node that restarted mid-drill came
+    back with every zone unswept and asked its wardens to walk them again.
+
+    Returns None for anything this device did not produce. The action kind is
+    read from the payload rather than inferred from the event type, because
+    four kinds share `WARDEN_NOTE` -- the vocabulary is deliberately closed and
+    guessing from the type would turn an escalation into a plain note.
+    """
+    if event.source_kind is not SourceKind.WARDEN:
+        return None
+    payload = event.payload or {}
+    kind_name = payload.get("action")
+    try:
+        kind = ActionKind(kind_name)
+    except ValueError:
+        # A warden-sourced event whose payload does not name a kind this build
+        # knows. Dropping it silently would be the quiet data loss this whole
+        # function exists to undo, so it is the caller's problem to report.
+        raise WardenActionError(
+            f"warden event {event.event_id} carries no known action kind "
+            f"({kind_name!r})")
+
+    zone_id = payload.get("zone_id") or ""
+    subject = event.subject if event.subject != zone_id else None
+    return WardenAction(
+        kind=kind,
+        warden_id=payload.get("warden_id") or "",
+        device_id=payload.get("device_id") or "",
+        zone_id=zone_id,
+        ts_ms=event.ts_ms,
+        subject=subject,
+        identity=payload.get("identity"),
+        note=payload.get("note"),
+        queued_offline=bool(payload.get("queued_offline", False)),
+        synced_at_ms=(event.ts_ms + payload["sync_lag_ms"]
+                      if payload.get("sync_lag_ms") is not None else None),
+        action_id=payload.get("action_id") or str(uuid.uuid4()),
+    )
+
+
 @dataclass
 class DeviceQueue:
     """A warden device's local queue, and the sequence it owns.
