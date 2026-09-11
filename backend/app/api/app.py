@@ -537,6 +537,7 @@ def _percentiles(summary) -> schemas.PercentilesOut:
         excluded=summary.excluded, p50=summary.p50, p90=summary.p90,
         p95=summary.p95, p99=summary.p99, maximum=summary.maximum,
         reliable=summary.is_reliable, coverage=summary.coverage,
+        exclusion_reasons=dict(summary.exclusion_reasons),
         caveats=list(summary.caveats()))
 
 

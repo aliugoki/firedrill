@@ -74,6 +74,9 @@ class DrillReport:
     timing_samples: int = 0
     timing_coverage: float | None = None
     timing_caveats: tuple[str, ...] = ()
+    timing_exclusions: dict = field(default_factory=dict)
+    """Why the people with no timing have none. `ExclusionReason` calls itself
+    "always reported, never silent" and was computed and discarded."""
     accountability_completion_s: float | None = None
     slowest_floor: str | None = None
 
@@ -166,6 +169,13 @@ class DrillReport:
             ]
             for note in self.timing_caveats:
                 lines.append(f"  caveat: {note}")
+        for reason, count in sorted(self.timing_exclusions.items()):
+            # Split out because the difference matters: somebody the cameras
+            # never saw is a coverage problem, and somebody seen who never
+            # reached the muster point is a person. Only one of those is a
+            # measurement problem.
+            words = reason.lower().replace("_", " ")
+            lines.append(f"    no timing, {words:<24} {count}")
         lines.append(
             f"  accountability settled  {self._fmt(self.accountability_completion_s)}")
         if self.slowest_floor:
@@ -318,6 +328,7 @@ def build_report(
         timing_samples=timing.building.sample_size,
         timing_coverage=timing.building.coverage,
         timing_caveats=timing.building.caveats(),
+        timing_exclusions=dict(timing.building.exclusion_reasons),
         accountability_completion_s=timing.accountability_completion_s,
         slowest_floor=slowest,
         warden_confirmations=len(confirmed_by_warden),

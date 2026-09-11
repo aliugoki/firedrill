@@ -515,3 +515,49 @@ class TestAnOvercountTheSiteAbsorbed:
         text = "\n".join(report.render())
         assert "policy absorbed it" in text
         assert "not at the muster point" in text
+
+
+class TestWhyThePeopleWithNoTimingHaveNone:
+    """`ExclusionReason` calls itself "always reported, never silent", and the
+    timing module's docstring says the breakdown keeps the exclusions visible.
+
+    It was computed and discarded: no schema carried it, no report printed it,
+    nothing but one unit test read it. The count alone hides the difference
+    that matters -- somebody the cameras never saw is a coverage problem, and
+    somebody seen who never reached the muster point is a person.
+    """
+
+    def rendered(self, exclusions):
+        from app.reporting.drill_report import DrillReport
+
+        report = DrillReport(
+            drill_id="d1", name="Q3", site_id="s1", started_ms=T0,
+            completed_ms=T0 + 600_000, duration_s=600.0,
+            expected=212, accounted=194, unaccounted=3, uncertain=5,
+            needing_verification=10, unknown_people=0,
+            p50_s=68.9, p90_s=116.8, p95_s=143.0, p99_s=317.4, max_s=347.9,
+            timing_samples=173, timing_coverage=0.82,
+            timing_exclusions=exclusions)
+        return "\n".join(report.render())
+
+    def test_each_reason_is_given_with_its_count(self):
+        text = self.rendered({"NEVER_OBSERVED": 29,
+                              "NEVER_REACHED_ASSEMBLY": 10})
+        assert "no timing, never observed           29" in text
+        assert "no timing, never reached assembly   10" in text
+
+    def test_nothing_is_printed_when_everybody_was_timed(self):
+        assert "no timing," not in self.rendered({})
+
+    def test_the_api_carries_the_same_breakdown(self):
+        from app.core.timing import ExclusionReason, measure, summarise
+
+        people = [
+            measure(person_id="a", drill_started_ms=T0,
+                    assembly_arrival_ms=T0 + 60_000),
+            measure(person_id="b", drill_started_ms=T0,
+                    assembly_arrival_ms=None, was_observed=False),
+        ]
+        summary = summarise(people)
+        assert summary.exclusion_reasons == {
+            ExclusionReason.NEVER_OBSERVED.value: 1}

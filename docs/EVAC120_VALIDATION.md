@@ -206,6 +206,8 @@ Evacuation times
   slowest individual      347.9s
   measured on             173 people (82% coverage)
   caveat: 39 of 212 people produced no timing (18% excluded). The percentiles describe only those who were tracked end to end.
+    no timing, never observed           29
+    no timing, never reached assembly   10
   accountability settled  —
   slowest floor           floor-4 at P95 215.8s
 

@@ -97,6 +97,13 @@ class PercentilesOut(BaseModel):
     maximum: float | None
     reliable: bool
     coverage: float | None
+    exclusion_reasons: dict = {}
+    """Why the people with no timing have none, by reason.
+
+    The count alone hides the difference that matters: somebody the cameras
+    never saw is a coverage problem, and somebody who was seen and never
+    reached the muster point is a person. Both are excluded from the
+    percentiles and only one of them is a measurement problem."""
     caveats: list[str] = []
     """Everything that qualifies these numbers. Plural because a small sample
     and a low coverage are different problems and a reader needs both."""
