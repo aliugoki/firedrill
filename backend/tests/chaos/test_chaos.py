@@ -451,3 +451,198 @@ class TestEverythingAtOnce:
         states = [row.state for row in priority]
         if AccountabilityState.UNACCOUNTED in states:
             assert states[0] is AccountabilityState.UNACCOUNTED
+
+
+class ChaosStream:
+    """Enough Redis Streams to drive the real consumer.
+
+    Deliberately not the fake from `tests/ingest`: this one only needs a switch
+    to take the bus down mid-drill, and a small fake is a more honest one.
+    """
+
+    def __init__(self):
+        self.entries: list = []
+        self.up = True
+        self._next = 0
+        self.groups: set = set()
+
+    def publish(self, event) -> None:
+        self._next += 1
+        self.entries.append((str(self._next), {
+            "tenant_id": event.tenant_id, "site_id": event.site_id,
+            "drill_id": event.drill_id, "source": event.source,
+            "source_kind": event.source_kind.value, "seq": str(event.seq),
+            "type": event.type.value, "ts_ms": str(event.ts_ms),
+            "subject": event.subject if event.subject is not None else "null",
+            "payload": __import__("json").dumps(event.payload),
+            "event_id": event.event_id,
+        }))
+
+    def _check(self):
+        from app.ingest.consumer import StreamUnavailable
+
+        if not self.up:
+            raise StreamUnavailable("redis unreachable")
+
+    def create_group(self, stream, group):
+        self._check()
+        self.groups.add(group)
+
+    def read_group(self, stream, group, consumer, count, block_ms):
+        self._check()
+        taken, self.entries = self.entries[:count], self.entries[count:]
+        return taken
+
+    def acknowledge(self, stream, group, message_ids):
+        self._check()
+        return len(message_ids)
+
+    def claim_stale(self, stream, group, consumer, min_idle_ms, count):
+        self._check()
+        return []
+
+
+class TestTheRealPathUnderChaos:
+    """Everything above drives the fold directly. This drives the wiring.
+
+    The suite's own opening claim is that it re-proves the Phase 1 property
+    "against the real ingest path". It did not: every test here builds an
+    `Ingestor` and feeds it, which is the shape the simulator uses and not the
+    shape production uses. Two whole subsystems were inert underneath these
+    tests -- the camera stream never reached a drill's board, and nothing was
+    ever queued for central -- and the suite passed throughout, because the
+    thing that was missing was the wiring and the wiring was what it skipped.
+
+    So this class starts from a stream and a registry and asserts the same
+    three properties end to end.
+    """
+
+    def wired(self, site, agents, tmp_path, injections=NONE):
+        import sqlalchemy as sa
+
+        from app.drill import Drill, DrillRegistry
+        from app.ingest.consumer import EventConsumer
+        from app.store.events import EventStore
+        from app.store.schema import metadata
+
+        plan = plan_for(site, agents, injections)
+        engine = sa.create_engine("sqlite://", poolclass=sa.pool.StaticPool,
+                                  connect_args={"check_same_thread": False})
+        metadata.create_all(engine)
+
+        replicator = Replicator(outbox=Outbox(tmp_path / "outbox.db"),
+                                transport=InMemoryTransport())
+        drill = Drill(
+            drill_id="drill-sim", tenant_id="tenant-sim",
+            site_id=site.site_id, name="chaos",
+            roster=build_roster(plan.agents, plan.alarm_ms),
+            created_ms=plan.alarm_ms,
+            assembly_zones=frozenset(z.zone_id for z in site.assembly_zones()),
+            identity_config=plan.identity_config,
+            presence_config=plan.presence_config,
+            accountability_config=plan.accountability_config,
+            events_store=EventStore(engine=engine), replicator=replicator)
+        drill.start(plan.alarm_ms)
+
+        registry = DrillRegistry()
+        registry.add(drill)
+        stream = ChaosStream()
+        consumer = EventConsumer(
+            ingestor=Ingestor(), client=stream, stream="vt:evac:events:sim",
+            batch_size=10_000, registry=registry, replicator=replicator)
+        consumer.ensure_group()
+        return plan, drill, stream, consumer, replicator
+
+    def drain(self, consumer, stream, now_ms):
+        while stream.entries and stream.up:
+            if consumer.poll_once(now_ms) == 0 and not stream.entries:
+                break
+
+    def test_the_board_sees_the_cameras_through_the_whole_path(
+            self, site, agents, tmp_path):
+        plan, drill, stream, consumer, _ = self.wired(site, agents, tmp_path)
+        observed = observe(plan)
+        for event in observed.events:
+            stream.publish(event)
+        self.drain(consumer, stream, ALARM_MS + HORIZON_MS)
+        drill.tick(ALARM_MS + HORIZON_MS)
+
+        board = drill.board(ALARM_MS + HORIZON_MS)
+        assert board.accounted > 0, "no camera evidence reached the board"
+
+    def test_nobody_is_falsely_cleared_through_the_whole_path(
+            self, site, agents, tmp_path):
+        plan, drill, stream, consumer, _ = self.wired(site, agents, tmp_path)
+        observed = observe(plan)
+        for event in observed.events:
+            stream.publish(event)
+        self.drain(consumer, stream, ALARM_MS + HORIZON_MS)
+        drill.tick(ALARM_MS + HORIZON_MS)
+
+        board = drill.board(ALARM_MS + HORIZON_MS)
+        cleared = {row.person_ref for row in board.rows
+                   if row.state is AccountabilityState.ACCOUNTED}
+        # An empty board satisfies "nobody falsely cleared" and proves nothing.
+        assert cleared, "nothing was cleared, so the property is vacuous"
+        substituted = {f"emp:{emp}"
+                       for emp in observed.misidentified_as.values()}
+        assert cleared - truth(agents) - substituted == set()
+
+    def test_a_bus_outage_stops_the_board_and_replay_converges(
+            self, site, agents, tmp_path):
+        plan, drill, stream, consumer, _ = self.wired(site, agents, tmp_path)
+        events = observe(plan).events
+        half = len(events) // 2
+        for event in events[:half]:
+            stream.publish(event)
+        self.drain(consumer, stream, ALARM_MS + 60_000)
+        partial = drill.board(ALARM_MS + 60_000).accounted
+
+        stream.up = False
+        for event in events[half:]:
+            stream.publish(event)
+        assert consumer.poll_once(ALARM_MS + 120_000) == 0
+        assert consumer.is_degraded is True
+
+        stream.up = True
+        self.drain(consumer, stream, ALARM_MS + HORIZON_MS)
+        drill.tick(ALARM_MS + HORIZON_MS)
+
+        assert consumer.is_degraded is False
+        converged = drill.board(ALARM_MS + HORIZON_MS).accounted
+        assert converged >= partial
+        assert converged > 0, "the buffered half never reached the board"
+
+    def test_everything_the_drill_saw_is_queued_for_central(
+            self, site, agents, tmp_path):
+        plan, drill, stream, consumer, replicator = self.wired(
+            site, agents, tmp_path)
+        events = observe(plan).events[:200]
+        for event in events:
+            stream.publish(event)
+        self.drain(consumer, stream, ALARM_MS + HORIZON_MS)
+
+        # The drill's own start event, plus every observation it folded.
+        assert replicator.backlog >= len(events)
+        assert replicator.drain(ALARM_MS + HORIZON_MS) >= len(events)
+        assert replicator.backlog == 0
+
+    def test_a_dead_link_to_central_does_not_touch_the_board(
+            self, site, agents, tmp_path):
+        class Dead:
+            def send(self, batch):
+                from app.ingest.replication import TransportUnavailable
+
+                raise TransportUnavailable("central unreachable")
+
+        plan, drill, stream, consumer, replicator = self.wired(
+            site, agents, tmp_path)
+        replicator.transport = Dead()
+        for event in observe(plan).events:
+            stream.publish(event)
+        self.drain(consumer, stream, ALARM_MS + HORIZON_MS)
+        drill.tick(ALARM_MS + HORIZON_MS)
+
+        assert replicator.flush(ALARM_MS + HORIZON_MS) == 0
+        assert replicator.backlog > 0, "the events must still be buffered"
+        assert drill.board(ALARM_MS + HORIZON_MS).accounted > 0
