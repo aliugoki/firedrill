@@ -60,9 +60,17 @@ class IngestState:
     assembly_arrival_ms: dict = field(default_factory=dict)
 
     # -- counters, for the health endpoint and the chaos suite ----------------
+    #: Exactly one of these counts every event the fold has seen.
     accepted: int = 0
     duplicates_dropped: int = 0
     rejected: int = 0
+    """Events admitted by the sequence tracker that no handler could apply --
+    no subject, a sighting with no zone, a warden ruling with no identity.
+
+    Declared from the start and never incremented, so a producer emitting
+    rubbish showed `accepted` climbing while nothing reached the state, and the
+    health endpoint reported a healthy ingest. Silence is what a working
+    pipeline and a broken one had in common."""
     last_event_ms: int | None = None
 
     @property
@@ -118,9 +126,16 @@ class Ingestor:
                 summary=f"{gap.missing_count} event(s) missing from {gap.source} "
                         f"between seq {gap.after_seq} and {gap.before_seq}")
 
+        # Counted after the fold, not before it: a handler that cannot use the
+        # event says so by refusing, and an event that was admitted and then
+        # dropped is not an accepted one.
+        refused_before = state.rejected
+        self._apply(event)
+        if state.rejected != refused_before:
+            return False
+
         state.accepted += 1
         state.last_event_ms = max(state.last_event_ms or 0, event.ts_ms)
-        self._apply(event)
         return True
 
     def feed_batch(self, events: list[Event]) -> int:
@@ -143,6 +158,15 @@ class Ingestor:
         self.state.identity.tick(now_ms)
 
     # -- per-event handling ----------------------------------------------------
+
+    def _refuse(self, event: Event, reason: str) -> None:
+        """An event no handler can use. Counted and recorded, never silent."""
+        self.state.rejected += 1
+        self.state.ledger.record(
+            subject=event.subject or f"source:{event.source}",
+            kind=EvidenceKind.MALFORMED_EVENT, ts_ms=event.ts_ms,
+            stance=Stance.CONTEXT, source=event.source,
+            summary=f"{event.type.value} could not be applied: {reason}")
 
     def _apply(self, event: Event) -> None:
         handler = _HANDLERS.get(event.type)
@@ -184,7 +208,8 @@ class Ingestor:
     def _track_updated(self, event: Event) -> None:
         subject, payload = event.subject, event.payload
         if not subject or "zone_id" not in payload:
-            return
+            return self._refuse(
+                event, "a sighting needs a track and a zone to be about")
         sighting = ZoneSighting(
             ts_ms=event.ts_ms, zone_id=payload["zone_id"],
             zone_kind=ZoneKind(payload["zone_kind"]),
@@ -216,7 +241,7 @@ class Ingestor:
 
     def _track_lost(self, event: Event) -> None:
         if not event.subject:
-            return
+            return self._refuse(event, "no track is named")
         self.state.presence.get(event.subject).track_lost(event.ts_ms)
         self.state.ledger.record(
             subject=event.subject, kind=EvidenceKind.TRACK_LOST,
@@ -225,7 +250,7 @@ class Ingestor:
 
     def _face_unavailable(self, event: Event) -> None:
         if not event.subject:
-            return
+            return self._refuse(event, "no track is named")
         self.state.ledger.record(
             subject=event.subject, kind=EvidenceKind.FACE_UNAVAILABLE,
             ts_ms=event.ts_ms, stance=Stance.CONTEXT, source=event.source,
@@ -234,7 +259,7 @@ class Ingestor:
     def _face_observed(self, event: Event) -> None:
         subject, payload = event.subject, event.payload
         if not subject:
-            return
+            return self._refuse(event, "no track is named")
         observation = FaceObservation(
             ts_ms=event.ts_ms, candidate_id=payload.get("candidate_id"),
             score=payload.get("score", -1.0), margin=payload.get("margin", -1.0),
@@ -275,7 +300,8 @@ class Ingestor:
     def _warden_confirmed(self, event: Event) -> None:
         subject, payload = event.subject, event.payload
         if not subject or "identity" not in payload:
-            return
+            return self._refuse(
+                event, "a warden ruling needs a subject and the identity ruled on")
         tracked = self.state.identity.find(subject)
         if tracked is not None:
             tracked.warden_confirms(payload["identity"], event.ts_ms,
@@ -290,7 +316,8 @@ class Ingestor:
     def _warden_rejected(self, event: Event) -> None:
         subject, payload = event.subject, event.payload
         if not subject or "identity" not in payload:
-            return
+            return self._refuse(
+                event, "a warden ruling needs a subject and the identity ruled on")
         # Only when the subject is a track the cameras actually produced. The
         # warden PWA acts on roster rows, so its subject is a person reference,
         # and `get` used to invent an identity record under that key: a person
@@ -310,7 +337,7 @@ class Ingestor:
 
     def _warden_note(self, event: Event) -> None:
         if not event.subject:
-            return
+            return self._refuse(event, "a note needs somebody to be about")
         self.state.ledger.record(
             subject=event.subject, kind=EvidenceKind.WARDEN_NOTE,
             ts_ms=event.ts_ms, stance=Stance.CONTEXT, source=event.source,

@@ -426,6 +426,7 @@ def create_app(registry: DrillRegistry | None = None,
                 "open_outages": len(state.health.open_now()),
                 "events_accepted": state.accepted,
                 "duplicates_dropped": state.duplicates_dropped,
+                "malformed_rejected": state.rejected,
                 "outstanding_gaps": len(state.tracker.outstanding_gaps()),
             })
 

@@ -341,3 +341,80 @@ class TestAWardenRulingOnSomethingTheCamerasNeverSaw:
         person = ingestor.state.identity.find("gp-1")
         assert person.state is IdentityState.REJECTED
         assert "EMP-0002" in person.rejected_identities
+
+
+class TestAnEventNoHandlerCanUse:
+    """A sighting with no zone, a ruling with no identity, a track with no id.
+
+    Each used to return silently while `feed` had already counted the event as
+    accepted, so a producer emitting rubbish looked exactly like one emitting
+    nothing: the counter climbed, the state stayed empty, and the health
+    endpoint reported a healthy ingest.
+    """
+
+    def event(self, event_type, subject=None, payload=None, seq=1):
+        from app.core.events import Event, EventType, SourceKind
+
+        return Event(tenant_id="t", site_id="s", drill_id="d", source="cam-1",
+                     source_kind=SourceKind.CAMERA, seq=seq, type=event_type,
+                     ts_ms=1_000 * seq, subject=subject, payload=payload or {})
+
+    def fed(self, *events):
+        from app.ingest.ingestor import Ingestor
+
+        ingestor = Ingestor()
+        for event in events:
+            ingestor.feed(event)
+        return ingestor.state
+
+    def test_a_sighting_with_no_zone_is_counted_as_refused(self):
+        from app.core.events import EventType
+
+        state = self.fed(self.event(EventType.TRACK_UPDATED, subject="gp-1"))
+        assert state.rejected == 1
+        assert state.accepted == 0
+
+    def test_a_sighting_with_no_track_is_counted_as_refused(self):
+        from app.core.events import EventType
+
+        state = self.fed(self.event(EventType.TRACK_UPDATED,
+                                    payload={"zone_id": "z", "zone_kind": "FLOOR"}))
+        assert state.rejected == 1
+
+    def test_a_warden_ruling_with_no_identity_is_counted_as_refused(self):
+        from app.core.events import EventType
+
+        state = self.fed(self.event(EventType.WARDEN_REJECTED, subject="gp-1"))
+        assert state.rejected == 1
+        assert state.accepted == 0
+
+    def test_the_reason_is_recorded_rather_than_only_counted(self):
+        # A number says a producer is broken; the ledger says how.
+        from app.core.events import EventType
+
+        state = self.fed(self.event(EventType.FACE_OBSERVED,
+                                    payload={"candidate_id": "EMP-1"}))
+        evidence = state.ledger.for_subject("source:cam-1")
+        assert evidence
+        assert "no track is named" in evidence[0].summary
+
+    def test_a_good_event_is_still_accepted(self):
+        # The guard for all of the above: they must be failing on the event,
+        # not on something that refuses everything.
+        from app.core.events import EventType
+
+        state = self.fed(self.event(
+            EventType.TRACK_UPDATED, subject="gp-1",
+            payload={"zone_id": "z", "zone_kind": "FLOOR"}))
+        assert state.accepted == 1
+        assert state.rejected == 0
+
+    def test_a_duplicate_is_still_a_duplicate_rather_than_a_refusal(self):
+        from app.core.events import EventType
+
+        good = self.event(EventType.TRACK_UPDATED, subject="gp-1",
+                          payload={"zone_id": "z", "zone_kind": "FLOOR"})
+        state = self.fed(good, good)
+        assert state.accepted == 1
+        assert state.duplicates_dropped == 1
+        assert state.rejected == 0

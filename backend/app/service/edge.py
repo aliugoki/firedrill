@@ -54,6 +54,9 @@ class EdgeNode:
             "open_outages": len(state.health.open_now()),
             "events_accepted": state.accepted,
             "duplicates_dropped": state.duplicates_dropped,
+            # A producer emitting rubbish used to look exactly like one
+            # emitting nothing: `accepted` climbed and the state stayed empty.
+            "malformed_rejected": state.rejected,
             "outstanding_gaps": len(state.tracker.outstanding_gaps()),
             "replication_backlog": (self.replicator.backlog
                                     if self.replicator else 0),
