@@ -35,6 +35,11 @@ from app.store.schema import evac_events
 #: this exists to prevent.
 DEFAULT_BUFFER_LIMIT = 100_000
 
+#: The health target for evidence that is gone for good, kept separate from the
+#: outage that caused it. The database coming back ends the outage; it does not
+#: bring back what was dropped while it was away.
+LOSS_TARGET = "events-dropped"
+
 
 @dataclass
 class StoreStats:
@@ -48,6 +53,14 @@ class StoreStats:
 
     @property
     def buffer_overflowed(self) -> bool:
+        """Whether the record of this drill is permanently incomplete.
+
+        Nothing read this until it was wired into `is_degraded`. A full buffer
+        drops events that no later flush can recover, so invariant 6 -- every
+        accountability decision reconstructable from stored events -- stops
+        holding for the drill this happened in, and the only trace was a
+        counter nobody looked at.
+        """
         return self.dropped > 0
 
 
@@ -109,6 +122,7 @@ class EventStore:
             # Say so rather than quietly discarding the oldest. A full buffer is
             # a real risk to the record, and a silent one would be worse.
             self.stats.dropped += 1
+            self._lost(now_ms)
             return
         self._pending.append(row)
         self.stats.buffered = len(self._pending)
@@ -197,7 +211,20 @@ class EventStore:
 
     @property
     def is_degraded(self) -> bool:
-        return self._degraded
+        """Down now, or having lost evidence earlier and not got it back.
+
+        The second half is the part that used to be missing. A database outage
+        long enough to fill the buffer drops events permanently; when the
+        database returned, `_recovered` cleared the flag and the node reported
+        itself healthy again. It was not. The drill it happened in can no
+        longer be replayed in full, and a node that says "fixed" about that is
+        making exactly the claim invariant 8 exists to forbid.
+
+        So this stays true for the life of the store. Clearing it is an
+        operator's decision after they have looked at what was lost, not a side
+        effect of the database answering again.
+        """
+        return self._degraded or self.stats.buffer_overflowed
 
     @property
     def pending(self) -> int:
@@ -214,7 +241,31 @@ class EventStore:
             self.health.degrade(Component.DATABASE, "events", now_ms,
                                 self.stats.last_error or "unreachable")
 
+    def _lost(self, now_ms: int) -> None:
+        """Open a degradation for the events that are not coming back.
+
+        Deliberately a different target from the outage. If the same one
+        covered both, the database returning would close the record of the
+        loss, and the report would read "database down for four minutes, then
+        recovered" -- which is the promise the buffer makes, and in this case
+        did not keep. The reason carries the running count, because the number
+        of events a drill lost is the question anyone reading it will ask.
+        """
+        if self.health is None:
+            return
+        reason = (f"{self.stats.dropped} event(s) dropped: the buffer was full "
+                  f"at {self.buffer_limit}. They are not recoverable and this "
+                  f"drill cannot be replayed in full.")
+        already_open = self.health.open_for(Component.DATABASE, LOSS_TARGET)
+        if already_open is None:
+            self.health.degrade(Component.DATABASE, LOSS_TARGET, now_ms, reason)
+        else:
+            already_open.reason = reason
+
     def _recovered(self, now_ms: int) -> None:
+        # Closes the outage only. The `LOSS_TARGET` degradation is left open on
+        # purpose: nothing that happens to the database afterwards makes a
+        # dropped event exist again.
         if not self._degraded:
             return
         self._degraded = False

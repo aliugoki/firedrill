@@ -167,6 +167,62 @@ class TestADrillCreatedHereIsWrittenDown:
 
         assert client.get("/healthz").json()["durable"] is True
 
+    def test_a_database_that_stopped_answering_is_not_still_durable(
+            self, tmp_path):
+        """`is_durable` said "would survive a restart" and meant "is wired".
+
+        A store whose database has gone away buffers into this process's
+        memory. A restart loses every buffered event, so the property was
+        answering the opposite of its own first sentence at exactly the moment
+        an operator would act on it.
+        """
+        import sqlalchemy as sa
+
+        _, _, client = self.with_stores(tmp_path)
+        made = client.post("/api/evac/drills", headers=OPERATOR,
+                           json={"tenant_id": "t", "site_id": "site-1",
+                                 "name": "Q3"})
+        drill_id = made.json()["drill_id"]
+
+        client.app.state.events_store.engine = sa.create_engine(
+            "postgresql+psycopg2://nobody@127.0.0.1:1/nothing")
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+
+        report = client.get("/healthz").json()
+        assert report["durable"] is False
+        assert report["degraded"] is True
+
+    def test_the_api_reports_what_the_store_is_holding(self, tmp_path):
+        """The edge process reported this block and the API process did not.
+
+        `durable: false` says something is wrong without saying what. The
+        number of events sitting in memory is what an operator needs to decide
+        whether to stop the drill or ride it out. It is reported whether or not
+        a drill is running, because events buffered by a drill that has since
+        completed are still unwritten evidence.
+        """
+        import sqlalchemy as sa
+
+        _, _, client = self.with_stores(tmp_path)
+        made = client.post("/api/evac/drills", headers=OPERATOR,
+                           json={"tenant_id": "t", "site_id": "site-1",
+                                 "name": "Q3"})
+        drill_id = made.json()["drill_id"]
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+
+        healthy = client.get("/healthz").json()["store"]
+        assert healthy["degraded"] is False
+        assert healthy["written"] >= 1
+
+        client.app.state.events_store.engine = sa.create_engine(
+            "postgresql+psycopg2://nobody@127.0.0.1:1/nothing")
+        client.post(f"/api/evac/drills/{drill_id}/complete", headers=OPERATOR)
+
+        # The drill is over; the unwritten event it produced is not.
+        store = client.get("/healthz").json()["store"]
+        assert store["buffered"] == 1
+        assert store["degraded"] is True
+
     def test_a_process_with_no_database_says_so(self):
         client = TestClient(create_app(
             registry=DrillRegistry(), roster_provider=a_roster,

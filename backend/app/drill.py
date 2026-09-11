@@ -269,8 +269,16 @@ class Drill:
         Surfaced rather than assumed: an operator running a drill that is not
         being recorded should know, because the post-drill report is the reason
         most drills are run at all.
+
+        A store being attached is not the same as a store working. While the
+        database is unreachable the events are in this process's memory and a
+        restart loses them, and once the buffer has overflowed some of them are
+        gone whatever happens next. Both used to read as `True` here, which
+        made the property say the opposite of its first sentence at exactly the
+        moment it mattered.
         """
-        return self.events_store is not None and self.drill_store is not None
+        return (self.events_store is not None and self.drill_store is not None
+                and not self.events_store.is_degraded)
 
     def recover(self, now_ms: int) -> int:
         """Rebuild state from the stored event log. Returns events replayed.

@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from app.core.events import Event, EventType, SourceKind
 from app.ingest.health import Component, HealthLog
 from app.ingest.ingestor import Ingestor
-from app.store.events import EventStore, rebuild
+from app.store.events import LOSS_TARGET, EventStore, rebuild
 from app.store.schema import evac_events, metadata
 
 T0 = 1_788_000_000_000
@@ -244,6 +244,64 @@ class TestSurvivingTheDatabase:
         assert store.pending == 3
         assert store.stats.dropped == 7
         assert store.stats.buffer_overflowed is True
+
+    def test_a_permanent_loss_survives_the_database_coming_back(
+            self, store, engine):
+        """The failure that used to fix itself on paper.
+
+        A buffer that overflows drops events no flush can recover. When the
+        database returned, `_recovered` closed the outage, `is_degraded` went
+        false and the node reported itself healthy -- while the drill it
+        happened in could no longer be replayed in full. That is a false all
+        clear about the record, which is the thing invariant 8 forbids.
+        """
+        self._broken(store)
+        store.buffer_limit = 2
+        for seq in range(1, 8):
+            store.append(event(seq), now_ms=T0)
+        assert store.stats.dropped == 5
+
+        store.engine = engine
+        store.flush(T0 + 60_000)
+
+        assert store.pending == 0, "the buffered tail did land"
+        assert store.is_degraded is True, (
+            "the store reported itself healthy after losing evidence")
+
+    def test_the_loss_is_its_own_degradation_not_the_outage(self, store, engine):
+        # Separate targets, because the database returning ends one of them and
+        # not the other. Sharing a target would close the record of the loss.
+        self._broken(store)
+        store.buffer_limit = 1
+        for seq in range(1, 6):
+            store.append(event(seq), now_ms=T0)
+        store.engine = engine
+        store.flush(T0 + 60_000)
+
+        assert store.health.open_for(Component.DATABASE, "events") is None
+        still_open = store.health.open_for(Component.DATABASE, LOSS_TARGET)
+        assert still_open is not None
+        assert "4 event(s) dropped" in still_open.reason
+        assert "not recoverable" in still_open.reason
+
+    def test_losing_evidence_does_not_blind_the_system(self, store):
+        # It costs the record, not the view. Escalating it to blinding would
+        # make every camera's silence uninterpretable over a storage problem.
+        self._broken(store)
+        store.buffer_limit = 1
+        for seq in range(1, 4):
+            store.append(event(seq), now_ms=T0)
+        assert store.health.is_blind is False
+
+    def test_the_count_in_the_reason_keeps_up(self, store):
+        # An operator deciding whether to stop the drill needs the number, and
+        # a reason frozen at "1 event" while thousands go would understate it.
+        self._broken(store)
+        store.buffer_limit = 1
+        for seq in range(1, 4):
+            store.append(event(seq), now_ms=T0)
+        reason = store.health.open_for(Component.DATABASE, LOSS_TARGET).reason
+        assert "2 event(s) dropped" in reason
 
     def test_a_still_broken_flush_keeps_everything(self, store):
         self._broken(store)

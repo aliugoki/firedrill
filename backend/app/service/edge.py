@@ -59,7 +59,13 @@ class EdgeNode:
         state = self.ingestor.state
         report = {
             "site_id": self.site_id,
-            "degraded": state.health.is_degraded or bool(self.gaps),
+            # The event store is folded in here, not only into the `store`
+            # block below. A monitor alerts on this key; a node buffering
+            # 40,000 events into memory with a full disk behind it reported
+            # `degraded: false` at the top and the truth three levels down.
+            "degraded": (state.health.is_degraded or bool(self.gaps)
+                         or (self.events_store is not None
+                             and self.events_store.is_degraded)),
             "blind": state.health.is_blind,
             "open_outages": len(state.health.open_now()),
             "events_accepted": state.accepted,

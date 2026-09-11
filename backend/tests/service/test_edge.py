@@ -6,11 +6,19 @@ import json
 
 import pytest
 
+from app.core.events import Event, EventType, SourceKind
 from app.service.edge import build_edge
 
 T0 = 1_788_000_000_000
 SQUARE = [{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 0.0},
           {"x": 1.0, "y": 1.0}, {"x": 0.0, "y": 1.0}]
+
+
+def _an_event() -> Event:
+    return Event(tenant_id="t", site_id="site-1", drill_id="d1", source="cam-1",
+                 source_kind=SourceKind.CAMERA, seq=1,
+                 type=EventType.TRACK_UPDATED, ts_ms=T0, subject="gp-1",
+                 payload={"zone_id": "floor-1", "zone_kind": "FLOOR"})
 
 
 def geometry_file(tmp_path):
@@ -219,6 +227,27 @@ class TestDurability:
         store = node.health(T0)["store"]
         assert store["degraded"] is False
         assert store["buffered"] == 0
+
+    def test_a_buffering_store_degrades_the_node_at_the_top_level(
+            self, tmp_path):
+        # A monitor alerts on `degraded`, not on `store.degraded`. A node
+        # holding 40,000 events in memory behind a full disk used to answer
+        # `degraded: false` with the truth three levels down.
+        import sqlalchemy as sa
+
+        node = build_edge(self._with_database(tmp_path), now_ms=T0)
+        # A freshly built node has not connected to Redis yet, so start from a
+        # clean health log -- otherwise this passes on somebody else's outage.
+        node.ingestor.state.health.close_all(T0)
+        assert node.health(T0)["degraded"] is False
+
+        node.events_store.engine = sa.create_engine(
+            "postgresql+psycopg2://nobody@127.0.0.1:1/nothing")
+        node.events_store.append(_an_event(), now_ms=T0)
+
+        report = node.health(T0)
+        assert report["degraded"] is True
+        assert report["store"]["buffered"] == 1
 
     def test_a_password_has_no_default(self, tmp_path):
         # A password with a default is a password that ends up in production.

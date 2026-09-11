@@ -580,6 +580,29 @@ def create_app(registry: DrillRegistry | None = None,
                 "outstanding_gaps": len(state.tracker.outstanding_gaps()),
             })
 
+        store = app.state.events_store
+        if store is not None:
+            # The edge process reported this block and the API process did not,
+            # so a drill created and run through the API could buffer its whole
+            # event log into memory, drop the overflow, and answer this
+            # endpoint with nothing about it. `durable` alone says something is
+            # wrong without saying what, and an operator deciding whether to
+            # stop the drill needs the number of events at risk.
+            #
+            # Outside the running-drill block on purpose. Events buffered by a
+            # drill that has since completed are still unwritten evidence, and
+            # a report that only speaks while a drill is live would go quiet at
+            # the moment somebody goes looking for the record.
+            report["store"] = {
+                "written": store.stats.written,
+                "duplicates": store.stats.duplicates,
+                "buffered": store.pending,
+                "dropped": store.stats.dropped,
+                "degraded": store.is_degraded,
+            }
+            if store.is_degraded:
+                report["degraded"] = True
+
         return report
 
     if replica is not None:
