@@ -72,7 +72,7 @@ class DrillReport:
     max_s: float | None = None
     timing_samples: int = 0
     timing_coverage: float | None = None
-    timing_caveat: str | None = None
+    timing_caveats: tuple[str, ...] = ()
     accountability_completion_s: float | None = None
     slowest_floor: str | None = None
 
@@ -134,7 +134,8 @@ class DrillReport:
 
         lines += ["", "Evacuation times"]
         if self.p95_s is None:
-            lines.append(f"  none — {self.timing_caveat or 'no measurements'}")
+            for note in self.timing_caveats or ("no measurements",):
+                lines.append(f"  none — {note}")
         else:
             lines += [
                 f"  P50 {self._fmt(self.p50_s)}   P90 {self._fmt(self.p90_s)}   "
@@ -144,8 +145,8 @@ class DrillReport:
                 + (f" ({self.timing_coverage:.0%} coverage)"
                    if self.timing_coverage is not None else ""),
             ]
-            if self.timing_caveat:
-                lines.append(f"  caveat: {self.timing_caveat}")
+            for note in self.timing_caveats:
+                lines.append(f"  caveat: {note}")
         lines.append(
             f"  accountability settled  {self._fmt(self.accountability_completion_s)}")
         if self.slowest_floor:
@@ -293,7 +294,7 @@ def build_report(
         max_s=timing.building.maximum,
         timing_samples=timing.building.sample_size,
         timing_coverage=timing.building.coverage,
-        timing_caveat=timing.building.caveat(),
+        timing_caveats=timing.building.caveats(),
         accountability_completion_s=timing.accountability_completion_s,
         slowest_floor=slowest,
         warden_confirmations=len(confirmed_by_warden),

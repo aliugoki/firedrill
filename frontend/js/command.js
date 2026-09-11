@@ -165,7 +165,8 @@ function paintTiming() {
   const line = timingLine(timingFreshness.value, t);
   const host = document.getElementById('timing');
   host.innerHTML = `<div>${escape(line.text)}</div>` +
-    (line.caveat ? `<div class="caveat">${escape(line.caveat)}</div>` : '');
+    line.caveats.map(
+      (note) => `<div class="caveat">${escape(note)}</div>`).join('');
 }
 
 function paintZones() {

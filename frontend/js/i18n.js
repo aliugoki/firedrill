@@ -48,6 +48,7 @@ export const STRINGS = {
     'timing.p95': '95th percentile',
     'timing.target': 'Target',
     'timing.unreliable': 'Too few measurements to be a distribution',
+    'timing.coverage_low': 'of people produced no timing at all',
     'timing.none': 'No measurements yet',
     'timing.completion': 'Accountability settled after',
 
@@ -130,6 +131,7 @@ export const STRINGS = {
     'timing.p95': 'المئين ٩٥',
     'timing.target': 'الهدف',
     'timing.unreliable': 'القياسات قليلة جداً لتكوّن توزيعاً',
+    'timing.coverage_low': 'من الأشخاص لم يُنتجوا أي قياس',
     'timing.none': 'لا قياسات بعد',
     'timing.completion': 'اكتمل الحصر بعد',
 

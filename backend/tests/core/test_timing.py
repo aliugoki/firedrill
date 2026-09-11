@@ -90,12 +90,12 @@ class TestSummaryHonesty:
     def test_a_small_sample_is_marked_unreliable(self):
         summary = summarise(population([float(i) for i in range(10)]))
         assert summary.is_reliable is False
-        assert "not a distribution" in summary.caveat()
+        assert any("not a distribution" in c for c in summary.caveats())
 
     def test_a_large_sample_stands_on_its_own(self):
         summary = summarise(population([90.0 + i * 0.1 for i in range(200)]))
         assert summary.is_reliable is True
-        assert summary.caveat() is None
+        assert summary.caveats() == ()
 
     def test_the_reliability_threshold_is_where_p95_stops_being_the_max(self):
         small = [float(i) for i in range(MIN_SAMPLES_FOR_P95 - 1)]
@@ -107,7 +107,7 @@ class TestSummaryHonesty:
         summary = summarise([timing_of("EMP-1", None)])
         assert summary.p95 is None
         assert summary.sample_size == 0
-        assert "No measurements" in summary.caveat()
+        assert any("No measurements" in c for c in summary.caveats())
 
     def test_heavy_exclusion_is_surfaced_beside_the_number(self):
         # A good P95 achieved by losing track of the slow people is the most
@@ -116,7 +116,24 @@ class TestSummaryHonesty:
         untracked = [timing_of(f"LOST-{i}", None) for i in range(30)]
         summary = summarise(timed + untracked)
         assert summary.coverage == pytest.approx(0.5)
-        assert "excluded" in summary.caveat()
+        assert any("excluded" in c for c in summary.caveats())
+
+    def test_both_problems_are_said_when_both_apply(self):
+        """A small sample and a low coverage are different problems.
+
+        One says the percentile is weak; the other says it describes almost
+        nobody and may have improved by losing people. Returning the first
+        meant a drill where 92 of 100 produced no timing printed "Only 8
+        measurements" and never mentioned the 92.
+        """
+        timed = population([90.0 + i for i in range(8)])
+        untracked = [timing_of(f"LOST-{i}", None) for i in range(92)]
+        summary = summarise(timed + untracked)
+
+        notes = summary.caveats()
+        assert len(notes) == 2
+        assert any("not a distribution" in c for c in notes)
+        assert any("92% excluded" in c for c in notes)
 
     def test_exclusions_are_broken_down_by_reason(self):
         people = (

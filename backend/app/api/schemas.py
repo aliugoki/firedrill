@@ -93,7 +93,9 @@ class PercentilesOut(BaseModel):
     maximum: float | None
     reliable: bool
     coverage: float | None
-    caveat: str | None = None
+    caveats: list[str] = []
+    """Everything that qualifies these numbers. Plural because a small sample
+    and a low coverage are different problems and a reader needs both."""
 
 
 class TimingOut(BaseModel):

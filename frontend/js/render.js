@@ -81,12 +81,32 @@ export function staleness(freshness, t, now = Date.now()) {
   };
 }
 
-/** Percentiles, with the caveat that belongs beside them. */
+/**
+ * Percentiles, with everything that qualifies them.
+ *
+ * Plural, because a small sample and a low coverage are different problems. One
+ * says the percentile is weak; the other says it describes almost nobody and
+ * may have improved by losing the slow people, which is the way this number is
+ * most easily gamed. Showing one meant a drill where 92 of 100 people produced
+ * no timing said only "too few measurements" and never mentioned the 92.
+ *
+ * Worded here rather than passed through from the server, because the server's
+ * caveats are English prose and this screen is read in Arabic too.
+ */
 export function timingLine(timing, t) {
-  if (!timing || !timing.building) return { text: t('timing.none'), caveat: null };
+  if (!timing || !timing.building) {
+    return { text: t('timing.none'), caveats: [] };
+  }
   const b = timing.building;
+  const caveats = [];
+  if (b.reliable === false) caveats.push(t('timing.unreliable'));
+  if (typeof b.coverage === 'number' && b.coverage < 0.9) {
+    const missing = Math.round((1 - b.coverage) * 100);
+    caveats.push(`${missing}% ${t('timing.coverage_low')}`);
+  }
+
   if (b.p95 === null || b.p95 === undefined) {
-    return { text: t('timing.none'), caveat: b.caveat };
+    return { text: t('timing.none'), caveats };
   }
   const p50 = b.p50 === null ? '—' : `${b.p50.toFixed(1)}s`;
   const p95 = `${b.p95.toFixed(1)}s`;
@@ -94,7 +114,7 @@ export function timingLine(timing, t) {
     text: `${t('timing.p50')} ${p50} · ${t('timing.p95')} ${p95} · ` +
           `${t('timing.target')} ${timing.target_p95_s}s`,
     meetsTarget: timing.meets_target,
-    caveat: b.reliable ? b.caveat : t('timing.unreliable'),
+    caveats,
   };
 }
 

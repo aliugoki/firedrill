@@ -96,23 +96,33 @@ class PercentileSummary:
             return None
         return self.sample_size / total
 
-    def caveat(self) -> str | None:
-        """One sentence to print beside the number, or None if it stands alone."""
+    def caveats(self) -> tuple[str, ...]:
+        """Everything that belongs beside the number, not the first of them.
+
+        A small sample and a low coverage are different problems with different
+        responses -- one says the percentile is weak, the other says it
+        describes almost nobody and may have improved by losing people, which
+        is the gaming vector this module exists to make visible. Returning the
+        first meant a drill where 92 of 100 people produced no timing printed
+        "Only 8 measurements" and never mentioned the 92.
+        """
         if self.sample_size == 0:
-            return "No measurements: nobody had both a start and an arrival."
+            return ("No measurements: nobody had both a start and an arrival.",)
+
+        notes: list[str] = []
         if not self.is_reliable:
-            return (
-                f"Only {self.sample_size} measurements. The 95th percentile here "
-                f"is close to the slowest individual, not a distribution."
+            notes.append(
+                f"Only {self.sample_size} measurements. The 95th percentile "
+                f"here is close to the slowest individual, not a distribution."
             )
         cov = self.coverage
         if cov is not None and cov < 0.9:
-            return (
+            notes.append(
                 f"{self.excluded} of {self.sample_size + self.excluded} people "
                 f"produced no timing ({(1 - cov) * 100:.0f}% excluded). The "
                 "percentiles describe only those who were tracked end to end."
             )
-        return None
+        return tuple(notes)
 
 
 @dataclass(frozen=True, slots=True)

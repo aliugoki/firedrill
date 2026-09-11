@@ -119,23 +119,51 @@ describe('staleness', () => {
 
 describe('timing', () => {
   it('reports no measurements rather than zero', () => {
-    const line = timingLine({ building: { p95: null, p50: null, reliable: false,
-      caveat: 'No measurements: nobody had both a start and an arrival.' } }, t);
+    const line = timingLine({
+      building: { p95: null, p50: null, reliable: false, coverage: 0 } }, t);
     assert.equal(line.text, 'No measurements yet');
-    assert.match(line.caveat, /No measurements/);
   });
 
-  it('replaces the caveat when the sample is too small to be a distribution', () => {
+  it('says the sample is too small to be a distribution', () => {
     const line = timingLine({
-      building: { p50: 60, p95: 114, reliable: false, caveat: null },
+      building: { p50: 60, p95: 114, reliable: false, coverage: 1 },
       target_p95_s: 120,
     }, t);
-    assert.match(line.caveat, /Too few measurements/);
+    assert.ok(line.caveats.some((c) => /Too few measurements/.test(c)));
+  });
+
+  it('says both when the sample is small and most people are missing', () => {
+    // Different problems: one says the percentile is weak, the other says it
+    // describes almost nobody and may have improved by losing the slow people.
+    const line = timingLine({
+      building: { p50: 60, p95: 114, reliable: false, coverage: 0.08 },
+      target_p95_s: 120,
+    }, t);
+    assert.equal(line.caveats.length, 2);
+    assert.ok(line.caveats.some((c) => /Too few measurements/.test(c)));
+    assert.ok(line.caveats.some((c) => /92%/.test(c)));
+  });
+
+  it('is silent when the numbers stand on their own', () => {
+    const line = timingLine({
+      building: { p50: 60, p95: 114, reliable: true, coverage: 0.98 },
+      target_p95_s: 120,
+    }, t);
+    assert.deepEqual(line.caveats, []);
+  });
+
+  it('words them in the reader language', () => {
+    const arabic = createTranslator('ar');
+    const line = timingLine({
+      building: { p50: 60, p95: 114, reliable: false, coverage: 0.5 },
+      target_p95_s: 120,
+    }, arabic);
+    assert.ok(line.caveats.every((c) => !/measurements/.test(c)));
   });
 
   it('shows the target beside the result', () => {
     const line = timingLine({
-      building: { p50: 60, p95: 114, reliable: true, caveat: null },
+      building: { p50: 60, p95: 114, reliable: true, coverage: 1 },
       target_p95_s: 120, meets_target: true,
     }, t);
     assert.match(line.text, /114\.0s/);

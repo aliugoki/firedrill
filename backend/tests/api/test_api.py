@@ -358,7 +358,8 @@ class TestTiming:
                             headers=VIEWER).json()
         assert timing["building"]["p95"] is None
         assert timing["meets_target"] is None
-        assert "No measurements" in timing["building"]["caveat"]
+        assert any("No measurements" in c
+                   for c in timing["building"]["caveats"])
 
     def test_the_target_is_reported_alongside_the_result(self, client):
         drill_id = make_drill(client)

@@ -524,7 +524,7 @@ def _percentiles(summary) -> schemas.PercentilesOut:
         excluded=summary.excluded, p50=summary.p50, p90=summary.p90,
         p95=summary.p95, p99=summary.p99, maximum=summary.maximum,
         reliable=summary.is_reliable, coverage=summary.coverage,
-        caveat=summary.caveat())
+        caveats=list(summary.caveats()))
 
 
 def _evidence(item) -> schemas.EvidenceOut:
