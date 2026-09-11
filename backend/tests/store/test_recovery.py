@@ -70,6 +70,7 @@ def walk_someone_to_assembly(drill, gid="gp-1", emp="EMP-000", start=T0 + 1_000)
         events.append(camera_event(
             seq, gid, EventType.FACE_OBSERVED,
             {"candidate_id": emp, "score": 0.85, "margin": 0.4, "quality": 0.9,
+             "association": "SHARED_TRACK",
              "camera_id": "cam-9"}, start + i * 100))
     for i in range(2):
         seq += 1

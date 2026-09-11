@@ -40,7 +40,8 @@ def confirmed_at_assembly(ingestor: Ingestor, gid: str, emp: str,
     for i in range(3):
         ingestor.feed(ev(EventType.FACE_OBSERVED, start + i * 100, gid,
                          {"candidate_id": emp, "score": 0.85, "margin": 0.4,
-                          "quality": 0.9, "camera_id": "cam-9"}))
+                          "quality": 0.9, "camera_id": "cam-9",
+                          "association": "SHARED_TRACK"}))
     for i in range(2):
         ingestor.feed(ev(EventType.TRACK_UPDATED, start + 10_000 * (i + 1), gid,
                          {"zone_id": "assembly-north", "zone_kind": "ASSEMBLY",
@@ -74,11 +75,13 @@ class TestResolution:
         for i in range(3):
             ingestor.feed(ev(EventType.FACE_OBSERVED, T0 + i * 100, "gp-1",
                              {"candidate_id": "EMP-1", "score": 0.85,
-                              "margin": 0.4, "quality": 0.9}))
+                              "margin": 0.4, "quality": 0.9,
+                              "association": "SHARED_TRACK"}))
         for i in range(3):
             ingestor.feed(ev(EventType.FACE_OBSERVED, T0 + 5_000 + i * 100, "gp-1",
                              {"candidate_id": "EMP-2", "score": 0.85,
-                              "margin": 0.4, "quality": 0.9}))
+                              "margin": 0.4, "quality": 0.9,
+                              "association": "SHARED_TRACK"}))
         roster = roster_of(("EMP-1", "A", "north", "Eng", True),
                            ("EMP-2", "B", "north", "Eng", True))
         resolutions = resolve_identities(ingestor.state, roster)
@@ -135,7 +138,8 @@ class TestBoardCounts:
         for i in range(3):
             ingestor.feed(ev(EventType.FACE_OBSERVED, T0 + i * 100, "gp-1",
                              {"candidate_id": "EMP-1", "score": 0.85,
-                              "margin": 0.4, "quality": 0.9}))
+                              "margin": 0.4, "quality": 0.9,
+                              "association": "SHARED_TRACK"}))
         ingestor.feed(ev(EventType.TRACK_UPDATED, T0 + 5_000, "gp-1",
                          {"zone_id": "floor-3-open", "zone_kind": "FLOOR",
                           "camera_id": "cam-7"}))
@@ -200,7 +204,8 @@ class TestPriorityList:
         for i in range(3):
             ingestor.feed(ev(EventType.FACE_OBSERVED, T0 + i * 100, "gp-2",
                              {"candidate_id": "EMP-2", "score": 0.85,
-                              "margin": 0.4, "quality": 0.9}))
+                              "margin": 0.4, "quality": 0.9,
+                              "association": "SHARED_TRACK"}))
         ingestor.feed(ev(EventType.TRACK_UPDATED, T0 + 1_000, "gp-2",
                          {"zone_id": "floor-2-open", "zone_kind": "FLOOR",
                           "camera_id": "cam-2"}))

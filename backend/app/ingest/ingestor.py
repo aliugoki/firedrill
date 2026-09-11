@@ -42,6 +42,11 @@ from app.core.presence_fsm import (
     ZoneSighting,
 )
 from app.ingest.bottlenecks import BottleneckTracker
+from app.core.fusion import (
+    DEFAULT_ASSOCIATION_WEIGHTS,
+    AssociationKind,
+    association_from,
+)
 from app.ingest.health import Component, HealthLog
 
 
@@ -260,14 +265,20 @@ class Ingestor:
         subject, payload = event.subject, event.payload
         if not subject:
             return self._refuse(event, "no track is named")
+        association = association_from(payload)
         observation = FaceObservation(
             ts_ms=event.ts_ms, candidate_id=payload.get("candidate_id"),
             score=payload.get("score", -1.0), margin=payload.get("margin", -1.0),
             quality=payload.get("quality", 1.0),
             pose_deviation_deg=payload.get("pose_deviation_deg", 0.0),
-            track_confidence=payload.get("track_confidence", 1.0),
+            # Scaled by how the face was attached to the body, which is the
+            # weight half of the two-part rule in `fusion.py`. The structural
+            # half is `association_is_strong` below; the module's own docstring
+            # explains why a multiplier alone is not safe.
+            track_confidence=(payload.get("track_confidence", 1.0)
+                              * DEFAULT_ASSOCIATION_WEIGHTS[association]),
             camera_id=payload.get("camera_id"),
-            association_is_strong=payload.get("association_is_strong", True))
+            association_is_strong=association is AssociationKind.SHARED_TRACK)
 
         verdict = gate(observation, self.identity_config)
         admissible = verdict is RejectionReason.ACCEPTED
@@ -283,6 +294,7 @@ class Ingestor:
             summary=(f"face matched {payload.get('candidate_id')} "
                      f"score {payload.get('score', -1.0):.2f} "
                      f"margin {payload.get('margin', -1.0):.2f}"
+                     + f", {_ASSOCIATION_WORDS[association]}"
                      + ("" if admissible else f" — not admissible: {verdict.value}")))
 
         if transition is None:
@@ -342,6 +354,19 @@ class Ingestor:
             subject=event.subject, kind=EvidenceKind.WARDEN_NOTE,
             ts_ms=event.ts_ms, stance=Stance.CONTEXT, source=event.source,
             summary=event.payload.get("note", ""))
+
+
+#: What each strength reads like in an evidence trail. An operator asking why
+#: a face was not admitted deserves the reason in words, and "the pipeline did
+#: not say how the face was attached to the body" is a different problem from
+#: "it said, and the answer was geometry".
+_ASSOCIATION_WORDS: dict[AssociationKind, str] = {
+    AssociationKind.SHARED_TRACK: "face and body on one track",
+    AssociationKind.SPATIAL_IOU: "face attached to the body by box overlap",
+    AssociationKind.TEMPORAL_ONLY: "face and body only seen together",
+    AssociationKind.NONE: "the pipeline did not say how the face was attached "
+                          "to a body",
+}
 
 
 def _component_from(payload: dict) -> Component:

@@ -390,7 +390,8 @@ class TestTheBoardSeesWhatTheEdgeProcessWroteDown:
             type=EventType.FACE_OBSERVED, ts_ms=T0 + seq * 1_000,
             subject=subject,
             payload={"candidate_id": emp_id, "score": 0.92, "margin": 0.3,
-                     "quality": 0.9, "camera_id": "cam-9"})
+                     "quality": 0.9, "camera_id": "cam-9",
+                     "association": "SHARED_TRACK"})
 
     def running(self, client):
         made = client.post("/api/evac/drills", headers=OPERATOR,

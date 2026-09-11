@@ -109,6 +109,41 @@ class Association:
         return "face could not be attached to any tracked body"
 
 
+def association_from(payload: dict) -> AssociationKind:
+    """How a producer's event says the face was attached to a body.
+
+    The ingest boundary read `payload.get("association_is_strong", True)`, so a
+    producer that said nothing got the strongest possible reading and
+    `WEAK_ASSOCIATION` could never fire for it. That is the inverse of
+    invariant 1: absence of evidence was treated as the best evidence, in the
+    one place this module exists to guard.
+
+    Three shapes are accepted, and the order matters:
+
+      * `association` naming one of the four kinds, which is what a pipeline
+        built on `fuse` emits;
+      * `association_is_strong`, the boolean the simulator and the calibration
+        harness already emit -- False means the producer said it is not a
+        shared track, and geometry correlation is the thing it would be;
+      * neither, which is `NONE`. Not a claim that there was no body, but no
+        claim at all, and an unsupported face is not identity evidence.
+    """
+    named = payload.get("association")
+    if named is not None:
+        try:
+            return AssociationKind(str(named).upper())
+        except ValueError:
+            # A producer naming a strength this build does not know is a
+            # producer whose association cannot be trusted, not one to be given
+            # the benefit of the doubt.
+            return AssociationKind.NONE
+    stated = payload.get("association_is_strong")
+    if stated is None:
+        return AssociationKind.NONE
+    return (AssociationKind.SHARED_TRACK if stated
+            else AssociationKind.SPATIAL_IOU)
+
+
 def iou(a: tuple[float, float, float, float],
         b: tuple[float, float, float, float]) -> float:
     """Intersection over union of two xyxy boxes."""
