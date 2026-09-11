@@ -27,11 +27,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from app.ingest.replication import TransportUnavailable
+from app.ingest.replication import ReplicationRejected, TransportUnavailable
 
-
-class ReplicationRejected(Exception):
-    """Central refused the credential. Retrying will not help; a human must."""
+#: Re-exported: this is where a reader of the transport looks for it, and the
+#: definition lives in `replication` so `Replicator.flush` can use `isinstance`.
+__all__ = ["HttpTransport", "ReplicationRejected"]
 
 
 @dataclass

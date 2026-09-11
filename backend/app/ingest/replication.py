@@ -43,6 +43,19 @@ class TransportUnavailable(Exception):
     """Central is unreachable. The batch stays buffered; nothing is dropped."""
 
 
+class ReplicationRejected(Exception):
+    """Central refused the credential. Retrying will not help; a human must.
+
+    Defined here rather than beside the HTTP transport so `flush` can test for
+    it with `isinstance`. It used to compare `type(exc).__name__` against a
+    string, to avoid importing the transport into this module -- which meant
+    renaming the class would silently stop a wrong credential from blocking,
+    and a wrong credential that does not block retries until the disk fills.
+    The dependency already runs the other way: the transport imports this
+    module.
+    """
+
+
 @dataclass
 class Outbox:
     """Durable local buffer. A thin, testable wrapper over the vendored store.
@@ -204,7 +217,7 @@ class Replicator:
         try:
             self.transport.send([record for _, record in batch])
         except Exception as exc:
-            if type(exc).__name__ == "ReplicationRejected":
+            if isinstance(exc, ReplicationRejected):
                 self.blocked_reason = str(exc)
                 self.stats.last_failure_reason = self.blocked_reason
                 self.stats.failed_flushes += 1
