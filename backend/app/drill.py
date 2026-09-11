@@ -32,6 +32,7 @@ from app.core.ledger import Explanation
 from app.core.presence_fsm import PROVISIONAL_CONFIG as PRESENCE_CONFIG, PresenceConfig
 from app.core.roster import RosterSnapshot
 from app.core.timing import DrillTiming, measure, summarise, summarise_by
+from app.ingest.health import Component
 from app.ingest.ingestor import Ingestor
 from app.ingest.projections import LiveBoard, build_board, resolve_identities
 from app.warden.actions import WardenAction, to_event
@@ -142,7 +143,36 @@ class Drill:
         if self.events_store is not None:
             for event in events:
                 self.events_store.append(event)
+            self._mirror_store_health(events)
         return self.ingestor.feed_batch(events)
+
+    def _mirror_store_health(self, events: list[Event]) -> None:
+        """Put the store's trouble into this drill's health log.
+
+        The edge node hands its store the node's own health log, so a database
+        outage there lands in the report. The API process cannot: it has one
+        store and a drill per evacuation, and a shared log would attribute one
+        drill's outage to the next. So the drill mirrors what the store says
+        about itself into the log the report actually reads.
+
+        Without this, a drill run through the API could buffer its entire event
+        log into memory, drop the overflow, and produce a report whose System
+        health section said no outages and nothing blind. The board would be
+        right and the record behind it would not exist.
+        """
+        if not events:
+            return
+        # Drill time, not wall clock. The health log's intervals are read back
+        # against event timestamps, and mixing the two would make
+        # `was_degraded_at` answer about a moment that never happened.
+        ts_ms = max(event.ts_ms for event in events)
+        health = self.ingestor.state.health
+        if self.events_store.is_degraded:
+            health.degrade(
+                Component.DATABASE, "events", ts_ms,
+                self.events_store.stats.last_error or "unreachable")
+        else:
+            health.recover(Component.DATABASE, "events", ts_ms)
 
     def record_warden_action(self, action: WardenAction) -> Event:
         """Apply a warden's assertion to both the warden state and the stream.

@@ -561,3 +561,105 @@ class TestWhyThePeopleWithNoTimingHaveNone:
         summary = summarise(people)
         assert summary.exclusion_reasons == {
             ExclusionReason.NEVER_OBSERVED.value: 1}
+
+
+class TestADrillNobodyCanReplay:
+    """Invariant 6, checked at the gate rather than assumed.
+
+    "Every accountability decision is reconstructable from stored events" is a
+    property of the record, not of the logic, and a database outage long enough
+    to fill the event buffer breaks it silently. The board is still right --
+    every event was folded whether or not the database took it -- so nothing in
+    the numbers looks wrong. What is gone is anyone's ability to check them.
+    """
+
+    def test_a_drill_with_dropped_events_cannot_be_signed_off(self):
+        result = validate(**{**CLEAN, "events_dropped": 12})
+        assert result.outcome is Outcome.INCONCLUSIVE
+        assert "cannot be replayed" in result.summary()
+
+    def test_it_is_missing_evidence_and_not_a_failure(self):
+        # Calling it FAIL would blame the accountability logic for a storage
+        # outage. The logic did nothing wrong; nobody can confirm that.
+        result = validate(**{**CLEAN, "events_dropped": 1})
+        assert result.missing_evidence
+        assert not result.safety_failures
+        assert not result.disagreements
+
+    def test_a_safety_failure_still_outranks_it(self):
+        result = validate(**{**CLEAN, "events_dropped": 12, "false_accounted": 1})
+        assert result.outcome is Outcome.FAIL
+        assert "not confirmed by any warden" in result.summary()
+
+    def test_a_complete_record_says_so_rather_than_staying_silent(self):
+        # The check appears on every drill, passing. A line that shows up only
+        # on bad days is a line nobody knows to look for.
+        result = validate(**CLEAN)
+        record = [c for c in result.checks
+                  if c.criterion is Criterion.RECORD_COMPLETE]
+        assert len(record) == 1
+        assert record[0].passed is True
+        assert record[0].measured == "0 dropped"
+
+
+class TestTheReportCountsWhatTheStoreLost:
+
+    class LosingStore:
+        """A store whose database went away and whose buffer filled."""
+
+        def __init__(self, dropped):
+            from app.store.events import StoreStats
+
+            self.stats = StoreStats(dropped=dropped)
+            self.appended = 0
+
+        def append(self, event, now_ms=None):
+            self.appended += 1
+            return True
+
+        @property
+        def pending(self):
+            return 0
+
+        @property
+        def is_degraded(self):
+            return self.stats.dropped > 0
+
+    def test_the_number_reaches_the_report(self):
+        drill = drill_with(people=2)
+        drill.events_store = self.LosingStore(dropped=9)
+        confirm(drill, "emp:EMP-000")
+
+        report = build_report(drill, now_ms=T0 + 120_000)
+        assert report.events_dropped == 9
+
+    def test_the_safety_officer_is_told_in_words(self):
+        drill = drill_with(people=2)
+        drill.events_store = self.LosingStore(dropped=9)
+        confirm(drill, "emp:EMP-000")
+
+        text = "\n".join(build_report(drill, now_ms=T0 + 120_000).render())
+        assert "events lost for good    9" in text
+        assert "cannot be replayed from the stored record" in text
+
+    def test_a_drill_with_no_store_has_dropped_nothing(self):
+        # It never promised to keep anything. `is_durable` is where that shows.
+        report = build_report(drill_with(people=2), now_ms=T0 + 120_000)
+        assert report.events_dropped == 0
+        assert "events lost for good    0" in "\n".join(report.render())
+
+    def test_a_losing_store_puts_the_outage_in_the_drills_health_log(self):
+        """The API process has one store and a drill per evacuation.
+
+        It cannot hand the store a drill's health log, so without the drill
+        mirroring what the store says about itself, a report's System health
+        section read "no outages" through an entire database failure.
+        """
+        drill = drill_with(people=2)
+        drill.events_store = self.LosingStore(dropped=3)
+        confirm(drill, "emp:EMP-000")
+
+        report = build_report(drill, now_ms=T0 + 120_000)
+        assert report.outages >= 1
+        # Storage costs the record, not the view.
+        assert report.blind_fraction == 0.0

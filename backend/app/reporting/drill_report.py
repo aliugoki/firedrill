@@ -97,6 +97,11 @@ class DrillReport:
     blind_fraction: float = 0.0
     longest_blind_s: float = 0.0
     health_caveat: str | None = None
+    events_dropped: int = 0
+    """Events that never reached the database and are not coming back. Zero on
+    every drill so far, and the report says so out loud rather than omitting the
+    line, because a section that appears only on bad days is a section nobody
+    knows to look for."""
 
     validation: Validation | None = None
     thresholds_calibrated: bool = False
@@ -203,7 +208,17 @@ class DrillReport:
             f"  outages                 {self.outages}",
             f"  blind for               {self.blind_fraction:.0%} of the drill",
             f"  longest blind period    {self._fmt(self.longest_blind_s)}",
+            f"  events lost for good    {self.events_dropped}",
         ]
+        if self.events_dropped:
+            lines += [
+                "",
+                f"  WARNING: {self.events_dropped} event(s) never reached the "
+                "database and cannot be recovered.",
+                "           This drill cannot be replayed from the stored "
+                "record, so no number above",
+                "           can be checked independently of this report.",
+            ]
         if self.health_caveat:
             lines.append(f"  {self.health_caveat}")
 
@@ -294,6 +309,13 @@ def build_report(
 
     overrides = len(audit.overrides(drill.drill_id)) if audit else 0
 
+    # A store that dropped events makes this report unverifiable, and until now
+    # the number lived only in `StoreStats`. A drill with no store at all has
+    # dropped nothing -- it never promised to keep anything -- and says so
+    # through `is_durable` instead.
+    dropped = (drill.events_store.stats.dropped
+               if drill.events_store is not None else 0)
+
     validation = validate(
         false_accounted=len(false_accounted),
         false_unaccounted=len(false_unaccounted),
@@ -306,6 +328,7 @@ def build_report(
         p95_s=timing.building.p95,
         p95_reliable=timing.building.is_reliable,
         blind_fraction=board.health.blind_fraction,
+        events_dropped=dropped,
         thresholds=thresholds)
 
     return DrillReport(
@@ -348,6 +371,7 @@ def build_report(
         blind_fraction=board.health.blind_fraction,
         longest_blind_s=board.health.longest_blind_ms / 1000,
         health_caveat=board.health.caveat(),
+        events_dropped=dropped,
         validation=validation,
         thresholds_calibrated=drill.identity_config.calibrated,
     )

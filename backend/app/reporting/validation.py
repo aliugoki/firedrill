@@ -39,6 +39,11 @@ class Criterion(str, Enum):
     """The system marked someone safe whom a warden did not confirm. The only
     criterion whose failure is a safety failure rather than a quality one."""
 
+    RECORD_COMPLETE = "RECORD_COMPLETE"
+    """Events were dropped, so the drill cannot be replayed from what was
+    stored. Invariant 6 does not hold for this run, and a validation nobody can
+    re-derive is not a validation."""
+
     SWEEPS_COMPLETED = "SWEEPS_COMPLETED"
     HEADCOUNTS_TAKEN = "HEADCOUNTS_TAKEN"
     HEADCOUNTS_AGREE = "HEADCOUNTS_AGREE"
@@ -63,10 +68,17 @@ class Criterion(str, Enum):
 #: It only ever decides the outcome alone on a small roster. Too few samples
 #: from a large one means people went untracked, and `COVERAGE_SUFFICIENT`
 #: fails too -- also evidentiary, same verdict.
+#: `RECORD_COMPLETE` is evidentiary rather than a failure, and the distinction
+#: is worth being precise about. Dropping events does not mean the system got
+#: anything wrong -- the board was folded from every event, whether or not the
+#: database took it -- so calling it FAIL would blame the accountability logic
+#: for a storage outage. What it means is that nobody can check. A drill signed
+#: off on numbers that cannot be re-derived from the stored record is a drill
+#: whose sign-off rests on the report being believed.
 EVIDENTIARY: frozenset[Criterion] = frozenset({
     Criterion.SWEEPS_COMPLETED, Criterion.HEADCOUNTS_TAKEN,
     Criterion.COVERAGE_SUFFICIENT, Criterion.SYSTEM_MOSTLY_SIGHTED,
-    Criterion.P95_MEASURABLE,
+    Criterion.P95_MEASURABLE, Criterion.RECORD_COMPLETE,
 })
 
 #: The one whose failure is a safety failure.
@@ -184,6 +196,7 @@ def validate(
     p95_s: float | None,
     p95_reliable: bool,
     blind_fraction: float,
+    events_dropped: int = 0,
     thresholds: Thresholds | None = None,
 ) -> Validation:
     """Judge a drill.
@@ -204,6 +217,18 @@ def validate(
                 if false_accounted == 0 else
                 f"{false_accounted} person(s) were marked accounted by the "
                 "system and not confirmed by any warden"),
+    ))
+
+    checks.append(Check(
+        criterion=Criterion.RECORD_COMPLETE,
+        passed=events_dropped == 0,
+        measured=f"{events_dropped} dropped",
+        detail=("every event this drill produced reached the database"
+                if events_dropped == 0 else
+                f"{events_dropped} event(s) were dropped while the database was "
+                "unreachable and the buffer was full; this drill cannot be "
+                "replayed from what was stored, so no number in this report can "
+                "be independently re-derived"),
     ))
 
     completion = (sweeps_completed / sweeps_expected) if sweeps_expected else 0.0
