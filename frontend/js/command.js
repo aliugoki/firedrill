@@ -12,8 +12,8 @@
 import { Api, Freshness } from './api.js';
 import { createTranslator, isRtl, formatDuration } from './i18n.js';
 import {
-  drillControl, exitPressure, healthLine, orderForWarden, staleness, tiles,
-  timingLine, verdict,
+  drillControl, escapeHtml, exitPressure, healthLine, orderForWarden,
+  staleness, tiles, timingLine, verdict,
 } from './render.js';
 
 const params = new URLSearchParams(location.search);
@@ -112,7 +112,7 @@ function paint() {
   const board = boardFreshness.value;
   const banner = staleness(boardFreshness, t);
   const host = document.getElementById('stale-banner');
-  host.innerHTML = banner ? `<div class="stale">${escape(banner.text)}</div>` : '';
+  host.innerHTML = banner ? `<div class="stale">${escapeHtml(banner.text)}</div>` : '';
 
   const v = verdict(board, t);
   const section = document.getElementById('verdict');
@@ -120,12 +120,12 @@ function paint() {
   section.querySelector('h2').textContent = v.headline;
   section.querySelector('ul').innerHTML = v.clear
     ? ''
-    : v.reasons.map((r) => `<li>${escape(r)}</li>`).join('');
+    : v.reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join('');
 
   document.getElementById('tiles').innerHTML = tiles(board, t)
-    .map((tile) => `<div class="tile ${tile.tone}">
+    .map((tile) => `<div class="tile ${escapeHtml(tile.tone)}">
         <div class="n">${tile.value ?? '—'}</div>
-        <div class="k">${escape(tile.label)}</div>
+        <div class="k">${escapeHtml(tile.label)}</div>
       </div>`)
     .join('');
 
@@ -165,7 +165,7 @@ function paintDrillControl(board) {
 
   const host = document.getElementById('stale-banner');
   if (blocking.length) {
-    host.innerHTML += `<div class="stale">${escape(t('drill.still_outstanding'))}: `
+    host.innerHTML += `<div class="stale">${escapeHtml(t('drill.still_outstanding'))}: `
       + blocking.map(escape).join('; ') + '</div>';
   }
 }
@@ -193,22 +193,22 @@ function paintPriority(board) {
   const rows = orderForWarden((board?.rows || []).filter(
     (r) => r.state !== 'ACCOUNTED'));
   if (!rows.length) {
-    host.innerHTML = `<div class="empty">${escape(t('board.no_priority'))}</div>`;
+    host.innerHTML = `<div class="empty">${escapeHtml(t('board.no_priority'))}</div>`;
     return;
   }
   host.innerHTML = rows.map((row) => `
     <div class="row">
-      <span class="chip ${escape(row.colour)}">${escape(t('state.' + row.state, row.state))}</span>
+      <span class="chip ${escapeHtml(row.colour)}">${escapeHtml(t('state.' + row.state, row.state))}</span>
       <div class="who">
-        <div class="name">${escape(row.display_name)}</div>
-        <div class="meta">${escape(row.department || '')}${
+        <div class="name">${escapeHtml(row.display_name)}</div>
+        <div class="meta">${escapeHtml(row.department || '')}${
           row.last_zone_id
-            ? ` · ${escape(t('board.last_seen'))} ${escape(row.last_zone_id)}${
-                row.last_camera_id ? ` (${escape(row.last_camera_id)})` : ''}`
+            ? ` · ${escapeHtml(t('board.last_seen'))} ${escapeHtml(row.last_zone_id)}${
+                row.last_camera_id ? ` (${escapeHtml(row.last_camera_id)})` : ''}`
             : ''}</div>
-        <div class="reason">${escape(row.reason)}</div>
+        <div class="reason">${escapeHtml(row.reason)}</div>
       </div>
-      <button data-explain="${escape(row.person_ref)}">?</button>
+      <button data-explain="${escapeHtml(row.person_ref)}">?</button>
     </div>`).join('');
 
   host.querySelectorAll('[data-explain]').forEach((button) => {
@@ -219,10 +219,10 @@ function paintPriority(board) {
 function paintTiming() {
   const line = timingLine(timingFreshness.value, t);
   const host = document.getElementById('timing');
-  host.innerHTML = `<div>${escape(line.text)}</div>`
-    + (line.settled ? `<div>${escape(line.settled)}</div>` : '')
+  host.innerHTML = `<div>${escapeHtml(line.text)}</div>`
+    + (line.settled ? `<div>${escapeHtml(line.settled)}</div>` : '')
     + line.caveats.map(
-      (note) => `<div class="caveat">${escape(note)}</div>`).join('');
+      (note) => `<div class="caveat">${escapeHtml(note)}</div>`).join('');
 }
 
 function paintZones() {
@@ -234,15 +234,15 @@ function paintZones() {
   }
   host.innerHTML = panels.map((panel) => `
     <div class="row">
-      <span class="chip ${panel.is_clean ? 'GREEN' : 'YELLOW'}">${
+      <span class="chip ${escapeHtml(panel.is_clean ? 'GREEN' : 'YELLOW')}">${
         panel.is_clean ? '✓' : '…'}</span>
       <div class="who">
-        <div class="name">${escape(panel.zone_id)}</div>
+        <div class="name">${escapeHtml(panel.zone_id)}</div>
         <div class="meta">${panel.confirmed}/${panel.expected} ${
-          escape(t('warden.confirmed'))} · ${panel.outstanding} ${
-          escape(t('warden.outstanding'))}</div>
+          escapeHtml(t('warden.confirmed'))} · ${panel.outstanding} ${
+          escapeHtml(t('warden.outstanding'))}</div>
         ${(panel.blocking || []).map(
-          (reason) => `<div class="reason">${escape(reason)}</div>`).join('')}
+          (reason) => `<div class="reason">${escapeHtml(reason)}</div>`).join('')}
       </div>
     </div>`).join('');
 }
@@ -252,30 +252,30 @@ function paintExits() {
   const host = document.getElementById('exits');
 
   const measured = (value, suffix) => (value === null || value === undefined
-    ? `<span class="caveat">${escape(t('bottleneck.not_measured'))}</span>`
+    ? `<span class="caveat">${escapeHtml(t('bottleneck.not_measured'))}</span>`
     : `${value.toFixed(1)}${suffix}`);
 
-  host.innerHTML = `<div>${escape(headline)}</div>`
+  host.innerHTML = `<div>${escapeHtml(headline)}</div>`
     + rows.map((row) => `
       <div class="row">
-        <span class="chip ${row.limiting ? 'ORANGE' : 'GREEN'}">${
+        <span class="chip ${escapeHtml(row.limiting ? 'ORANGE' : 'GREEN')}">${
           row.queue}</span>
         <div class="who">
-          <div class="name">${escape(row.zoneId)}</div>
-          <div class="meta">${row.through} ${escape(t('bottleneck.through'))}
-            · ${row.queue} ${escape(t('bottleneck.queue'))}</div>
-          <div class="reason">${escape(t('bottleneck.dwell'))} ${
+          <div class="name">${escapeHtml(row.zoneId)}</div>
+          <div class="meta">${row.through} ${escapeHtml(t('bottleneck.through'))}
+            · ${row.queue} ${escapeHtml(t('bottleneck.queue'))}</div>
+          <div class="reason">${escapeHtml(t('bottleneck.dwell'))} ${
             measured(row.medianDwell, 's')}</div>
         </div>
       </div>`).join('')
     + caveats.map(
-      (note) => `<div class="caveat">${escape(note)}</div>`).join('');
+      (note) => `<div class="caveat">${escapeHtml(note)}</div>`).join('');
 }
 
 async function openDrawer(personRef) {
   const host = document.getElementById('drawer-host');
   host.innerHTML = `<div class="scrim"></div><aside class="drawer">
-    <h3>${escape(personRef)}</h3><pre>loading…</pre></aside>`;
+    <h3>${escapeHtml(personRef)}</h3><pre>loading…</pre></aside>`;
   host.querySelector('.scrim').addEventListener('click', () => { host.innerHTML = ''; });
 
   // The element is captured before the request, not looked up after it. Asking
@@ -291,12 +291,6 @@ async function openDrawer(personRef) {
   } catch (error) {
     if (body.isConnected) body.textContent = `could not load: ${error.message}`;
   }
-}
-
-function escape(value) {
-  return String(value ?? '').replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]));
 }
 
 applyLanguage();

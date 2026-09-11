@@ -181,6 +181,25 @@ export function orderForWarden(rows) {
 }
 
 /**
+ * HTML-escape a value for interpolation into markup.
+ *
+ * Named `escapeHtml` and not `escape` because `escape` is a deprecated global
+ * that percent-encodes. `warden.js` called it 26 times without defining or
+ * importing one, so every name on a warden's tablet was rendered through it:
+ * "Ali Khan" became "Ali%20Khan", and an Arabic name became
+ * "%u0639%u0644%u064A". It stopped injection and destroyed legibility, on the
+ * one screen whose job is letting a warden read names and find people.
+ *
+ * A distinct name means a bare `escape(` is now always the wrong one, which
+ * `tests/structure.test.js` can check.
+ */
+export function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[character]));
+}
+
+/**
  * The inline composer a warden types an escalation or a note into.
  *
  * It replaces a `prompt()`, which is the wrong thing twice over on a tablet.

@@ -20,8 +20,8 @@
 import { Api, ApiError, Freshness } from './api.js';
 import { createTranslator, isRtl } from './i18n.js';
 import {
-  composer, filterRoster, headcountVerdict, healthLine, orderForWarden,
-  syncStatus,
+  composer, escapeHtml, filterRoster, headcountVerdict, healthLine,
+  orderForWarden, syncStatus,
 } from './render.js';
 import { OfflineQueue, reconcileSync } from './queue.js';
 
@@ -147,8 +147,8 @@ function paintTabs() {
   ];
   const host = document.getElementById('tabs');
   host.innerHTML = tabs.map(([key, label]) =>
-    `<button role="tab" data-screen="${key}" aria-selected="${screen === key}">${
-      escape(label)}</button>`).join('');
+    `<button role="tab" data-screen="${escapeHtml(key)}" aria-selected="${escapeHtml(screen === key)}">${
+      escapeHtml(label)}</button>`).join('');
   host.querySelectorAll('[data-screen]').forEach((button) => {
     button.addEventListener('click', () => {
       screen = button.dataset.screen;
@@ -176,8 +176,8 @@ async function paint() {
   const healthEl = document.getElementById('system-health');
   healthEl.innerHTML = health.tone === 'ok'
     ? ''
-    : `<div class="warden-status ${health.tone === 'blind' ? 'blind' : 'offline'}">${
-        escape(health.tone === 'blind' ? t('warden.rely_on_count') : health.text)}</div>`;
+    : `<div class="warden-status ${escapeHtml(health.tone === 'blind' ? 'blind' : 'offline')}">${
+        escapeHtml(health.tone === 'blind' ? t('warden.rely_on_count') : health.text)}</div>`;
 
   document.getElementById('screen-zone').hidden = screen !== 'zone';
   document.getElementById('screen-roster').hidden = screen !== 'roster';
@@ -192,19 +192,19 @@ function paintZone(zone) {
   const panel = zone?.panel;
   document.getElementById('zone-tiles').innerHTML = panel ? `
     <div class="tile"><div class="n">${panel.expected}</div>
-      <div class="k">${escape(t('board.expected'))}</div></div>
+      <div class="k">${escapeHtml(t('board.expected'))}</div></div>
     <div class="tile green"><div class="n">${panel.confirmed}</div>
-      <div class="k">${escape(t('warden.confirmed'))}</div></div>
+      <div class="k">${escapeHtml(t('warden.confirmed'))}</div></div>
     <div class="tile yellow"><div class="n">${panel.outstanding}</div>
-      <div class="k">${escape(t('warden.outstanding'))}</div></div>` : '';
+      <div class="k">${escapeHtml(t('warden.outstanding'))}</div></div>` : '';
 
   const verdictHost = document.getElementById('mismatch');
   const result = headcountVerdict(lastHeadcount, t);
   verdictHost.innerHTML = result ? `
-    <div class="mismatch ${result.severity}">
-      <div>${escape(result.headline)}</div>
-      <div class="advice">${escape(result.detail)}</div>
-      <div class="advice">${escape(result.advice)}</div>
+    <div class="mismatch ${escapeHtml(result.severity)}">
+      <div>${escapeHtml(result.headline)}</div>
+      <div class="advice">${escapeHtml(result.detail)}</div>
+      <div class="advice">${escapeHtml(result.advice)}</div>
     </div>` : '';
 
   document.getElementById('sweep').textContent =
@@ -220,24 +220,24 @@ function paintRoster(zone) {
   host.innerHTML = rows.map((row) => `
     <div class="row" style="display:block">
       <div style="display:flex;align-items:center;gap:10px">
-        <span class="chip ${row.colour}">${escape(t('state.' + row.state, row.state))}</span>
+        <span class="chip ${escapeHtml(row.colour)}">${escapeHtml(t('state.' + row.state, row.state))}</span>
         <div class="who">
-          <div class="name">${escape(row.display_name)}</div>
-          <div class="meta">${escape(row.department || '')}</div>
-          <div class="reason">${escape(row.reason)}</div>
+          <div class="name">${escapeHtml(row.display_name)}</div>
+          <div class="meta">${escapeHtml(row.department || '')}</div>
+          <div class="reason">${escapeHtml(row.reason)}</div>
         </div>
       </div>
       <div class="person-actions">
-        <button data-act="CONFIRM_PRESENT" data-ref="${escape(row.person_ref)}">${
-          escape(t('warden.confirm'))}</button>
-        <button data-act="NOT_HERE" data-ref="${escape(row.person_ref)}">${
-          escape(t('warden.not_here'))}</button>
+        <button data-act="CONFIRM_PRESENT" data-ref="${escapeHtml(row.person_ref)}">${
+          escapeHtml(t('warden.confirm'))}</button>
+        <button data-act="NOT_HERE" data-ref="${escapeHtml(row.person_ref)}">${
+          escapeHtml(t('warden.not_here'))}</button>
         ${row.person_ref.startsWith('emp:')
-          ? `<button data-act="WRONG_PERSON" data-ref="${escape(row.person_ref)}">${
-              escape(t('warden.wrong_person'))}</button>`
+          ? `<button data-act="WRONG_PERSON" data-ref="${escapeHtml(row.person_ref)}">${
+              escapeHtml(t('warden.wrong_person'))}</button>`
           : ''}
-        <button data-act="MARK_ABSENT" data-ref="${escape(row.person_ref)}">${
-          escape(t('warden.mark_absent'))}</button>
+        <button data-act="MARK_ABSENT" data-ref="${escapeHtml(row.person_ref)}">${
+          escapeHtml(t('warden.mark_absent'))}</button>
       </div>
     </div>`).join('');
 
@@ -264,10 +264,10 @@ function paintUnknown(zone) {
   const count = zone?.panel?.unknown_tagged ?? 0;
   document.getElementById('unknown-body').innerHTML = `
     <div class="tile yellow"><div class="n">${count}</div>
-      <div class="k">${escape(t('board.unknown'))}</div></div>
+      <div class="k">${escapeHtml(t('board.unknown'))}</div></div>
     <div class="person-actions">
-      <button data-tag="visitor">${escape(t('warden.tag_visitor'))}</button>
-      <button data-tag="contractor">${escape(t('warden.tag_contractor'))}</button>
+      <button data-tag="visitor">${escapeHtml(t('warden.tag_visitor'))}</button>
+      <button data-tag="contractor">${escapeHtml(t('warden.tag_contractor'))}</button>
     </div>`;
   document.querySelectorAll('[data-tag]').forEach((button) => {
     button.addEventListener('click', () =>
