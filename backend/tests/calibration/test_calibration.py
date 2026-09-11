@@ -306,3 +306,77 @@ class TestConfigIsOnlyCalibratedByCertification:
             min_face_quality=0.5, max_pose_deviation_deg=45.0,
             min_track_confidence=0.5, identity_expiry_ms=30_000)
         assert config.calibrated is False
+
+
+class TestTheTrueAcceptDenominator:
+    """Of the enrolled people we could have identified, how many did we?
+
+    An unenrolled stranger given somebody's name is not an enrolled person we
+    failed to identify -- there was no right answer to get. Counting them
+    dragged this number down in proportion to how many strangers walked past
+    the camera, which is a property of the crowd rather than of the matcher.
+    """
+
+    def outcome(self, **overrides):
+        from app.calibration.sweep import ThresholdOutcome
+
+        base = dict(score_threshold=0.4, min_margin=0.05,
+                    true_accepts=80, false_accepts=5, false_rejects=15,
+                    true_rejects=70, admitted_unknown=0)
+        base.update(overrides)
+        return ThresholdOutcome(**base)
+
+    def test_strangers_do_not_count_against_it(self):
+        # 80 of 100 enrolled named correctly, whatever the strangers did.
+        clean = self.outcome()
+        crowded = self.outcome(false_accepts=35, admitted_unknown=30)
+        assert clean.true_accept_rate == pytest.approx(0.8)
+        assert crowded.true_accept_rate == pytest.approx(0.8)
+
+    def test_an_enrolled_person_named_wrongly_still_counts(self):
+        # That one *is* an enrolled person we could have identified and did not.
+        assert self.outcome(true_accepts=80, false_accepts=20,
+                            false_rejects=0).true_accept_rate == pytest.approx(0.8)
+
+    def test_the_stranger_rates_still_see_them(self):
+        crowded = self.outcome(false_accepts=35, admitted_unknown=30)
+        assert crowded.false_accept_rate == pytest.approx(35 / 115)
+        assert crowded.unknown_accept_rate == pytest.approx(30 / 100)
+
+
+class TestAnAnswerOnTheEdgeOfTheSearch:
+    """A chosen pair on the boundary of the grid means the best pair may lie
+    outside where anyone looked."""
+
+    def test_the_boundary_is_reported(self):
+        from app.calibration.sweep import Sweep
+        from app.core.identity_fsm import PROVISIONAL_CONFIG
+
+        # A grid of exactly one point: whatever it picks is on every edge.
+        sweep = Sweep(split=split(good_set()), base_config=PROVISIONAL_CONFIG)
+        sweep.run(score_range=(0.4, 0.4, 0.1), margin_range=(0.05, 0.05, 0.1))
+        point = sweep.choose(false_accept_ceiling=1.0)
+        assert point.on_grid_boundary
+        assert any("score_threshold" in edge for edge in point.on_grid_boundary)
+
+    def test_an_interior_answer_is_not_flagged(self):
+        from app.calibration.sweep import Sweep
+        from app.core.identity_fsm import PROVISIONAL_CONFIG
+
+        # A grid wide enough that the answer is not against a wall.
+        sweep = Sweep(split=split(good_set()), base_config=PROVISIONAL_CONFIG)
+        sweep.run(score_range=(0.1, 0.99, 0.05), margin_range=(0.0, 0.6, 0.05))
+        point = sweep.choose(false_accept_ceiling=1.0)
+        assert not any("score_threshold" in edge
+                       for edge in point.on_grid_boundary), point.on_grid_boundary
+
+    def test_the_report_carries_it_as_a_caveat_not_a_refusal(self):
+        from app.calibration.sweep import Sweep
+        from app.core.identity_fsm import PROVISIONAL_CONFIG
+
+        sweep = Sweep(split=split(good_set()), base_config=PROVISIONAL_CONFIG)
+        sweep.run(score_range=(0.4, 0.4, 0.1), margin_range=(0.05, 0.05, 0.1))
+        report = certify(sweep, require_real_footage=False)
+        assert any("outside the range searched" in c for c in report.caveats)
+        assert not any("outside the range searched" in r
+                       for r in report.refusals)

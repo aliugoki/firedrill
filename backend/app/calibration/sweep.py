@@ -50,8 +50,24 @@ class ThresholdOutcome:
 
     @property
     def true_accept_rate(self) -> float | None:
-        """Of the enrolled people we could have identified, how many did we?"""
-        eligible = self.true_accepts + self.false_rejects + self.false_accepts
+        """Of the enrolled people we could have identified, how many did we?
+
+        `admitted_unknown` is excluded from the denominator, and used to not
+        be. An unenrolled stranger given somebody's name is not an enrolled
+        person we failed to identify -- there was no right answer to get -- so
+        counting them dragged this number down in proportion to how many
+        strangers walked past the camera, which is a property of the crowd
+        rather than of the matcher. Eighty of a hundred enrolled people named
+        correctly read as 62% when thirty strangers were also admitted.
+
+        It biased `choose` too: a looser threshold admits more strangers, so
+        the penalty grew with looseness and pushed the selection toward
+        stricter pairs for a reason nobody intended. `false_accept_rate` and
+        `unknown_accept_rate` are where those admissions belong, and both
+        already count them.
+        """
+        wrongly_named = self.false_accepts - self.admitted_unknown
+        eligible = self.true_accepts + self.false_rejects + wrongly_named
         return self.true_accepts / eligible if eligible else None
 
     @property
@@ -124,6 +140,12 @@ class OperatingPoint:
     on_validate: ThresholdOutcome | None
     ceiling: float
     rationale: str
+    #: Whether the chosen pair sits on the edge of the grid that was searched.
+    #: A point on the boundary means the best pair may lie outside where anyone
+    #: looked, so the number is a limit of the search rather than an optimum.
+    #: Reported rather than corrected: widening the grid automatically would
+    #: hide that the first attempt was aimed wrongly.
+    on_grid_boundary: tuple[str, ...] = ()
 
     @property
     def generalises(self) -> bool | None:
@@ -162,6 +184,10 @@ class Sweep:
     base_config: IdentityConfig
     results: list[ThresholdOutcome] = field(default_factory=list)
 
+    #: The grid the last `run` covered, so `choose` can say when its answer sat
+    #: on the edge of it.
+    searched: dict = field(default_factory=dict)
+
     def run(
         self, *, score_range: tuple[float, float, float] = (0.20, 0.75, 0.025),
         margin_range: tuple[float, float, float] = (0.0, 0.30, 0.01),
@@ -169,6 +195,8 @@ class Sweep:
         from dataclasses import replace
 
         self.results = []
+        self.searched = {"score": (score_range[0], score_range[1]),
+                         "margin": (margin_range[0], margin_range[1])}
         for score in _steps(*score_range):
             for margin in _steps(*margin_range):
                 config = replace(self.base_config, score_threshold=score,
@@ -228,7 +256,24 @@ class Sweep:
                 f"highest true-accept rate ({best.true_accept_rate:.3f}) among "
                 f"{len(eligible)} threshold pairs holding false accepts at or "
                 f"below {false_accept_ceiling:.3f}"),
+            on_grid_boundary=self._boundary(best),
         )
+
+    def _boundary(self, best: ThresholdOutcome) -> tuple[str, ...]:
+        """Which axes the chosen pair sits on the edge of."""
+        axes = (("score", "score_threshold", best.score_threshold),
+                ("margin", "min_margin", best.min_margin))
+        edges = []
+        for key, name, value in axes:
+            bounds = self.searched.get(key)
+            if not bounds:
+                continue
+            low, high = bounds
+            if abs(value - low) < 1e-9:
+                edges.append(f"{name} chose the lowest value searched ({low})")
+            elif abs(value - high) < 1e-9:
+                edges.append(f"{name} chose the highest value searched ({high})")
+        return tuple(edges)
 
     def curve(self) -> list[tuple[float, float]]:
         """(false-accept rate, true-accept rate) pairs, for plotting."""

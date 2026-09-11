@@ -179,6 +179,16 @@ def certify(
     refusals.extend(readiness.problems)
     caveats.extend(readiness.warnings)
 
+    if point.on_grid_boundary:
+        # A caveat rather than a refusal: the measurement is sound, the search
+        # may not have been. A pair on the edge of the grid means the best pair
+        # could lie outside where anyone looked, and whoever signs these
+        # thresholds off should know the number is a limit of the search rather
+        # than an optimum.
+        for edge in point.on_grid_boundary:
+            caveats.append(
+                f"{edge}, so a better pair may lie outside the range searched")
+
     if not sweep.split.is_clean:
         refusals.append(
             "the same person appears in both halves of the split, so the "
