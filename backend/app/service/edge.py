@@ -156,8 +156,14 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
     elif visiontrack_dsn:
         try:
             source = VisionTrackDatabase(visiontrack_dsn)
-        except ValueError:
+        except ValueError as exc:
+            # Cannot fire today: the only thing the adapter refuses is an empty
+            # DSN, and the `elif` above has already excluded that. Kept as a
+            # guard for a stricter check later, and made to speak, because
+            # setting `source = None` silently would leave a site with a
+            # configured geometry source, no geometry, and no explanation.
             source = None
+            gaps.append(f"EVAC_VISIONTRACK_DSN was refused: {exc}")
 
     if source is not None and site_id:
         def sync_runner(when_ms: int):

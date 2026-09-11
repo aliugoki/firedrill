@@ -285,3 +285,94 @@ class TestServing:
         serve(supervisor, clock=lambda: T0, sleep=slept.append,
               max_iterations=2)
         assert all(duration <= 0.25 for duration in slept)
+
+
+class TestWindingDown:
+    """While stopping, only critical jobs run.
+
+    The skip is checked per job inside the pass, not once at the top, so a
+    signal arriving part-way through a pass takes effect for the rest of that
+    same pass. Presence and identity keep ageing; the stream read and the
+    replication flush stop, and the outbox gets its last drain from `main`'s
+    `finally` instead.
+    """
+
+    def build(self):
+        from app.service.supervisor import Job, Supervisor
+
+        ran = []
+        supervisor = Supervisor()
+        supervisor.add(Job(name="tick", interval_ms=1,
+                           run=lambda now_ms: ran.append("tick"),
+                           critical=True))
+        supervisor.add(Job(name="sync", interval_ms=1,
+                           run=lambda now_ms: ran.append("sync")))
+        return supervisor, ran
+
+    def test_everything_runs_while_it_is_running(self):
+        supervisor, ran = self.build()
+        supervisor.start(0)
+        supervisor.run_due(1_000)
+        assert ran == ["tick", "sync"]
+
+    def test_only_the_critical_job_runs_while_stopping(self):
+        supervisor, ran = self.build()
+        supervisor.start(0)
+        supervisor.stopping = True
+        supervisor.run_due(1_000)
+        assert ran == ["tick"]
+
+    def test_starting_again_clears_the_stop(self):
+        supervisor, ran = self.build()
+        supervisor.stopping = True
+        supervisor.start(0)
+        supervisor.run_due(1_000)
+        assert ran == ["tick", "sync"]
+
+    def test_a_signal_part_way_through_a_pass_takes_effect_at_once(self):
+        """The realistic arrival: a SIGTERM lands while jobs are running.
+
+        `run_due` re-reads `stopping` for each job rather than once at the top,
+        so the rest of that pass winds down too instead of completing as though
+        nothing had happened.
+        """
+        from app.service.supervisor import Job, Supervisor, serve
+
+        ran = []
+        supervisor = Supervisor()
+        # A signal arrives while the first iteration is running.
+        supervisor.add(Job(
+            name="tick", interval_ms=1, critical=True,
+            run=lambda now_ms: (ran.append("tick"), supervisor.stop())[0]))
+        supervisor.add(Job(name="sync", interval_ms=1,
+                           run=lambda now_ms: ran.append("sync")))
+
+        iterations = serve(supervisor, clock=lambda: 1_000,
+                           sleep=lambda _seconds: None)
+
+        # One pass, and `sync` was skipped within it: `tick` is critical and
+        # set the stop while running, and the non-critical job after it in the
+        # same pass did not run.
+        assert iterations == 1
+        assert ran == ["tick"]
+
+
+class TestLookingUpAJob:
+    def test_a_named_job_comes_back(self):
+        from app.service.supervisor import Job, Supervisor
+
+        supervisor = Supervisor()
+        supervisor.add(Job(name="tick", interval_ms=1, run=lambda now_ms: None))
+        assert supervisor.job("tick").name == "tick"
+
+    def test_an_unknown_name_raises_rather_than_returning_none(self):
+        # A None here would be used as a job and fail somewhere less obvious.
+        from app.service.supervisor import Supervisor
+
+        with pytest.raises(KeyError):
+            Supervisor().job("nothing-like-this")
+
+    def test_an_empty_supervisor_still_says_how_long_to_sleep(self):
+        from app.service.supervisor import Supervisor
+
+        assert Supervisor().next_due_ms(0) == 1_000

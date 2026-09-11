@@ -326,3 +326,86 @@ class TestRecoveryThatCouldNotRead:
         assert DrillRegistry().recover(
             drill_store=self.Empty(), events_store=None,
             site_id="site-1", now_ms=0) == []
+
+
+class TestReplicationConfiguration:
+    """Each branch here is a line an operator reads at boot and acts on.
+
+    They only differ by which environment variables are set, which is the
+    matrix that never shows up until a real deployment.
+    """
+
+    def test_a_url_and_a_token_and_a_site_gives_a_replicator(self, tmp_path):
+        node = build_edge({"EVAC_SITE_ID": "site-1",
+                           "EVAC_CENTRAL_URL": "https://central.example/",
+                           "EVAC_CENTRAL_TOKEN": "a-secret",
+                           "EVAC_OUTBOX_DIR": str(tmp_path)})
+        assert node.replicator is not None
+        assert node.replicator.transport.url.endswith(
+            "/api/evac/replication/events")
+        assert node.replicator.transport.site_id == "site-1"
+
+    def test_a_url_without_a_token_is_a_named_gap(self):
+        # Central refuses unauthenticated batches, so the node would buffer
+        # forever while reporting itself healthy.
+        node = build_edge({"EVAC_SITE_ID": "site-1",
+                           "EVAC_CENTRAL_URL": "https://central.example/"})
+        assert node.replicator is None
+        assert any("EVAC_CENTRAL_TOKEN is not" in gap for gap in node.gaps)
+
+    def test_no_central_at_all_is_silent_rather_than_a_gap(self):
+        # An edge node with no central is a supported deployment, not a fault.
+        node = build_edge({"EVAC_SITE_ID": "site-1"})
+        assert node.replicator is None
+        assert not any("CENTRAL" in gap for gap in node.gaps)
+
+
+class TestGeometrySources:
+
+    def test_a_visiontrack_dsn_gives_a_source(self):
+        node = build_edge({"EVAC_SITE_ID": "site-1",
+                           "EVAC_VISIONTRACK_DSN": "postgres://vt/visiontrack"})
+        assert any(job.name == "sync" for job in node.supervisor.jobs)
+
+    def test_a_file_export_wins_over_a_dsn(self, tmp_path):
+        # The offline path is a supported deployment rather than a fallback, so
+        # naming a file is taken as meaning it.
+        export = tmp_path / "geometry.json"
+        export.write_text('{"floor_plans": [], "cameras": []}')
+        node = build_edge({"EVAC_SITE_ID": "site-1",
+                           "EVAC_GEOMETRY_FILE": str(export),
+                           "EVAC_VISIONTRACK_DSN": "postgres://vt/visiontrack"})
+        assert any(job.name == "sync" for job in node.supervisor.jobs)
+
+    def test_neither_leaves_the_node_saying_it_cannot_place_anybody(self):
+        node = build_edge({"EVAC_SITE_ID": "site-1"})
+        assert node.geometry.has_geometry is False
+        assert not any(job.name == "sync" for job in node.supervisor.jobs)
+
+
+class TestADatabaseThatWillNotOpen:
+    """Persistence is optional; pretending it is present is not.
+
+    A node whose database cannot be opened still runs drills -- an operator
+    with an evacuation in progress needs the board more than the bookkeeping --
+    but it has to say so, at startup, rather than at the first write.
+    """
+
+    def test_it_starts_anyway_and_names_the_gap(self):
+        node = build_edge({"EVAC_SITE_ID": "site-1",
+                           "EVAC_DATABASE_URL": "not-a-database-url"})
+        assert node.registry is None
+        assert node.drill_store is None
+        assert any("database could not be opened" in gap for gap in node.gaps)
+        assert any("a restart will lose them" in gap for gap in node.gaps)
+
+    def test_a_working_database_leaves_no_gap_about_it(self, tmp_path):
+        node = build_edge({"EVAC_SITE_ID": "site-1",
+                           "EVAC_DATABASE_URL":
+                               f"sqlite:///{tmp_path / 'evac.db'}"})
+        assert node.registry is not None
+        assert not any("database" in gap for gap in node.gaps)
+
+    def test_no_database_configured_is_its_own_message(self):
+        node = build_edge({"EVAC_SITE_ID": "site-1"})
+        assert any("no database is configured" in gap for gap in node.gaps)
