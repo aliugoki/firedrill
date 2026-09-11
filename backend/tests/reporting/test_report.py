@@ -475,3 +475,43 @@ class TestWhoTheDenominatorLeftOut:
 
     def test_nothing_is_printed_when_nobody_was_left_out(self):
         assert "not counted" not in self.rendered({})
+
+
+class TestAnOvercountTheSiteAbsorbed:
+    """Not a mismatch -- the site's own policy decided that -- and not nothing.
+
+    Each one is a person the system called safe whom a warden could not see,
+    and with `is_mismatch` False the report listed nothing and the drill
+    validated clean.
+    """
+
+    def drill_with_a_permissive_policy(self):
+        from app.warden.headcount import Headcount, HeadcountPolicy
+
+        drill = drill_with(people=4)
+        for i in range(4):
+            confirm(drill, f"emp:EMP-{i:03d}")
+        drill.record_headcount(Headcount(
+            zone_id="assembly-north", warden_id="warden-7", device_id="d",
+            ts_ms=T0 + 120_000, physical_count=2, system_count=4,
+            policy=HeadcountPolicy(undercount_tolerance=2,
+                                   overcount_tolerance=2, calibrated=False,
+                                   source="a site decided")))
+        drill.record_warden_action(WardenAction(
+            kind=ActionKind.SWEEP_COMPLETE, warden_id="warden-7",
+            device_id="d", zone_id="assembly-north", ts_ms=T0 + 180_000))
+        drill.complete(T0 + 600_000)
+        return drill
+
+    def test_it_is_not_recorded_as_a_mismatch(self):
+        report = build_report(self.drill_with_a_permissive_policy(),
+                             now_ms=T0 + 600_000)
+        assert report.headcount_mismatches == ()
+
+    def test_it_is_reported_anyway_with_what_it_absorbed(self):
+        report = build_report(self.drill_with_a_permissive_policy(),
+                             now_ms=T0 + 600_000)
+        assert len(report.tolerated_overcounts) == 1
+        text = "\n".join(report.render())
+        assert "policy absorbed it" in text
+        assert "not at the muster point" in text

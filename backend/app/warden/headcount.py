@@ -113,7 +113,25 @@ class Headcount:
 
     @property
     def is_mismatch(self) -> bool:
+        """Whether this count calls for action under the site's own policy."""
         return self.severity is not Severity.NONE
+
+    @property
+    def tolerated_overcount(self) -> int:
+        """People the system called safe whom the warden could not see, and
+        whom the site's tolerance absorbed instead of reporting.
+
+        Zero unless a site has raised `overcount_tolerance` above its default,
+        which the policy's own docstring argues it should not: that error is
+        the one that kills somebody, and "within tolerance" is not a thing it
+        can be. `__post_init__` allows it and says the allowance will not be
+        silent -- and then did nothing, so a count of 38 against a system's 40
+        reported "No action. Record the count and continue." while two people
+        were missing.
+        """
+        if self.kind is not MismatchKind.SYSTEM_OVERCOUNTED:
+            return 0
+        return self.difference if self.severity is Severity.NONE else 0
 
     @property
     def missing_from_the_muster_point(self) -> int:
@@ -142,6 +160,14 @@ class Headcount:
 
     def recommended_action(self) -> str:
         if self.severity is Severity.NONE:
+            absorbed = self.tolerated_overcount
+            if absorbed:
+                return (
+                    f"This site's policy absorbs an overcount of up to "
+                    f"{self.policy.overcount_tolerance}, so no action is "
+                    f"required of you. {absorbed} person(s) the system "
+                    "believes are safe are still not in front of you. Say so "
+                    "to the command centre.")
             return "No action. Record the count and continue."
         if self.severity is Severity.ESCALATE:
             return (

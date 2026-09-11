@@ -129,6 +129,20 @@ class WardenState:
         return sorted(out, key=lambda h: (h.severity is not Severity.ESCALATE,
                                           -h.difference))
 
+    def tolerated_overcounts(self) -> list:
+        """Counts a site's own tolerance absorbed rather than reported.
+
+        Not mismatches -- the site decided that -- and not nothing either. They
+        reach the drill report so the decision is visible next to its
+        consequence.
+        """
+        out = []
+        for sweep in self.sweeps.values():
+            latest = sweep.headcounts.latest
+            if latest is not None and latest.tolerated_overcount:
+                out.append(latest)
+        return sorted(out, key=lambda h: -h.tolerated_overcount)
+
     def escalations(self) -> list:
         return [s for s in self.sweeps.values() if s.is_escalated]
 

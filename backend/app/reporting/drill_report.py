@@ -84,6 +84,10 @@ class DrillReport:
     sweeps_expected: int = 0
     zones_with_headcount: int = 0
     headcount_mismatches: tuple = ()
+    tolerated_overcounts: tuple = ()
+    """Counts a site's own overcount tolerance absorbed. Not mismatches -- the
+    site decided that -- and not nothing either: each one is a person the
+    system called safe whom a warden could not see."""
     escalations: tuple = ()
 
     outages: int = 0
@@ -178,6 +182,8 @@ class DrillReport:
         ]
         for mismatch in self.headcount_mismatches:
             lines.append(f"    ! {mismatch}")
+        for absorbed in self.tolerated_overcounts:
+            lines.append(f"    ! {absorbed}")
         for escalation in self.escalations:
             lines.append(f"    ! escalated: {escalation}")
 
@@ -258,6 +264,7 @@ def build_report(
                 zone_id=row.assigned_assembly_zone))
 
     mismatches = warden.mismatches()
+    absorbed = warden.tolerated_overcounts()
     by_floor = timing.by_floor
     slowest = None
     if by_floor:
@@ -320,6 +327,9 @@ def build_report(
         sweeps_completed=sweeps_completed, sweeps_expected=sweeps_expected,
         zones_with_headcount=zones_with_headcount,
         headcount_mismatches=tuple(m.summary() for m in mismatches),
+        tolerated_overcounts=tuple(
+            f"{h.summary()} This site's policy absorbed it; no mismatch was "
+            "recorded." for h in absorbed),
         escalations=tuple(
             s.escalation_reason or "no reason recorded"
             for s in warden.escalations()),
