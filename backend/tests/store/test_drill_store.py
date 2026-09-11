@@ -18,7 +18,8 @@ import sqlalchemy as sa
 
 from app.core.roster import ExpectationReason, Roster
 from app.drill import Drill
-from app.store.drills import DrillStore, StoreUnavailable
+from app.store.drills import DrillStore
+from app.store.errors import StoreUnavailable
 
 T0 = 1_788_000_000_000
 

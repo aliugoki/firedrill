@@ -22,7 +22,13 @@ from app.store.schema import metadata  # noqa: E402
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # `disable_existing_loggers` defaults to True, which switches off every
+    # logger the process has already created -- `evac.edge` and `evac.api`
+    # among them. A migration run inside a live process would silence the edge
+    # node's own output for the rest of its life, and the only symptom would be
+    # a node that had stopped saying anything. Configure the loggers named in
+    # the ini file and leave the rest alone.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = metadata
 

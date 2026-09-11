@@ -198,3 +198,46 @@ class TestEveryModuleImports:
          for p in modules(APP) if p.name != "__init__.py"])
     def test_it_can_be_imported(self, dotted):
         __import__(dotted)
+
+
+class TestNoExceptionNameIsDefinedTwice:
+    """Two classes with one name is a trap that reads as working code.
+
+    `ReplicationRejected` was declared in two modules; the retry loop caught the
+    one the transport did not raise, so a wrong credential retried forever
+    instead of stopping. `StoreUnavailable` was the same shape: `events.py`
+    declared one nothing raised, sitting in the module an `except` clause would
+    most naturally import from. Neither shows up in a diff, in a type checker,
+    or in any test of either module on its own -- only in a sweep like this one.
+    """
+
+    def exception_definitions(self):
+        found: dict[str, list[str]] = {}
+        for path in modules(APP):
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ClassDef):
+                    continue
+                bases = {b.id for b in node.bases if isinstance(b, ast.Name)}
+                looks_like_one = any(
+                    base.endswith(("Error", "Exception", "Unavailable",
+                                   "Rejected", "Refused"))
+                    for base in bases)
+                if looks_like_one or node.name.endswith(
+                        ("Error", "Unavailable", "Rejected", "Refused")):
+                    found.setdefault(node.name, []).append(
+                        str(path.relative_to(BACKEND)))
+        return found
+
+    def test_each_one_has_a_single_home(self):
+        duplicates = {name: where
+                      for name, where in self.exception_definitions().items()
+                      if len(where) > 1}
+        assert duplicates == {}
+
+    def test_the_sweep_finds_the_exceptions_that_exist(self):
+        # A scan that matched nothing would pass the rule above vacuously.
+        names = self.exception_definitions()
+        assert "StoreUnavailable" in names
+        assert "ReplicationRejected" in names
+        assert len(names) >= 6

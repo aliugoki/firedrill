@@ -315,6 +315,42 @@ class TestTheSchemaAndTheMigrationAgree:
             assert not table.foreign_keys, f"{table.name} has a foreign key"
 
 
+class TestAMigrationDoesNotSilenceTheProcess:
+    """Alembic configures logging on the way in, and the default takes the
+    application's loggers down with it.
+
+    `fileConfig` disables every logger it does not name unless told otherwise,
+    so a process that runs a migration -- a deployment wrapper, a recovery
+    script, a test session -- would afterwards log nothing from `evac.edge` or
+    `evac.api`. A node that has stopped speaking looks exactly like a node with
+    nothing to say, which is the failure mode this whole system exists to avoid.
+    """
+
+    def test_running_a_migration_leaves_the_edge_logger_speaking(self, tmp_path):
+        import logging
+        import os
+        from pathlib import Path
+
+        from alembic import command
+        from alembic.config import Config
+
+        edge = logging.getLogger("evac.edge")
+        edge.warning("before")
+        assert edge.disabled is False
+
+        url = f"sqlite:///{tmp_path / 'migrated.db'}"
+        os.environ["EVAC_DATABASE_URL"] = url
+        try:
+            command.upgrade(
+                Config(str(Path(__file__).resolve().parents[2] / "alembic.ini")),
+                "head")
+        finally:
+            os.environ.pop("EVAC_DATABASE_URL", None)
+
+        assert edge.disabled is False, (
+            "the migration disabled the edge node's logger")
+
+
 class TestMigrationsRefuseToGuess:
     def test_a_missing_password_stops_a_migration(self, monkeypatch):
         # A password with a default is a password that ends up in production.

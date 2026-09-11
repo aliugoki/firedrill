@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 from app.infra.audit import AuditAction, AuditLog
 from app.store.audit import AuditStore
-from app.store.drills import StoreUnavailable
+from app.store.errors import StoreUnavailable
 from app.store.schema import metadata
 
 T0 = 1_788_000_000_000

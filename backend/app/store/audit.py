@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import sqlalchemy as sa
 
 from app.infra.audit import AuditAction, AuditEntry
-from app.store.drills import StoreUnavailable
+from app.store.errors import StoreUnavailable
 from app.store.schema import audit_entries
 
 

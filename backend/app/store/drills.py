@@ -23,18 +23,8 @@ from app.core.roster import (
     RosterEntry,
     RosterSnapshot,
 )
+from app.store.errors import StoreUnavailable
 from app.store.schema import drills as drills_table
-
-
-class StoreUnavailable(RuntimeError):
-    """A read could not be answered.
-
-    Writes report failure and carry on -- a drill that cannot be persisted
-    still runs. Reads raise, because every falsy thing a read could return is
-    also a legitimate answer: no rows, no drill, nothing running. A caller that
-    only counts what came back cannot tell "there were none" from "I could not
-    look", and one of those is a building with people in it.
-    """
 
 
 @dataclass

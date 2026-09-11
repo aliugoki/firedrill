@@ -29,10 +29,6 @@ from app.ingest.health import Component, HealthLog
 from app.store.schema import evac_events
 
 
-class StoreUnavailable(Exception):
-    """The database could not be reached. Non-blinding; the drill continues."""
-
-
 #: How many events to hold in memory while the database is unreachable. Sized so
 #: a long outage during a large drill still fits: a 500-person drill produces
 #: tens of thousands of events, and losing the tail of the record is the thing
@@ -140,7 +136,10 @@ class EventStore:
                 continue
             except Exception as exc:
                 self.stats.last_error = f"{type(exc).__name__}: {exc}"
-                # Still down. Keep this row and everything after it, in order.
+                # Keep it and try the next. Physical insert order does not
+                # matter -- replay reads a drill ordered by `ts_ms` and `id`,
+                # not by arrival -- so a row that fails while a later one
+                # succeeds costs nothing but a retry.
                 remaining.append(row)
                 continue
             written += 1
