@@ -11,6 +11,7 @@ from app.sync.runner import (
     GeometryStore,
     JsonExport,
     SourceUnavailable,
+    SyncOutcome,
     VisionTrackDatabase,
     run_sync,
 )
@@ -197,3 +198,130 @@ class TestTheDatabaseAdapter:
             "postgresql://nobody@127.0.0.1:1/nothing")
         with pytest.raises(SourceUnavailable):
             database.floor_plans("s1")
+
+
+class TestBeforeTheFirstSync:
+    """The state an edge node boots into, and holds until VisionTrack answers.
+
+    It is also the state it stays in when VisionTrack never answers at all, so
+    what it says about itself is what an operator has to act on.
+    """
+
+    def test_it_says_no_geometry_has_been_synced(self):
+        store = GeometryStore()
+        assert store.has_geometry is False
+        assert store.ready_for_a_drill() is False
+        assert store.blocking() == ["no geometry has been synced from VisionTrack"]
+
+    def test_staleness_is_unknown_rather_than_zero(self):
+        # Zero would read as "synced just now", which is the opposite.
+        outcome = SyncOutcome(result=None, synced_at_ms=None,
+                              source="JsonExport", error="nothing yet")
+        assert outcome.stale_ms(T0) is None
+
+    def test_a_failure_keeps_the_geometry_it_already_had(self):
+        # Losing working geometry because VisionTrack was briefly down would
+        # turn an inconvenience into a site that cannot run a drill.
+        store = GeometryStore()
+        good = run_sync(GoodSource(), site_id="s1", now_ms=T0, store=store,
+                        tagged_zones=TAGS)
+        assert store.has_geometry is True
+
+        failed = run_sync(DeadSource(), site_id="s1", now_ms=T0 + 60_000,
+                          store=store)
+        assert failed.succeeded is False
+        assert store.outcome is good
+        assert store.has_geometry is True
+
+
+class TestTheVisionTrackConnectionIsReadOnly:
+    """EVAC-120 reads VisionTrack and never writes to it.
+
+    The guarantee is enforced by the server rather than by everyone
+    remembering, which is only true if the session is actually opened read-only
+    -- and nothing checked. A bug here would be a bug in a running CCTV
+    deployment, which is somebody else's product.
+    """
+
+    class FakeCursor:
+        def __init__(self, rows, recorder):
+            self.rows = rows
+            self.recorder = recorder
+
+        def execute(self, sql, params):
+            self.recorder["sql"] = sql
+            self.recorder["params"] = params
+
+        def fetchall(self):
+            return self.rows
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    class FakeConnection:
+        def __init__(self, rows, recorder):
+            self.rows = rows
+            self.recorder = recorder
+
+        def set_session(self, **kwargs):
+            self.recorder["session"] = kwargs
+
+        def cursor(self, **kwargs):
+            return TestTheVisionTrackConnectionIsReadOnly.FakeCursor(
+                self.rows, self.recorder)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_psycopg2(self, monkeypatch, rows=(), recorder=None, boom=None):
+        import sys
+        import types
+
+        recorder = recorder if recorder is not None else {}
+        module = types.ModuleType("psycopg2")
+        extras = types.ModuleType("psycopg2.extras")
+        extras.RealDictCursor = object
+        module.extras = extras
+
+        def connect(dsn, connect_timeout=None):
+            recorder["dsn"] = dsn
+            recorder["timeout"] = connect_timeout
+            if boom is not None:
+                raise boom
+            return TestTheVisionTrackConnectionIsReadOnly.FakeConnection(
+                list(rows), recorder)
+
+        module.connect = connect
+        monkeypatch.setitem(sys.modules, "psycopg2", module)
+        monkeypatch.setitem(sys.modules, "psycopg2.extras", extras)
+        return recorder
+
+    def test_the_session_is_opened_read_only(self, monkeypatch):
+        recorder = self.fake_psycopg2(monkeypatch, rows=[{"id": "fp1"}])
+        rows = VisionTrackDatabase(dsn="postgres://vt").floor_plans("s1")
+
+        assert rows == [{"id": "fp1"}]
+        assert recorder["session"] == {"readonly": True, "autocommit": True}
+
+    def test_the_query_is_scoped_to_the_site(self, monkeypatch):
+        recorder = self.fake_psycopg2(monkeypatch, rows=[])
+        VisionTrackDatabase(dsn="postgres://vt").cameras("site-7")
+        assert recorder["params"] == {"site_id": "site-7"}
+
+    def test_a_connection_failure_is_reported_not_raised_onward(
+            self, monkeypatch):
+        self.fake_psycopg2(monkeypatch, boom=OSError("no route to host"))
+        with pytest.raises(SourceUnavailable, match="no route to host"):
+            VisionTrackDatabase(dsn="postgres://vt").floor_plans("s1")
+
+    def test_a_store_with_geometry_asks_it_what_is_blocking(self):
+        store = GeometryStore()
+        run_sync(GoodSource(), site_id="s1", now_ms=T0, store=store)
+        # Nothing is tagged, so the geometry itself has the answer.
+        assert any("ASSEMBLY" in reason for reason in store.blocking())
