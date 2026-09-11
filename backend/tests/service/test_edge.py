@@ -462,3 +462,40 @@ class TestRetentionIsAControlRatherThanAPromise:
         node = build_edge({"EVAC_SITE_ID": "site-1"})
         assert node.health(1_000)["retention_reviewed"] is False
         assert not any("retention" in gap for gap in node.gaps)
+
+
+class TestTheAuditLogIsDurableWhenItCanBe:
+    """The table has existed since the first migration and nothing wrote to it.
+
+    A log whose purpose is answering questions after an incident, living in one
+    process's memory, is close to not having one: an incident is exactly when
+    somebody restarts things.
+    """
+
+    def test_a_node_with_a_database_gets_a_store(self, tmp_path):
+        node = build_edge({"EVAC_SITE_ID": "site-1",
+                           "EVAC_DATABASE_URL":
+                               f"sqlite:///{tmp_path / 'evac.db'}"})
+        assert node.audit.store is not None
+        assert node.health(0)["audit_durable"] is True
+
+    def test_a_node_without_one_says_so_rather_than_implying_durability(self):
+        node = build_edge({"EVAC_SITE_ID": "site-1"})
+        assert node.audit.store is None
+        assert node.health(0)["audit_durable"] is False
+
+    def test_entries_that_did_not_persist_are_counted(self, tmp_path):
+        # An audit log that silently stops persisting is worse than one that
+        # never claimed to: the entries are still being written, and only this
+        # says they are going nowhere durable.
+        from app.infra.audit import AuditAction
+
+        node = build_edge({"EVAC_SITE_ID": "site-1",
+                           "EVAC_DATABASE_URL":
+                               f"sqlite:///{tmp_path / 'evac.db'}"})
+        # The tables are created by Alembic, which has not run here.
+        node.audit.record(action=AuditAction.DRILL_STARTED,
+                          actor_id="commander-1", ts_ms=0, drill_id="d1")
+
+        assert node.health(0)["audit_unpersisted"] == 1
+        assert len(node.audit.entries) == 1

@@ -119,6 +119,18 @@ class AuditLog:
 
     entries: list = field(default_factory=list)
 
+    #: Optional durable backing. Without one the log lives in this process and
+    #: dies with it, which for a record read after an incident is close to not
+    #: having it: an incident is when things get restarted.
+    store: object | None = None
+
+    #: Entries the store would not take. Counted rather than raised -- an audit
+    #: write must not interrupt an evacuation -- and surfaced, because an audit
+    #: log that silently stops persisting is worse than one that was never
+    #: claimed to persist at all.
+    unpersisted: int = 0
+    last_store_error: str | None = None
+
     def record(
         self, *, action: AuditAction, actor_id: str, ts_ms: int,
         drill_id: str | None = None, subject: str | None = None,
@@ -142,6 +154,9 @@ class AuditLog:
             subject=subject, summary=summary, before=before, after=after,
             context=dict(context))
         self.entries.append(entry)
+        if self.store is not None and not self.store.append(entry):
+            self.unpersisted += 1
+            self.last_store_error = getattr(self.store, "last_error", None)
         return entry
 
     # -- reading ---------------------------------------------------------------

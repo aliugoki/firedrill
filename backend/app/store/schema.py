@@ -85,8 +85,14 @@ zone_kinds = sa.Table(
     sa.Column("tagged_by", sa.String(64), nullable=False),
     sa.Column("tagged_at_ms", sa.BigInteger, nullable=False),
     # Who decided, and when. A zone's kind is a safety decision — tag a corridor
-    # as ASSEMBLY and everyone standing in it is marked safe — so it is
+    # as ASSEMBLY and everyone standing in it is marked safe — so it should be
     # attributable rather than anonymous configuration.
+    #
+    # It is not yet. Nothing reads or writes this table: an edge node takes its
+    # tags from `EVAC_ZONE_KINDS`, which is exactly the anonymous configuration
+    # the sentence above argues against. The table is the shape the attributable
+    # flow will have, and until somebody builds the endpoint that writes it,
+    # "who tagged the corridor" has no answer.
 )
 
 

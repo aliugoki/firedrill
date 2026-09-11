@@ -21,6 +21,7 @@ from app.ingest.consumer import EventConsumer, RedisStreamClient
 from app.ingest.ingestor import Ingestor
 from app.ingest.replication import Outbox, Replicator
 from app.service.supervisor import Supervisor, build_supervisor
+from app.infra.audit import AuditLog
 from app.infra.retention import RetentionLedger
 from app.sync.runner import GeometryStore, JsonExport, VisionTrackDatabase, run_sync
 
@@ -42,6 +43,7 @@ class EdgeNode:
     recovered_drills: tuple = ()
     gaps: tuple = ()
 
+    audit: AuditLog = field(default_factory=AuditLog)
     retention: RetentionLedger = field(default_factory=RetentionLedger)
     #: The last compliance check. `retention.py` says a policy nobody checks is
     #: a promise rather than a control, and until this ran on a schedule that
@@ -86,6 +88,11 @@ class EdgeNode:
             # nothing. Reported as its own fact, and recorded as a known limit
             # in EVAC120_SECURITY.md §6.
             "retention_reviewed": self.retention.policy.calibrated,
+            # An audit log that silently stops persisting is worse than one
+            # that never claimed to: the entries are still being written, and
+            # only this says they are going nowhere durable.
+            "audit_durable": self.audit.store is not None,
+            "audit_unpersisted": self.audit.unpersisted,
             "durable": self.events_store is not None,
             "recovered_drills": list(self.recovered_drills),
             "configuration_gaps": list(self.gaps),
@@ -199,6 +206,13 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
     events_store = drill_store = None
     registry = None
     recovered: list[str] = []
+    # Built before the database block, which hands it a store. It used to be
+    # constructed afterwards, so that line raised `UnboundLocalError` -- and
+    # the generic handler below reported it as "the database could not be
+    # opened", which is a configuration problem an operator would have gone
+    # looking for in the wrong place.
+    audit = AuditLog()
+
     database_url = _database_url(env)
 
     if database_url:
@@ -206,11 +220,13 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
             import sqlalchemy as sa
 
             from app.drill import DrillRegistry, RecoveryUnavailable
+            from app.store.audit import AuditStore
             from app.store.drills import DrillStore
             from app.store.events import EventStore
 
             engine = sa.create_engine(database_url, pool_pre_ping=True)
             events_store = EventStore(engine=engine, health=ingestor.state.health)
+            audit.store = AuditStore(engine=engine)
             drill_store = DrillStore(engine=engine)
             registry = DrillRegistry()
 
@@ -273,7 +289,7 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
         supervisor=supervisor, consumer=consumer, replicator=replicator,
         geometry=geometry, events_store=events_store, drill_store=drill_store,
         registry=registry, recovered_drills=tuple(recovered),
-        gaps=tuple(gaps), retention=retention)
+        gaps=tuple(gaps), retention=retention, audit=audit)
     # The job closes over this so its report reaches `health()`. The node
     # cannot be built before the supervisor it holds, and the supervisor needs
     # the job, so one of the two has to be handed over afterwards.
