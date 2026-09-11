@@ -36,7 +36,11 @@ from app.ingest.health import Component
 from app.ingest.ingestor import Ingestor
 from app.ingest.projections import LiveBoard, build_board, resolve_identities
 from app.warden.actions import WardenAction, from_event, to_event
-from app.warden.headcount import Headcount
+from app.warden.headcount import (
+    Headcount,
+    from_event as headcount_from_event,
+    to_event as headcount_to_event,
+)
 from app.warden.state import WardenState
 
 
@@ -190,7 +194,23 @@ class Drill:
         return event
 
     def record_headcount(self, headcount: Headcount) -> Headcount:
-        return self.warden.record_headcount(headcount)
+        """Record a physical count, and put it in the event log.
+
+        The second half was missing. A headcount is the only measurement in a
+        drill taken by a human and independent of the cameras, two of the eight
+        validation criteria are computed from it, and it lived in this
+        process's memory alone: not stored, not replicated to central, gone on
+        a restart. Invariant 6 says every accountability decision is
+        reconstructable from stored events, and this one was not.
+        """
+        recorded = self.warden.record_headcount(headcount)
+        queue = self.warden.device(headcount.device_id, headcount.warden_id)
+        event = headcount_to_event(
+            recorded, tenant_id=self.tenant_id, site_id=self.site_id,
+            drill_id=self.drill_id, seq=queue.next_seq)
+        queue.next_seq += 1
+        self.feed([event])
+        return recorded
 
     def tick(self, now_ms: int) -> None:
         self.ingestor.tick(now_ms)
@@ -349,6 +369,13 @@ class Drill:
         for event in events:
             if event.source_kind is not SourceKind.WARDEN:
                 continue
+            count = headcount_from_event(event)
+            if count is not None:
+                self.warden.record_headcount(count)
+                queue = self.warden.device(count.device_id, count.warden_id)
+                queue.next_seq = max(queue.next_seq, event.seq + 1)
+                continue
+
             action = from_event(event)
             if action is None:
                 continue

@@ -336,3 +336,75 @@ class TestTheWardensWorkSurvivesARestart:
         # Not one row more. The fresh drill's own start event carries the same
         # sequence as the original's, and the uniqueness constraint rejects it.
         assert events_store.count("d1") == before
+
+
+class TestThePhysicalCountIsEvidenceToo:
+    """The one measurement in a drill that a human took and a camera did not.
+
+    Two of the eight validation criteria are computed from it, and it lived in
+    the process's memory alone: `record_headcount` folded it into warden state
+    and never wrote an event. Not stored, not replicated to central, gone on a
+    restart -- and invariant 6 says every accountability decision is
+    reconstructable from stored events.
+    """
+
+    def _counted(self, stores) -> Drill:
+        from app.warden.headcount import Headcount
+
+        drill = make_drill(stores)
+        drill.start(T0)
+        drill.record_headcount(Headcount(
+            zone_id="assembly-north", warden_id="warden-7",
+            device_id="tablet-3", ts_ms=T0 + 90_000,
+            physical_count=3, system_count=4))
+        return drill
+
+    def test_it_reaches_the_event_log(self, stores):
+        events_store, _ = stores
+        self._counted(stores)
+        stored = [e for e in events_store.replay("d1")
+                  if "headcount" in (e.payload or {})]
+        assert len(stored) == 1
+        assert stored[0].payload["headcount"]["physical_count"] == 3
+
+    def test_it_comes_back_after_a_restart(self, stores):
+        self._counted(stores)
+        fresh = make_drill(stores, drill_id="d1")
+        fresh.start(T0)
+        fresh.recover(T0 + 120_000)
+
+        latest = fresh.warden.sweeps["assembly-north"].headcounts.latest
+        assert latest is not None
+        assert latest.physical_count == 3
+        assert latest.system_count == 4
+
+    def test_the_mismatch_it_produced_comes_back_with_it(self, stores):
+        # The number matters because of what it disagrees with. A recovery that
+        # restored the count and lost the mismatch would report a clean drill.
+        self._counted(stores)
+        fresh = make_drill(stores, drill_id="d1")
+        fresh.start(T0)
+        fresh.recover(T0 + 120_000)
+        assert len(fresh.warden.mismatches()) == 1
+
+    def test_it_is_written_in_words_for_the_ledger(self, stores):
+        # A bare number in an evidence trail tells a reader nothing about which
+        # side of it was the system's.
+        events_store, _ = stores
+        self._counted(stores)
+        note = [e for e in events_store.replay("d1")
+                if "headcount" in (e.payload or {})][0].payload["note"]
+        assert "counted 3" in note or "physical count 3" in note
+
+    def test_an_ordinary_warden_note_is_not_read_as_a_count(self, stores):
+        from app.warden.actions import ActionKind, WardenAction
+        from app.warden.headcount import from_event
+
+        drill = make_drill(stores)
+        drill.start(T0)
+        drill.record_warden_action(WardenAction(
+            kind=ActionKind.NOTE, warden_id="warden-7", device_id="tablet-3",
+            zone_id="assembly-north", ts_ms=T0 + 60_000, note="door jammed"))
+        events_store, _ = stores
+        for event in events_store.replay("d1"):
+            assert from_event(event) is None

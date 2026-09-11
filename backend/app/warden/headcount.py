@@ -21,8 +21,10 @@ accommodate the harmless one.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
+
+from app.core.events import Event, EventType, SourceKind
 
 
 class MismatchKind(str, Enum):
@@ -227,3 +229,68 @@ class ZoneHeadcounts:
         """Whether the warden's own counts disagree with each other."""
         physical = {c.physical_count for c in self.counts}
         return len(physical) > 1
+
+
+def to_event(headcount: Headcount, *, tenant_id: str, site_id: str,
+             drill_id: str, seq: int) -> Event:
+    """Put a physical count into the event log.
+
+    It was not there. `Drill.record_headcount` folded the count into warden
+    state and stopped, so the one measurement taken by a human that is
+    independent of the cameras existed only in this process's memory: not
+    stored, not replicated to central, not replayable after a restart. Two of
+    the eight validation criteria are computed from it, and invariant 6 says
+    every accountability decision is reconstructable from stored events.
+
+    Carried as a `WARDEN_NOTE` rather than a new event type. The vocabulary is
+    deliberately closed and already carries three other warden actions this
+    way; the payload says what it is. The note is written out in words too, so
+    the evidence ledger shows a readable trace rather than a bare number.
+    """
+    return Event(
+        tenant_id=tenant_id, site_id=site_id, drill_id=drill_id,
+        source=f"warden-device:{headcount.device_id}",
+        source_kind=SourceKind.WARDEN, seq=seq, type=EventType.WARDEN_NOTE,
+        ts_ms=headcount.ts_ms, subject=headcount.zone_id,
+        payload={
+            "headcount": {
+                "zone_id": headcount.zone_id,
+                "warden_id": headcount.warden_id,
+                "device_id": headcount.device_id,
+                "physical_count": headcount.physical_count,
+                "system_count": headcount.system_count,
+                "note": headcount.note,
+            },
+            "warden_id": headcount.warden_id,
+            "device_id": headcount.device_id,
+            "zone_id": headcount.zone_id,
+            "human": True,
+            "note": headcount.summary(),
+        },
+    )
+
+
+def from_event(event: Event, *,
+               policy: HeadcountPolicy = DEFAULT_POLICY) -> Headcount | None:
+    """Read a count back out. None for any event that is not one.
+
+    The policy is configuration rather than evidence, so it comes from the
+    drill running now rather than from the stored row: a site that tightened
+    its tolerance should see the old count judged by the new rule, not have the
+    old rule resurrected from a replay.
+    """
+    if event.source_kind is not SourceKind.WARDEN:
+        return None
+    body = (event.payload or {}).get("headcount")
+    if not isinstance(body, dict):
+        return None
+    return Headcount(
+        zone_id=body.get("zone_id") or event.subject or "",
+        warden_id=body.get("warden_id") or "",
+        device_id=body.get("device_id") or "",
+        ts_ms=event.ts_ms,
+        physical_count=int(body.get("physical_count", 0)),
+        system_count=int(body.get("system_count", 0)),
+        policy=policy,
+        note=body.get("note"),
+    )
