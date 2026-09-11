@@ -158,7 +158,18 @@ def create_app(registry: DrillRegistry | None = None,
                 status.HTTP_403_FORBIDDEN,
                 f"caller belongs to {caller.tenant_id} and cannot create a "
                 f"drill for {body.tenant_id}")
-        roster = app.state.roster_provider(body.site_id)
+        try:
+            roster = app.state.roster_provider(body.site_id)
+        except Exception as exc:
+            # A source that is configured and broken is the same situation as
+            # one that is missing, and the operator needs the reason. It used
+            # to be a 500, which says the service is at fault and names nothing
+            # anybody can act on.
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                f"the roster source could not be read ({type(exc).__name__}: "
+                f"{exc}); a drill without a roster has no denominator and "
+                "cannot account for anyone")
         drill = Drill(
             drill_id=str(uuid.uuid4()), tenant_id=body.tenant_id,
             site_id=body.site_id, name=body.name, roster=roster,

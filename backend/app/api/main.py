@@ -48,10 +48,23 @@ def _roster_provider():
         rows = payload.get("employees", payload if isinstance(payload, list) else [])
         local = payload.get("local_fields", {}) if isinstance(payload, dict) else {}
         roster = from_facetrack(rows, local_fields=local)
+
+        # Not a live source, and it used to say it was. This path exists as the
+        # fallback for when FaceTrack cannot be reached, so the one code branch
+        # that means "the authoritative source did not answer" was declaring
+        # that it had. `is_trustworthy` gates the all-clear, so claiming it here
+        # removed one of the four things that hold that verdict back.
+        #
+        # The age is in the note because it is the fact an operator can act on:
+        # a file exported this morning and one exported in March are the same
+        # file to everything else in the system.
+        age_s = max(0.0, time.time() - os.path.getmtime(path))
         return roster.snapshot(
             int(time.time() * 1000),
-            source_reachable=True,
-            source_note=f"loaded from {path}")
+            source_reachable=False,
+            source_note=(f"loaded from the exported file {path}, written "
+                         f"{age_s / 3600:.1f} hours ago; FaceTrack was not "
+                         "consulted"))
 
     return provider
 
