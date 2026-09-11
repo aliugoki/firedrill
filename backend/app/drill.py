@@ -332,14 +332,14 @@ class DrillRegistry:
         """
         from app.store.drills import roster_from_json
 
-        rows = drill_store.unfinished(site_id)
-        if not rows and getattr(drill_store, "last_error", None):
-            # An empty list here means one of two things and the caller cannot
-            # tell them apart: nothing was running, or the database could not
-            # be read. The second must not come back as a clean, empty board.
+        try:
+            rows = drill_store.unfinished(site_id)
+        except Exception as exc:
+            # An empty list would mean one of two things the caller cannot tell
+            # apart: nothing was running, or the database could not be read.
+            # The second must not come back as a clean, empty board.
             raise RecoveryUnavailable(
-                f"could not read which drills were running: "
-                f"{drill_store.last_error}")
+                f"could not read which drills were running: {exc}") from exc
 
         recovered = []
         for row in rows:

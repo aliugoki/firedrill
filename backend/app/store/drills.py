@@ -26,14 +26,27 @@ from app.core.roster import (
 from app.store.schema import drills as drills_table
 
 
+class StoreUnavailable(RuntimeError):
+    """A read could not be answered.
+
+    Writes report failure and carry on -- a drill that cannot be persisted
+    still runs. Reads raise, because every falsy thing a read could return is
+    also a legitimate answer: no rows, no drill, nothing running. A caller that
+    only counts what came back cannot tell "there were none" from "I could not
+    look", and one of those is a building with people in it.
+    """
+
+
 @dataclass
 class DrillStore:
-    """Reads and writes drill rows. Failures are reported, never raised.
+    """Reads and writes drill rows.
 
     A drill that cannot be persisted still runs: the operator has an
     evacuation in progress, and refusing to start one because a replica is
     failing over would be the software choosing its own bookkeeping over the
-    thing it exists for.
+    thing it exists for. So `save` reports failure and returns False.
+
+    Reads raise `StoreUnavailable` instead. See its docstring for why.
     """
 
     engine: sa.Engine
@@ -69,17 +82,6 @@ class DrillStore:
         self.last_error = None
         return True
 
-    def load(self, drill_id: str) -> dict | None:
-        try:
-            with self.engine.connect() as connection:
-                row = connection.execute(
-                    sa.select(drills_table)
-                    .where(drills_table.c.drill_id == drill_id)).first()
-        except Exception as exc:
-            self.last_error = f"{type(exc).__name__}: {exc}"
-            return None
-        return dict(row._mapping) if row else None
-
     def unfinished(self, site_id: str) -> list:
         """Drills that were running when the process stopped.
 
@@ -96,20 +98,7 @@ class DrillStore:
                 return [dict(row._mapping) for row in rows]
         except Exception as exc:
             self.last_error = f"{type(exc).__name__}: {exc}"
-            return []
-
-    def recent(self, site_id: str, limit: int = 50) -> list:
-        try:
-            with self.engine.connect() as connection:
-                rows = connection.execute(
-                    sa.select(drills_table)
-                    .where(drills_table.c.site_id == site_id)
-                    .order_by(drills_table.c.created_ms.desc())
-                    .limit(limit))
-                return [dict(row._mapping) for row in rows]
-        except Exception as exc:
-            self.last_error = f"{type(exc).__name__}: {exc}"
-            return []
+            raise StoreUnavailable(self.last_error) from exc
 
 
 def _roster_to_json(roster: RosterSnapshot) -> dict:

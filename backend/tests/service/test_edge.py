@@ -297,13 +297,20 @@ class TestRecoveryThatCouldNotRead:
     """
 
     class Unreadable:
-        last_error = "OperationalError: database is locked"
+        def unfinished(self, site_id):
+            from app.store.drills import StoreUnavailable
 
+            raise StoreUnavailable("OperationalError: database is locked")
+
+        def save(self, drill):
+            return False
+
+    class Empty:
         def unfinished(self, site_id):
             return []
 
         def save(self, drill):
-            return False
+            return True
 
     def test_it_is_raised_rather_than_read_as_nothing_to_do(self):
         from app.drill import DrillRegistry, RecoveryUnavailable
@@ -316,9 +323,6 @@ class TestRecoveryThatCouldNotRead:
     def test_a_genuinely_empty_store_is_not_an_error(self):
         from app.drill import DrillRegistry
 
-        class Empty(self.Unreadable):
-            last_error = None
-
         assert DrillRegistry().recover(
-            drill_store=Empty(), events_store=None,
+            drill_store=self.Empty(), events_store=None,
             site_id="site-1", now_ms=0) == []
