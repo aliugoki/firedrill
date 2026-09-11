@@ -71,8 +71,13 @@ system and tells you one of three things:
   let anyone declare all clear. Count again, then work down the list of people
   it says are here and find the ones nobody can see.
 
-Below that: **Finish sweep** when you have checked your whole zone, and
-**Escalate** when something is wrong you cannot resolve yourself.
+Below that: **Finish sweep** when you have checked your whole zone,
+**Escalate** when something is wrong you cannot resolve yourself, and **Add a
+note** for anything the command centre should know that is not an emergency.
+
+Both open a box to type in. Escalating asks for words and will not send
+without them — an escalation nobody can read is a red flag nobody can act on,
+and your words are quoted in the drill report exactly as you write them.
 
 Finishing a sweep is always accepted, even when the system disagrees with you.
 But it does not mean the zone is clear — the command centre will still show the

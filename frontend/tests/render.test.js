@@ -12,6 +12,7 @@ import {
   syncStatus, tiles, timingLine, verdict,
   exitPressure,
   drillControl,
+  composer,
 } from '../js/render.js';
 
 const t = createTranslator('en');
@@ -448,5 +449,39 @@ describe('when the commander can stand down', () => {
       accountability_completion_s: 300.0,
     }, t);
     assert.match(line.settled, /300\.0s/);
+  });
+});
+
+describe('what a warden types an escalation into', () => {
+  it('is closed until something opens it', () => {
+    const state = composer(null, '', t);
+    assert.equal(state.open, false);
+    assert.equal(state.canSend, false);
+  });
+
+  it('will not send an escalation with no words', () => {
+    // `sweep.escalate` would record "no reason recorded", and the drill report
+    // promises escalations in the warden's own words.
+    for (const blank of ['', '   ', '\n']) {
+      const state = composer('ESCALATE', blank, t);
+      assert.equal(state.canSend, false);
+      assert.match(state.hint, /Say what is wrong/);
+    }
+  });
+
+  it('sends once there are words, and trims them', () => {
+    const state = composer('ESCALATE', '  smoke in the west stairwell  ', t);
+    assert.equal(state.canSend, true);
+    assert.equal(state.text, 'smoke in the west stairwell');
+    assert.equal(state.hint, null);
+  });
+
+  it('titles itself by what is being written', () => {
+    assert.match(composer('ESCALATE', 'x', t).title, /Escalate/);
+    assert.match(composer('NOTE', 'x', t).title, /Add a note/);
+  });
+
+  it('carries the kind through so the caller does not re-derive it', () => {
+    assert.equal(composer('NOTE', 'x', t).kind, 'NOTE');
   });
 });

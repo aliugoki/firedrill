@@ -20,7 +20,8 @@
 import { Api, ApiError, Freshness } from './api.js';
 import { createTranslator, isRtl } from './i18n.js';
 import {
-  filterRoster, headcountVerdict, healthLine, orderForWarden, syncStatus,
+  composer, filterRoster, headcountVerdict, healthLine, orderForWarden,
+  syncStatus,
 } from './render.js';
 import { OfflineQueue, reconcileSync } from './queue.js';
 
@@ -48,6 +49,8 @@ const zoneFreshness = new Freshness(15_000);
 
 let screen = 'zone';
 let lastHeadcount = null;
+//: Which composer is open, if any: 'ESCALATE', 'NOTE', or null.
+let composing = null;
 let refusals = [];
 
 // --- language ---------------------------------------------------------------
@@ -63,6 +66,9 @@ function applyLanguage() {
   document.getElementById('headcount').placeholder = t('warden.headcount_prompt');
   document.getElementById('sweep').textContent = t('warden.sweep');
   document.getElementById('escalate').textContent = t('warden.escalate');
+  document.getElementById('note').textContent = t('warden.note');
+  document.getElementById('composer-send').textContent = t('warden.send');
+  document.getElementById('composer-cancel').textContent = t('warden.cancel');
   document.getElementById('search').placeholder = t('warden.search');
   // Read by a screen reader, so they are strings like any other. They were
   // hard-coded English in the markup, which is invisible until somebody using
@@ -288,9 +294,42 @@ document.getElementById('submit-count').addEventListener('click', async () => {
 
 document.getElementById('sweep').addEventListener('click', () =>
   act('SWEEP_COMPLETE'));
-document.getElementById('escalate').addEventListener('click', () => {
-  const reason = prompt(t('warden.escalate'));
-  if (reason) act('ESCALATE', { note: reason });
+function paintComposer() {
+  const text = document.getElementById('composer-text');
+  const state = composer(composing, text.value, t);
+
+  document.getElementById('composer').hidden = !state.open;
+  if (!state.open) return;
+  document.getElementById('composer-hint').textContent = state.hint || '';
+  document.getElementById('composer-send').disabled = !state.canSend;
+}
+
+function openComposer(kind) {
+  composing = kind;
+  const text = document.getElementById('composer-text');
+  text.value = '';
+  paintComposer();
+  text.focus();
+}
+
+document.getElementById('escalate').addEventListener(
+  'click', () => openComposer('ESCALATE'));
+document.getElementById('note').addEventListener(
+  'click', () => openComposer('NOTE'));
+document.getElementById('composer-text').addEventListener(
+  'input', paintComposer);
+document.getElementById('composer-cancel').addEventListener('click', () => {
+  composing = null;
+  paintComposer();
+});
+document.getElementById('composer-send').addEventListener('click', () => {
+  const text = document.getElementById('composer-text');
+  const state = composer(composing, text.value, t);
+  if (!state.canSend) return;
+  act(state.kind, { note: state.text });
+  composing = null;
+  text.value = '';
+  paintComposer();
 });
 document.getElementById('search').addEventListener('input', () => paint());
 

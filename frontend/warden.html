@@ -33,6 +33,16 @@
       <div id="mismatch"></div>
       <button class="primary" id="sweep" style="width:100%;min-height:56px"></button>
       <button id="escalate" style="width:100%;min-height:56px;margin-top:8px"></button>
+      <button id="note" style="width:100%;min-height:56px;margin-top:8px"></button>
+      <div id="composer" hidden>
+        <textarea id="composer-text" rows="3"
+                  style="width:100%;min-height:72px"></textarea>
+        <div id="composer-hint" class="caveat"></div>
+        <div class="person-actions">
+          <button class="primary" id="composer-send"></button>
+          <button id="composer-cancel"></button>
+        </div>
+      </div>
     </section>
 
     <section id="screen-roster" hidden>

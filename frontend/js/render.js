@@ -181,6 +181,33 @@ export function orderForWarden(rows) {
 }
 
 /**
+ * The inline composer a warden types an escalation or a note into.
+ *
+ * It replaces a `prompt()`, which is the wrong thing twice over on a tablet.
+ * It blocks the page, including the timers that drain the offline queue. And a
+ * standalone PWA on iOS may refuse to show one at all, in which case it returns
+ * null and the old code read that as "cancelled" -- so a warden pressing
+ * escalate at an assembly point would have seen nothing happen and believed
+ * they had escalated.
+ *
+ * An escalation with no words is a red flag nobody can act on, so it cannot be
+ * sent empty. `sweep.escalate` would have recorded "no reason recorded", and
+ * the drill report promises escalations in the warden's own words.
+ */
+export function composer(kind, text, t) {
+  if (!kind) return { open: false, canSend: false };
+  const words = (text || '').trim();
+  return {
+    open: true,
+    kind,
+    title: kind === 'NOTE' ? t('warden.note') : t('warden.escalate'),
+    canSend: words.length > 0,
+    hint: words.length > 0 ? null : t('warden.words_needed'),
+    text: words,
+  };
+}
+
+/**
  * What the operator can do to the drill right now, and what to call it.
  *
  * `api.js` has had `startDrill` and `completeDrill` since Phase 4 and nothing
