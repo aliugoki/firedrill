@@ -238,6 +238,24 @@ class BottlenecksOut(BaseModel):
     caveats: list[str] = []
 
 
+class DrillReportOut(BaseModel):
+    """The post-drill report, as the verdict plus the text a person reads.
+
+    The rendered lines are the artefact -- what gets filed and quoted in a
+    post-incident review -- and the structured fields are there so a dashboard
+    does not have to parse them back out of prose.
+    """
+
+    drill_id: str
+    outcome: str | None
+    summary: str | None
+    is_safe_result: bool
+    false_accounted: int
+    false_unaccounted: int
+    p95_s: float | None
+    rendered: list[str]
+
+
 class ZonePanelOut(BaseModel):
     zone_id: str
     warden_id: str | None

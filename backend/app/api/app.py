@@ -26,6 +26,8 @@ from fastapi.staticfiles import StaticFiles
 from app.api import schemas
 from app.core.roster import RosterSnapshot
 from app.drill import Drill, DrillError, DrillRegistry, DrillStatus
+from app.infra.audit import AuditAction, AuditLog
+from app.reporting.drill_report import build_report
 from app.infra.auth import (
     AuthConfigError,
     AuthError,
@@ -98,7 +100,8 @@ def create_app(registry: DrillRegistry | None = None,
                roster_provider: Callable[[str], RosterSnapshot] | None = None,
                assembly_zones: frozenset = frozenset(),
                replica=None,
-               auth: AuthSettings | None = None) -> FastAPI:
+               auth: AuthSettings | None = None,
+               audit: AuditLog | None = None) -> FastAPI:
     app = FastAPI(
         title="EVAC-120",
         version="0.4.0",
@@ -110,13 +113,23 @@ def create_app(registry: DrillRegistry | None = None,
             "final authority."
         ),
     )
-    app.state.registry = registry or DrillRegistry()
+    # `is None`, not `or`, for every injected dependency. An empty `AuditLog`
+    # is falsy -- it defines `__len__` -- so `audit or AuditLog()` quietly
+    # built a second one and the caller's log stayed empty while the API wrote
+    # to a different object. `DrillRegistry` is truthy today and would do the
+    # same the day somebody gives it a `__len__`.
+    app.state.registry = DrillRegistry() if registry is None else registry
     # No secret and no trusted headers means every request is refused. That is
     # the safe default; `/healthz` reports it as a gap so an operator finds out
     # from a dashboard rather than from a wall of 401s.
-    app.state.auth = auth or AuthSettings(trust_headers=False)
+    app.state.auth = AuthSettings(trust_headers=False) if auth is None else auth
     app.state.roster_provider = roster_provider
     app.state.assembly_zones = assembly_zones
+    # Who did what to the system, as opposed to what the cameras saw. Nothing
+    # constructed one of these before: every action in `AuditAction` existed
+    # and none was ever recorded, so "who declared the drill over at 10:44"
+    # had no answer anywhere.
+    app.state.audit = AuditLog() if audit is None else audit
 
     def drill_or_404(drill_id: str, caller: Caller) -> Drill:
         """The drill, if it is this caller's to see.
@@ -175,6 +188,12 @@ def create_app(registry: DrillRegistry | None = None,
             site_id=body.site_id, name=body.name, roster=roster,
             created_ms=now_ms(), assembly_zones=app.state.assembly_zones)
         app.state.registry.add(drill)
+        app.state.audit.record(
+            action=AuditAction.DRILL_CREATED, actor_id=caller.user_id,
+            ts_ms=now_ms(), drill_id=drill.drill_id,
+            summary=f"created {drill.name} at {drill.site_id}",
+            expected=drill.roster.expected_count,
+            roster_trustworthy=drill.roster.is_trustworthy)
         return _summary(drill)
 
     @app.get("/api/evac/drills", response_model=list[schemas.DrillSummary],
@@ -204,6 +223,11 @@ def create_app(registry: DrillRegistry | None = None,
             drill.start(now_ms())
         except DrillError as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
+        app.state.audit.record(
+            action=AuditAction.DRILL_STARTED, actor_id=caller.user_id,
+            ts_ms=now_ms(), drill_id=drill_id,
+            summary=f"started {drill.name}",
+            expected=drill.roster.expected_count)
         return _summary(drill)
 
     @app.post("/api/evac/drills/{drill_id}/complete",
@@ -211,10 +235,24 @@ def create_app(registry: DrillRegistry | None = None,
     def complete_drill(drill_id: str,
                        caller: Caller = Depends(requires(EVAC_OPERATE))):
         drill = drill_or_404(drill_id, caller)
+        at = now_ms()
+        # What the board said at the moment somebody ended it. The audit log's
+        # own docstring asks "who decided to declare all clear at 10:44, and
+        # what did the board say then" -- and an entry without the second half
+        # cannot answer whether the decision was sound.
+        board = drill.board(at)
         try:
-            drill.complete(now_ms())
+            drill.complete(at)
         except DrillError as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
+        app.state.audit.record(
+            action=AuditAction.DRILL_COMPLETED, actor_id=caller.user_id,
+            ts_ms=at, drill_id=drill_id,
+            summary=f"ended {drill.name} after {drill.elapsed_ms(at) // 1000}s",
+            all_clear=board.all_clear,
+            blocking=list(board.blocking_all_clear()),
+            accounted=board.accounted, expected=board.expected,
+            unaccounted=board.unaccounted)
         return _summary(drill)
 
     # --- the live board -------------------------------------------------------
@@ -264,6 +302,42 @@ def create_app(registry: DrillRegistry | None = None,
             supporting=[_evidence(e) for e in explanation.supporting],
             contradicting=[_evidence(e) for e in explanation.contradicting],
             context=[_evidence(e) for e in explanation.context])
+
+    @app.get("/api/evac/drills/{drill_id}/report",
+             response_model=schemas.DrillReportOut, tags=["board"])
+    def get_report(drill_id: str,
+                   caller: Caller = Depends(requires(EVAC_READ))):
+        """The post-drill report.
+
+        `build_report` has existed since Phase 5 with no way to reach it, so
+        the deliverable of the whole phase lived in a function two tests and a
+        script called. Available while a drill is still running as well as
+        after it: a commander who wants to know where they stand at minute six
+        should not have to end the drill to find out.
+
+        Reading it is a disclosure -- it names people and where they were seen
+        -- so it is recorded as one.
+        """
+        drill = drill_or_404(drill_id, caller)
+        report = build_report(drill, now_ms=now_ms(), audit=app.state.audit)
+
+        app.state.audit.record(
+            action=AuditAction.REPORT_EXPORTED, actor_id=caller.user_id,
+            ts_ms=now_ms(), drill_id=drill_id,
+            summary=f"read the report for {drill.name}",
+            people=report.expected,
+            while_running=drill.status is DrillStatus.RUNNING)
+
+        validation = report.validation
+        return schemas.DrillReportOut(
+            drill_id=drill.drill_id,
+            outcome=validation.outcome.value if validation else None,
+            summary=validation.summary() if validation else None,
+            is_safe_result=report.is_safe_result,
+            false_accounted=len(report.false_accounted),
+            false_unaccounted=len(report.false_unaccounted),
+            p95_s=report.p95_s,
+            rendered=report.render())
 
     @app.get("/api/evac/drills/{drill_id}/bottlenecks",
              response_model=schemas.BottlenecksOut, tags=["board"])
