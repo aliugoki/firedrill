@@ -50,13 +50,41 @@ class Criterion(str, Enum):
 
 #: Criteria that, if not satisfied, mean the drill cannot judge the system at
 #: all. Distinct from failing: there was nothing to check against.
+#:
+#: `P95_MEASURABLE` belongs here and was missing. Too few measurements for a
+#: percentile to mean anything is the definition of not having enough evidence,
+#: and while it counted as a failure a ten-person office reported FAIL on a
+#: drill where nobody was falsely accounted, every zone was swept and counted,
+#: the counts agreed, coverage was total and the cameras never blinked. No
+#: number of good drills could have changed it, because the site is smaller
+#: than the sample a 95th percentile needs. Reporting that as a failure of the
+#: system says something untrue about the system.
+#:
+#: It only ever decides the outcome alone on a small roster. Too few samples
+#: from a large one means people went untracked, and `COVERAGE_SUFFICIENT`
+#: fails too -- also evidentiary, same verdict.
 EVIDENTIARY: frozenset[Criterion] = frozenset({
     Criterion.SWEEPS_COMPLETED, Criterion.HEADCOUNTS_TAKEN,
     Criterion.COVERAGE_SUFFICIENT, Criterion.SYSTEM_MOSTLY_SIGHTED,
+    Criterion.P95_MEASURABLE,
 })
 
 #: The one whose failure is a safety failure.
 SAFETY_CRITICAL: frozenset[Criterion] = frozenset({Criterion.NO_FALSE_ACCOUNTED})
+
+#: Criteria whose failure is a disagreement that actually happened, rather than
+#: a judgement the drill was not equipped to make.
+#:
+#: These outrank missing evidence. The wardens counted, the system counted, and
+#: the two differed -- that is true whether or not the drill was large enough to
+#: support a percentile or complete enough to check anything else. Reporting
+#: INCONCLUSIVE there buries the second most important signal a drill produces
+#: behind "not enough evidence", when the evidence in question is exactly what
+#: was collected.
+#:
+#: `P95_WITHIN_TARGET` is deliberately not here: a target that could not be
+#: measured is not a target that was missed.
+DISAGREEMENT: frozenset[Criterion] = frozenset({Criterion.HEADCOUNTS_AGREE})
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +120,10 @@ class Check:
     def is_safety_critical(self) -> bool:
         return self.criterion in SAFETY_CRITICAL
 
+    @property
+    def is_disagreement(self) -> bool:
+        return self.criterion in DISAGREEMENT
+
 
 @dataclass(frozen=True, slots=True)
 class Validation:
@@ -111,10 +143,16 @@ class Validation:
     def missing_evidence(self) -> tuple:
         return tuple(c for c in self.failed if c.is_evidentiary)
 
+    @property
+    def disagreements(self) -> tuple:
+        return tuple(c for c in self.failed if c.is_disagreement)
+
     def summary(self) -> str:
         if self.outcome is Outcome.FAIL:
             if self.safety_failures:
                 return (f"FAIL — {self.safety_failures[0].detail}")
+            if self.disagreements:
+                return f"FAIL — {self.disagreements[0].detail}"
             return f"FAIL — {self.failed[0].detail}"
         if self.outcome is Outcome.INCONCLUSIVE:
             return ("INCONCLUSIVE — this drill cannot judge the system: "
@@ -242,15 +280,19 @@ def validate(
     ))
 
     result = tuple(checks)
-    safety = [c for c in result if not c.passed and c.is_safety_critical]
-    evidentiary = [c for c in result if not c.passed and c.is_evidentiary]
+    failed = [c for c in result if not c.passed]
+    safety = [c for c in failed if c.is_safety_critical]
+    disagreed = [c for c in failed if c.is_disagreement]
+    evidentiary = [c for c in failed if c.is_evidentiary]
 
-    if safety:
+    if safety or disagreed:
+        # A disagreement that happened is not an absence of evidence, so it is
+        # checked before the evidence gate rather than behind it.
         outcome = Outcome.FAIL
     elif evidentiary:
         # Not a soft pass. There was nothing to check the system against.
         outcome = Outcome.INCONCLUSIVE
-    elif any(not c.passed for c in result):
+    elif failed:
         outcome = Outcome.FAIL
     else:
         outcome = Outcome.PASS

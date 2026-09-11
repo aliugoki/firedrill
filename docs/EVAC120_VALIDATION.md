@@ -94,10 +94,21 @@ worth exactly as much as a self-marked exam.
 
 1. **A safety failure is a FAIL**, whatever else happened. One false accounted
    ends the assessment.
-2. **Missing evidence is INCONCLUSIVE**, even when every other number looks
+2. **A disagreement that happened is a FAIL**, ahead of the evidence gate. The
+   wardens counted, the system counted, and the two differed; that is true
+   whether or not the drill was large enough or complete enough to judge
+   anything else. It used to sit behind rule 3, so a drill with a real
+   headcount disagreement *and* an unswept zone reported INCONCLUSIVE, burying
+   the second most important signal a drill produces behind "not enough
+   evidence" — when the evidence in question was exactly what had been
+   collected.
+3. **Missing evidence is INCONCLUSIVE**, even when every other number looks
    good.
-3. Anything else failing is a **FAIL**.
-4. Otherwise, **PASS**.
+4. Anything else failing is a **FAIL**.
+5. Otherwise, **PASS**.
+
+A target that could not be measured is not a target that was missed, so
+`P95_WITHIN_TARGET` stays behind the evidence gate rather than joining rule 2.
 
 ---
 
@@ -110,9 +121,18 @@ worth exactly as much as a self-marked exam.
 | `HEADCOUNTS_TAKEN` | Every zone recorded a physical count | Evidence |
 | `COVERAGE_SUFFICIENT` | ≥90% tracked end to end | Evidence |
 | `SYSTEM_MOSTLY_SIGHTED` | Blind for ≤10% of the drill | Evidence |
-| `HEADCOUNTS_AGREE` | No zone disagreed | Quality |
-| `P95_MEASURABLE` | ≥20 samples and a reliable percentile | Quality |
+| `HEADCOUNTS_AGREE` | No zone disagreed | Disagreement |
+| `P95_MEASURABLE` | ≥20 samples and a reliable percentile | Evidence |
 | `P95_WITHIN_TARGET` | P95 ≤ 120 s | Quality |
+
+`P95_MEASURABLE` is evidence, not quality. Too few measurements for a percentile
+to mean anything is the definition of not having enough evidence. While it
+counted as a quality failure, a ten-person office reported **FAIL** on a drill
+where nobody was falsely accounted, every zone was swept and counted, the counts
+agreed, coverage was total and the cameras never blinked — and no number of good
+drills could ever have changed it, because the site is smaller than the sample a
+95th percentile needs. Reporting that as a failure of the system says something
+untrue about the system.
 
 Two are worth explaining.
 

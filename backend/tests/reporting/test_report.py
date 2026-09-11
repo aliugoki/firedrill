@@ -254,3 +254,87 @@ class TestTheReport:
         lines = build_report(drill, now_ms=T0 + 1000).render()
         assert lines
         assert any("INCONCLUSIVE" in line for line in lines)
+
+
+class TestASiteTooSmallToJudge:
+    """A ten-person office cannot produce a 95th percentile, and that is a fact
+    about the office rather than about the system.
+
+    It used to report FAIL on a drill where nobody was falsely accounted, every
+    zone was swept and counted, the counts agreed, coverage was total and the
+    cameras never blinked -- and no number of good drills could have changed
+    it. A safety officer reading that concludes the system is broken.
+    """
+
+    SMALL = dict(
+        false_accounted=0, false_unaccounted=0,
+        sweeps_completed=1, sweeps_expected=1,
+        zones_with_headcount=1, headcount_mismatches=0,
+        timing_samples=10, timing_coverage=1.0,
+        p95_s=95.0, p95_reliable=False, blind_fraction=0.0)
+
+    def test_it_is_inconclusive_rather_than_a_failure(self):
+        result = validate(**self.SMALL)
+        assert result.outcome is Outcome.INCONCLUSIVE
+        assert "cannot judge the system" in result.summary()
+
+    def test_it_says_which_evidence_was_missing(self):
+        result = validate(**self.SMALL)
+        missing = {check.criterion for check in result.missing_evidence}
+        assert Criterion.P95_MEASURABLE in missing
+
+    def test_a_real_disagreement_is_still_a_failure(self):
+        # The guard: making this evidentiary must not soften a drill where the
+        # humans and the system actually disagreed.
+        disagreed = dict(self.SMALL, false_accounted=1)
+        assert validate(**disagreed).outcome is Outcome.FAIL
+
+        mismatched = dict(self.SMALL, headcount_mismatches=1)
+        assert validate(**mismatched).outcome is Outcome.FAIL
+
+    def test_a_big_roster_with_too_few_samples_is_unchanged(self):
+        # Too few samples from a large roster means people went untracked,
+        # which `COVERAGE_SUFFICIENT` already calls missing evidence.
+        untracked = dict(self.SMALL, timing_samples=10, timing_coverage=0.05)
+        result = validate(**untracked)
+        assert result.outcome is Outcome.INCONCLUSIVE
+        assert Criterion.COVERAGE_SUFFICIENT in {
+            check.criterion for check in result.missing_evidence}
+
+
+class TestADisagreementOutranksMissingEvidence:
+    """The wardens counted, the system counted, and the two differed.
+
+    That is true whether or not the drill was large enough or complete enough
+    to judge anything else, so it is a FAIL rather than an INCONCLUSIVE. It
+    used to sit behind the evidence gate, which buried the second most
+    important signal a drill produces behind "not enough evidence" -- when the
+    evidence in question was exactly what had been collected.
+    """
+
+    INCOMPLETE = dict(
+        false_accounted=0, false_unaccounted=0,
+        sweeps_completed=1, sweeps_expected=2,
+        zones_with_headcount=1, headcount_mismatches=0,
+        timing_samples=200, timing_coverage=0.95,
+        p95_s=95.0, p95_reliable=True, blind_fraction=0.0)
+
+    def test_an_incomplete_drill_alone_is_inconclusive(self):
+        assert validate(**self.INCOMPLETE).outcome is Outcome.INCONCLUSIVE
+
+    def test_the_same_drill_with_a_disagreement_fails(self):
+        result = validate(**dict(self.INCOMPLETE, headcount_mismatches=1))
+        assert result.outcome is Outcome.FAIL
+
+    def test_the_headline_names_the_disagreement_not_the_gap(self):
+        # A commander reading "FAIL — not every zone was swept" would go and
+        # chase the sweep, not the count that did not add up.
+        result = validate(**dict(self.INCOMPLETE, headcount_mismatches=1))
+        assert "disagreed with the system" in result.summary()
+
+    def test_a_target_that_could_not_be_measured_is_not_a_target_missed(self):
+        # P95_WITHIN_TARGET deliberately stays behind the evidence gate.
+        unmeasurable = dict(self.INCOMPLETE, timing_samples=2,
+                            timing_coverage=0.02, p95_s=None,
+                            p95_reliable=False)
+        assert validate(**unmeasurable).outcome is Outcome.INCONCLUSIVE
