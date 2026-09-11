@@ -331,3 +331,152 @@ class TestGroupSetupFailures:
         consumer.ensure_group()
         assert consumer.ensure_group() is True
         assert consumer.is_degraded is False
+
+
+class TestTheCameraStreamReachesTheBoard:
+    """The drill's ingestor was fed by nothing except the drill itself.
+
+    A `Drill` builds its own `Ingestor` and only sees what happens inside it:
+    the start, the end, warden confirmations, headcounts. The consumer folded
+    the camera stream into the node's ingestor, which the board never reads. So
+    presence, identity, timing and every disagreement with the roll-call were
+    computed from a fold that had seen no camera evidence.
+
+    Nothing caught it because every unit test and the whole simulator feed a
+    drill directly. That is the one path production did not use.
+    """
+
+    def a_drill(self, drill_id="d"):
+        from app.core.roster import ExpectationReason, Roster
+        from app.drill import Drill, DrillRegistry
+
+        roster = Roster()
+        roster.add_employee(emp_id="EMP-000", display_name="Person 0",
+                            has_gallery_entry=True,
+                            assigned_assembly_zone="assembly-north",
+                            reason=ExpectationReason.ON_SHIFT)
+        drill = Drill(drill_id=drill_id, tenant_id="t", site_id="s",
+                      name="Q3", roster=roster.snapshot(T0), created_ms=T0,
+                      assembly_zones=frozenset({"assembly-north"}))
+        registry = DrillRegistry()
+        registry.add(drill)
+        return drill, registry
+
+    def test_an_observation_reaches_the_drill_it_names(self):
+        drill, registry = self.a_drill()
+        drill.start(T0)
+        stream = FakeStream()
+        stream.publish(entry(1))
+        consumer = EventConsumer(ingestor=Ingestor(), client=stream,
+                                 stream="s", registry=registry)
+        consumer.ensure_group()
+
+        assert consumer.poll_once(T0) == 1
+        assert drill.ingestor.state.presence.get("gp-1").last_sighting_ms
+
+    def test_it_lands_in_the_drills_own_record(self):
+        # Not only in the board. A drill recovered after a restart replays from
+        # its stored events, and an observation that never reached the store is
+        # one the recovered drill has never heard of.
+        drill, registry = self.a_drill()
+        drill.start(T0)
+        appended = []
+        drill.events_store = type("Store", (), {
+            "append": lambda _self, event, now_ms=None: appended.append(event),
+            "is_degraded": False,
+        })()
+        stream = FakeStream()
+        stream.publish(entry(1))
+        consumer = EventConsumer(ingestor=Ingestor(), client=stream,
+                                 stream="s", registry=registry)
+        consumer.ensure_group()
+        consumer.poll_once(T0)
+
+        assert [e.seq for e in appended] == [1]
+
+    def test_an_event_for_a_drill_that_is_over_does_not_reopen_it(self):
+        # Folding it in would change a record somebody has already signed.
+        drill, registry = self.a_drill()
+        drill.start(T0)
+        drill.complete(T0 + 60_000)
+        node = Ingestor()
+        stream = FakeStream()
+        stream.publish(entry(1))
+        consumer = EventConsumer(ingestor=node, client=stream, stream="s",
+                                 registry=registry)
+        consumer.ensure_group()
+        consumer.poll_once(T0 + 120_000)
+
+        assert drill.ingestor.state.presence.get("gp-1").last_sighting_ms is None
+        # Still counted, so `/healthz` does not go quiet about it.
+        assert node.state.presence.get("gp-1").last_sighting_ms is not None
+
+    def test_an_event_for_a_drill_this_node_does_not_have_is_still_counted(self):
+        _, registry = self.a_drill(drill_id="somebody-elses")
+        node = Ingestor()
+        stream = FakeStream()
+        stream.publish(entry(1))
+        consumer = EventConsumer(ingestor=node, client=stream, stream="s",
+                                 registry=registry)
+        consumer.ensure_group()
+
+        assert consumer.poll_once(T0) == 1
+        assert node.state.presence.get("gp-1").last_sighting_ms is not None
+
+
+class TestEveryEventIsQueuedForCentral:
+    """`Replicator.enqueue` was called by no production code at all.
+
+    The outbox stayed empty, the supervisor's replicate job flushed nothing
+    every fifteen seconds, and `/healthz` reported a replication backlog of
+    zero -- correctly, and meaning the opposite of what a reader takes from it.
+    Central received nothing, ever.
+    """
+
+    class Spy:
+        def __init__(self):
+            self.events = []
+
+        def enqueue(self, event, now_ms=None):
+            self.events.append(event)
+
+    def test_a_folded_event_is_handed_to_central(self):
+        spy = self.Spy()
+        stream = FakeStream()
+        stream.publish(entry(1))
+        stream.publish(entry(2))
+        consumer = EventConsumer(ingestor=Ingestor(), client=stream,
+                                 stream="s", replicator=spy)
+        consumer.ensure_group()
+        consumer.poll_once(T0)
+
+        assert [e.seq for e in spy.events] == [1, 2]
+
+    def test_a_redelivery_is_not_queued_twice(self):
+        spy = self.Spy()
+        stream = FakeStream()
+        stream.publish(entry(1))
+        consumer = EventConsumer(ingestor=Ingestor(), client=stream,
+                                 stream="s", replicator=spy)
+        consumer.ensure_group()
+        consumer.poll_once(T0)
+        stream.publish(entry(1))
+        consumer.poll_once(T0 + 1_000)
+
+        assert len(spy.events) == 1
+
+    def test_a_broken_outbox_does_not_stop_the_drill(self):
+        # Replication is never on the critical path. An edge node with no link
+        # to central is fully operational, and one with a broken buffer must be.
+        class Broken:
+            def enqueue(self, event, now_ms=None):
+                raise OSError("disk full")
+
+        stream = FakeStream()
+        stream.publish(entry(1))
+        consumer = EventConsumer(ingestor=Ingestor(), client=stream,
+                                 stream="s", replicator=Broken())
+        consumer.ensure_group()
+
+        assert consumer.poll_once(T0) == 1
+        assert "disk full" in consumer.stats.last_error

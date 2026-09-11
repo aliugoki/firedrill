@@ -81,6 +81,25 @@ class EventConsumer:
     batch_size: int = 200
     block_ms: int = 2_000
     stale_after_ms: int = 60_000
+    #: Where events go on their way to central. Optional: an edge node with no
+    #: central still runs drills, which is the whole point of the design.
+    #:
+    #: Nothing used to hold one. `Replicator.enqueue` was called by no
+    #: production code at all, so the outbox stayed empty, the supervisor's
+    #: replicate job flushed nothing every fifteen seconds, and `/healthz`
+    #: reported a backlog of zero -- correctly, and meaning the opposite of
+    #: what a reader would take from it. Central received nothing, ever.
+    replicator: object | None = None
+    #: The drills this node is running, so a camera observation reaches the
+    #: board it is about.
+    #:
+    #: Without one, every event folded into the node's own ingestor and stopped
+    #: there. A `Drill` builds its own ingestor and is fed only by what happens
+    #: inside it -- warden confirmations, headcounts, the start and the end --
+    #: so the accountability board saw no camera evidence at all. Nothing
+    #: caught it because every test and the whole simulator feed a drill
+    #: directly, which is the one path production did not use.
+    registry: object | None = None
     stats: ConsumerStats = field(default_factory=ConsumerStats)
     _degraded: bool = False
 
@@ -140,6 +159,38 @@ class EventConsumer:
             self.stats.claimed += len(messages)
         return self._process(messages, now_ms)
 
+    def _drill_for(self, event):
+        """The running drill this event belongs to, or None.
+
+        Only a running one. An observation arriving after a drill was declared
+        over belongs to no board, and folding it into a completed drill would
+        change a record somebody has already signed. It still counts on the
+        node's own ingestor, where `/healthz` can see it.
+        """
+        if self.registry is None:
+            return None
+        try:
+            drill = self.registry.get(event.drill_id)
+        except KeyError:
+            return None
+        return drill if drill.is_running else None
+
+    def _replicate(self, event, now_ms: int) -> None:
+        """Hand the event to central's queue. Never raises.
+
+        After the fold, not before: central is a replica, and one holding an
+        event the edge node itself rejected would be a replica of nothing that
+        happened. A failure here is contained because replication is not on the
+        critical path -- a drill continues with no link to central at all.
+        """
+        if self.replicator is None:
+            return
+        try:
+            self.replicator.enqueue(event, now_ms)
+        except Exception as exc:
+            self.stats.last_error = (
+                f"replication buffer: {type(exc).__name__}: {exc}")
+
     def _process(self, messages: list, now_ms: int) -> int:
         applied = 0
         acknowledge: list[str] = []
@@ -155,7 +206,17 @@ class EventConsumer:
                 acknowledge.append(message_id)
                 continue
 
-            was_new = self.ingestor.feed(event)
+            drill = self._drill_for(event)
+            if drill is not None:
+                # `Drill.feed` persists, queues for central and folds, in that
+                # order. Routed here rather than after the node's own fold so
+                # the drill's store and the drill's board see the same event.
+                was_new = bool(drill.feed([event]))
+            else:
+                was_new = self.ingestor.feed(event)
+                if was_new:
+                    self._replicate(event, now_ms)
+
             if was_new:
                 applied += 1
                 self.stats.events_applied += 1

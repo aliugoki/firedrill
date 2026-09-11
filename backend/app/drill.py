@@ -85,6 +85,11 @@ class Drill:
     #: than the software needs its own bookkeeping.
     events_store: object | None = None
     drill_store: object | None = None
+    #: Central's queue. A drill's own events -- warden confirmations, sweeps,
+    #: headcounts, the start and the end -- are produced here rather than read
+    #: off the camera stream, so the consumer never sees them and nothing else
+    #: would put them on the wire.
+    replicator: object | None = None
 
     ingestor: Ingestor = field(init=False)
     warden: WardenState = field(init=False)
@@ -148,7 +153,27 @@ class Drill:
             for event in events:
                 self.events_store.append(event)
             self._mirror_store_health(events)
+        self._replicate(events)
         return self.ingestor.feed_batch(events)
+
+    def _replicate(self, events: list[Event]) -> None:
+        """Queue events for central. Never raises, never blocks a decision.
+
+        After the local store, because central must never hold an event this
+        node's own record lacks. Before the fold is fine and after would be
+        too; what matters is the order against the store, not against the
+        board, which is in memory here either way.
+        """
+        if self.replicator is None:
+            return
+        for event in events:
+            try:
+                self.replicator.enqueue(event, event.ts_ms)
+            except Exception:
+                # Replication is not on the critical path. An edge node with no
+                # link to central is fully operational, and one whose outbox is
+                # broken must be too.
+                pass
 
     def _mirror_store_health(self, events: list[Event]) -> None:
         """Put the store's trouble into this drill's health log.
@@ -419,7 +444,8 @@ class DrillRegistry:
         return sorted(self.drills.values(), key=lambda d: -d.created_ms)
 
     def recover(self, *, drill_store, events_store, site_id: str,
-                now_ms: int, assembly_zones: frozenset = frozenset()) -> list:
+                now_ms: int, assembly_zones: frozenset = frozenset(),
+                replicator=None) -> list:
         """Reload drills that were running when the process stopped.
 
         Only running ones. A completed drill is history; a running one is a
@@ -448,7 +474,8 @@ class DrillRegistry:
                 roster=roster_from_json(row["roster_snapshot"] or {}),
                 created_ms=row["created_ms"],
                 assembly_zones=assembly_zones,
-                events_store=events_store, drill_store=drill_store)
+                events_store=events_store, drill_store=drill_store,
+                replicator=replicator)
             drill.status = DrillStatus(row["status"])
             drill.started_ms = row["started_ms"]
             drill.completed_ms = row["completed_ms"]

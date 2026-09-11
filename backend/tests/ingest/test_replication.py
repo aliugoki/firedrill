@@ -193,3 +193,66 @@ def _wire(event_obj: Event) -> dict:
     from app.ingest.replication import _to_wire
 
     return _to_wire(event_obj)
+
+
+class TestTwoDrillsOnOneNode:
+    """The outbox keyed uniqueness on `(source, seq)` and dropped the second.
+
+    A drill's system events are numbered from one and carry the node's own
+    source, so `DRILL_STARTED` for the second drill a node ran collided with
+    the first and never reached central. Silently: a rejected insert is
+    indistinguishable from a redelivery, which is what the constraint is for.
+    The event store's key had `drill_id` in it all along.
+    """
+
+    def start_of(self, drill_id):
+        from app.core.events import Event, EventType, SourceKind
+
+        return Event(tenant_id="t", site_id="s", drill_id=drill_id,
+                     source="edge:s", source_kind=SourceKind.SYSTEM, seq=1,
+                     type=EventType.DRILL_STARTED, ts_ms=T0, payload={})
+
+    def test_both_drills_reach_the_buffer(self, tmp_path):
+        outbox = Outbox(tmp_path / "o.db")
+        assert outbox.add(self.start_of("morning"), T0) is True
+        assert outbox.add(self.start_of("afternoon"), T0) is True
+        assert outbox.depth() == 2
+
+    def test_a_redelivery_within_one_drill_is_still_rejected(self, tmp_path):
+        outbox = Outbox(tmp_path / "o.db")
+        outbox.add(self.start_of("morning"), T0)
+        assert outbox.add(self.start_of("morning"), T0) is False
+        assert outbox.depth() == 1
+
+    def test_a_buffer_written_by_an_older_build_is_brought_forward(self, tmp_path):
+        """Its contents are the last copy outside this node.
+
+        `CREATE TABLE IF NOT EXISTS` leaves an existing file exactly as it was,
+        so a node upgraded mid-outage would keep the constraint that drops
+        events. The unsent ones are rebuilt into the new table rather than left
+        behind the old key.
+        """
+        import json
+        import sqlite3
+
+        path = tmp_path / "legacy.db"
+        conn = sqlite3.connect(path)
+        conn.execute(
+            """CREATE TABLE pending (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   source TEXT NOT NULL, seq INTEGER NOT NULL,
+                   payload TEXT NOT NULL, queued_at_ms INTEGER NOT NULL,
+                   attempts INTEGER NOT NULL DEFAULT 0,
+                   UNIQUE(source, seq))""")
+        conn.execute(
+            "INSERT INTO pending (source, seq, payload, queued_at_ms, attempts)"
+            " VALUES (?, ?, ?, ?, ?)",
+            ("edge:s", 1, json.dumps({"drill_id": "morning"}), T0, 3))
+        conn.commit()
+        conn.close()
+
+        outbox = Outbox(path)
+        assert outbox.depth() == 1
+        # And the drill it could not previously fit now goes in beside it.
+        assert outbox.add(self.start_of("afternoon"), T0) is True
+        assert outbox.depth() == 2

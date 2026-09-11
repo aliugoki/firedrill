@@ -56,6 +56,50 @@ class ReplicationRejected(Exception):
     """
 
 
+_CREATE_PENDING = """CREATE TABLE IF NOT EXISTS pending (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    drill_id TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    queued_at_ms INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(drill_id, source, seq))"""
+
+
+def _widen_uniqueness(conn: sqlite3.Connection) -> None:
+    """Bring a buffer written by an older build up to the current key.
+
+    The outbox is a file on the edge node's disk, not a managed schema, so
+    `CREATE TABLE IF NOT EXISTS` leaves an existing one exactly as it was --
+    including the `(source, seq)` constraint that dropped a second drill's
+    system events. Rebuilt in place rather than left alone, because the events
+    still sitting in it are the ones that have not reached central yet, and
+    they are the last copy outside this node.
+
+    Cheap and once: the buffer only holds what is unsent.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(pending)")}
+    if "drill_id" in columns:
+        return
+    rows = conn.execute(
+        "SELECT source, seq, payload, queued_at_ms, attempts FROM pending "
+        "ORDER BY id").fetchall()
+    conn.execute("ALTER TABLE pending RENAME TO pending_old")
+    conn.execute(_CREATE_PENDING)
+    for source, seq, payload, queued_at_ms, attempts in rows:
+        try:
+            drill_id = json.loads(payload).get("drill_id") or ""
+        except (ValueError, AttributeError):
+            drill_id = ""
+        conn.execute(
+            "INSERT OR IGNORE INTO pending (drill_id, source, seq, payload, "
+            "queued_at_ms, attempts) VALUES (?, ?, ?, ?, ?, ?)",
+            (drill_id, source, seq, payload, queued_at_ms, attempts))
+    conn.execute("DROP TABLE pending_old")
+    conn.commit()
+
+
 @dataclass
 class Outbox:
     """Durable local buffer. A thin, testable wrapper over the vendored store.
@@ -82,31 +126,33 @@ class Outbox:
             # Slower, and the reason the buffer is worth having: an event that
             # committed survives the power going out mid-drill.
             conn.execute("PRAGMA synchronous=FULL")
-            conn.execute(
-                """CREATE TABLE IF NOT EXISTS pending (
-                       id INTEGER PRIMARY KEY AUTOINCREMENT,
-                       source TEXT NOT NULL,
-                       seq INTEGER NOT NULL,
-                       payload TEXT NOT NULL,
-                       queued_at_ms INTEGER NOT NULL,
-                       attempts INTEGER NOT NULL DEFAULT 0,
-                       UNIQUE(source, seq))""")
+            conn.execute(_CREATE_PENDING)
             conn.commit()
+            _widen_uniqueness(conn)
             self._conn = conn
         return self._conn
 
     def add(self, event: Event, now_ms: int | None = None) -> bool:
         """Buffer one event. Returns False if it was already buffered.
 
-        The uniqueness constraint on `(source, seq)` makes buffering idempotent
-        too, so a producer that retries after a crash mid-write does not send
-        central the same event twice.
+        The uniqueness constraint makes buffering idempotent, so a producer that
+        retries after a crash mid-write does not send central the same event
+        twice. `event_id` would not do: a producer that rebuilds the event
+        generates a new one, and the retry is exactly the case this is for.
+
+        `drill_id` is part of the key and was not. A drill's system events are
+        numbered from one and carry the node's own source, so the second drill
+        a node ran collided with the first on `(source, seq)` and its
+        DRILL_STARTED never reached central -- silently, since a rejected
+        insert is indistinguishable from a redelivery. The event store's key
+        had `drill_id` in it all along; this one now matches.
         """
         try:
             self.conn.execute(
-                "INSERT INTO pending (source, seq, payload, queued_at_ms) "
-                "VALUES (?, ?, ?, ?)",
-                (event.source, event.seq, json.dumps(_to_wire(event)),
+                "INSERT INTO pending (drill_id, source, seq, payload, "
+                "queued_at_ms) VALUES (?, ?, ?, ?, ?)",
+                (event.drill_id, event.source, event.seq,
+                 json.dumps(_to_wire(event)),
                  now_ms if now_ms is not None else int(time.time() * 1000)))
             self.conn.commit()
             return True

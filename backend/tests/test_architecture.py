@@ -178,10 +178,21 @@ class TestSchemaChangesGoThroughAlembic:
     def test_the_allowed_ones_are_still_buffers_not_schema(self):
         # If either of these grows a table that is not the outbox, the
         # exemption stops being true and this says so.
+        #
+        # The tables created are named rather than counted. Counting raw
+        # occurrences of the phrase failed on a docstring that explained why
+        # `CREATE TABLE IF NOT EXISTS` leaves an existing buffer alone -- which
+        # is prose about the rule, not a second table.
+        import re
+
         for relative in self.ALLOWED:
-            text = (BACKEND / relative).read_text()
-            assert text.upper().count("CREATE TABLE") == 1, relative
-            assert "pending" in text
+            source = (BACKEND / relative).read_text()
+            # The trailing "(" is what separates a statement from prose about
+            # one: real DDL always names its columns.
+            created = set(re.findall(
+                r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*\(",
+                source, re.IGNORECASE))
+            assert created == {"pending"}, f"{relative} creates {created}"
 
 
 class TestEveryModuleImports:

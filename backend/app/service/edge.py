@@ -145,21 +145,6 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
 
     ingestor = Ingestor()
 
-    # --- the event stream -----------------------------------------------------
-    consumer = None
-    redis_url = env.get("EVAC_REDIS_URL", "")
-    if redis_url and tenant_id:
-        prefix = env.get("EVAC_EVENT_STREAM_PREFIX", "vt:evac:events")
-        consumer = EventConsumer(
-            ingestor=ingestor,
-            client=RedisStreamClient(redis_url),
-            stream=f"{prefix}:{tenant_id}",
-            consumer_name=env.get("EVAC_CONSUMER_NAME", f"edge-{site_id or '1'}"))
-        consumer.ensure_group()
-    else:
-        gaps.append("no event stream is configured, so no camera observation "
-                    "can reach this node")
-
     # --- replication to central ----------------------------------------------
     replicator = None
     central_url = env.get("EVAC_CENTRAL_URL", "")
@@ -177,6 +162,28 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
         gaps.append("EVAC_CENTRAL_URL is set but EVAC_CENTRAL_TOKEN is not; "
                     "central refuses unauthenticated batches, so nothing would "
                     "be delivered")
+
+    # --- the event stream -----------------------------------------------------
+    consumer = None
+    redis_url = env.get("EVAC_REDIS_URL", "")
+    if redis_url and tenant_id:
+        prefix = env.get("EVAC_EVENT_STREAM_PREFIX", "vt:evac:events")
+        consumer = EventConsumer(
+            ingestor=ingestor,
+            client=RedisStreamClient(redis_url),
+            stream=f"{prefix}:{tenant_id}",
+            consumer_name=env.get("EVAC_CONSUMER_NAME", f"edge-{site_id or '1'}"),
+            # Built after the replicator so every event this node folds is also
+            # queued for central. Nothing held one before, so the outbox stayed
+            # empty for the life of the node.
+            replicator=replicator)
+        # Set once the registry exists, further down: a camera observation has
+        # to reach the drill it is about, and until now it reached the node's
+        # ingestor and stopped there.
+        consumer.ensure_group()
+    else:
+        gaps.append("no event stream is configured, so no camera observation "
+                    "can reach this node")
 
     # --- geometry -------------------------------------------------------------
     geometry = GeometryStore()
@@ -244,9 +251,11 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
                 # may be an operator looking for people.
                 for drill in registry.recover(
                         drill_store=drill_store, events_store=events_store,
-                        site_id=site_id, now_ms=now_ms,
+                        replicator=replicator, site_id=site_id, now_ms=now_ms,
                         assembly_zones=assembly_zones(env)):
                     recovered.append(drill.drill_id)
+            if consumer is not None:
+                consumer.registry = registry
         except RecoveryUnavailable as exc:
             # The database opened; the recovery query failed. Persistence stays
             # on, because the next write may well succeed, but the board must
