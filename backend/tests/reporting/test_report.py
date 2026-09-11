@@ -445,3 +445,33 @@ class TestTheReportASafetyOfficerReads:
     def test_calibrated_thresholds_drop_the_note(self):
         report, _ = self.report(thresholds_calibrated=True)
         assert "no threshold in this system" not in "\n".join(report.render())
+
+
+class TestWhoTheDenominatorLeftOut:
+    """`expected` is the denominator of every number above it, and the report
+    builds no line for anybody outside it.
+
+    `from_facetrack` can put most of a site outside it on the strength of a
+    turnstile record, so a commander deciding whether the building is clear has
+    to be told the count left people out, how many, and on what grounds.
+    """
+
+    def rendered(self, excluded):
+        from app.reporting.drill_report import DrillReport
+
+        report = DrillReport(
+            drill_id="d1", name="Q3", site_id="s1", started_ms=T0,
+            completed_ms=T0 + 600_000, duration_s=600.0,
+            expected=170, accounted=170, unaccounted=0, uncertain=0,
+            needing_verification=0, unknown_people=0,
+            excluded_from_the_count=excluded)
+        return "\n".join(report.render())
+
+    def test_the_total_and_the_grounds_are_both_given(self):
+        text = self.rendered({"NOT_CHECKED_IN": 30, "ON_LEAVE": 4})
+        assert "not counted             34" in text
+        assert "not checked in        30" in text
+        assert "on leave              4" in text
+
+    def test_nothing_is_printed_when_nobody_was_left_out(self):
+        assert "not counted" not in self.rendered({})

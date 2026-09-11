@@ -61,6 +61,7 @@ class DrillReport:
     uncertain: int
     needing_verification: int
     unknown_people: int
+    excluded_from_the_count: dict = field(default_factory=dict)
 
     false_accounted: tuple = ()
     false_unaccounted: tuple = ()
@@ -118,6 +119,20 @@ class DrillReport:
             f"  uncertain               {self.uncertain}",
             f"  needing verification    {self.needing_verification}",
             f"  unknown people          {self.unknown_people}",
+        ]
+
+        if self.excluded_from_the_count:
+            # Not part of `expected`, so no row above mentions them and nobody
+            # went looking. A commander deciding whether the building is clear
+            # needs to know the denominator left somebody out, how many, and on
+            # what grounds.
+            total = sum(self.excluded_from_the_count.values())
+            lines.append(f"  {'not counted':<24}{total}")
+            for reason, count in sorted(self.excluded_from_the_count.items()):
+                words = reason.lower().replace("_", " ")
+                lines.append(f"    {words:<22}{count}")
+
+        lines += [
             "",
             f"  FALSE ACCOUNTED         {len(self.false_accounted)}   "
             "(system said safe, no warden confirmed)",
@@ -287,6 +302,7 @@ def build_report(
         needing_verification=board.count(
             AccountabilityState.MANUAL_VERIFICATION_REQUIRED),
         unknown_people=board.unknown_people,
+        excluded_from_the_count=board.excluded_from_the_count,
         false_accounted=tuple(false_accounted),
         false_unaccounted=tuple(false_unaccounted),
         p50_s=timing.building.p50, p90_s=timing.building.p90,

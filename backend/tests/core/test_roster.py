@@ -192,7 +192,26 @@ class TestFaceTrackImport:
         # not a life-safety system, so it sets the default and nothing else.
         snapshot = from_facetrack(self.ROWS).snapshot(T0)
         assert snapshot.expected_count == 2
-        assert snapshot.by_emp_id("EMP-3").reason is ExpectationReason.ON_LEAVE
+
+    def test_not_badging_in_is_not_a_claim_about_why(self):
+        """The turnstile says whether, not why.
+
+        Leave, working from home, a forgotten badge and walking in behind a
+        colleague all look the same from a turnstile, and this used to record
+        all of them as ON_LEAVE -- a claim on the board that the data does not
+        support, and the opposite of what the importer's own docstring warns
+        about.
+        """
+        snapshot = from_facetrack(self.ROWS).snapshot(T0)
+        assert snapshot.by_emp_id("EMP-3").reason is (
+            ExpectationReason.NOT_CHECKED_IN)
+
+    def test_who_was_left_out_of_the_denominator_is_counted(self):
+        # Nobody looks for these people and no row on the board mentions them,
+        # so the number reaches an operator here or not at all.
+        snapshot = from_facetrack(self.ROWS).snapshot(T0)
+        assert snapshot.excluded_by_reason() == {"NOT_CHECKED_IN": 1}
+        assert len(snapshot.not_expected) == 1
 
     def test_local_fields_are_merged_in_by_employee_id(self):
         local = {"EMP-1": {"department": "Engineering",

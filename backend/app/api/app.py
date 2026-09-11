@@ -523,6 +523,7 @@ def _board_out(drill: Drill, at: int) -> schemas.BoardOut:
         currently_unobserved=board.currently_unobserved,
         still_evacuating=board.still_evacuating,
         unknown_people=board.unknown_people,
+        excluded_from_the_count=board.excluded_from_the_count,
         all_clear=drill.all_clear(at),
         blocking_all_clear=drill.blocking_all_clear(at),
         roster_trustworthy=board.roster_trustworthy,

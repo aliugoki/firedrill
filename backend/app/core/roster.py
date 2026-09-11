@@ -47,6 +47,20 @@ class ExpectationReason(str, Enum):
     SIGNED_OUT = "SIGNED_OUT"
     NOT_ROSTERED = "NOT_ROSTERED"
 
+    NOT_CHECKED_IN = "NOT_CHECKED_IN"
+    """On the roster, and the turnstile has no record of them today.
+
+    Distinct from `ON_LEAVE`, which this used to be called. FaceTrack's
+    `present` flag says whether somebody badged in; it does not say why they
+    did not. Leave, working from home, a forgotten badge, and walking in behind
+    a colleague all look the same from the turnstile, and calling all of them
+    leave puts a claim on the board that the data does not support.
+
+    Not in `EXPECTED_REASONS`: a turnstile record is real evidence and a site
+    that uses it properly would otherwise start every drill with its whole
+    absent list to clear by hand. What changed is that the exclusion is now
+    counted and shown rather than silent."""
+
 
 #: Reasons that put someone in the expected set.
 EXPECTED_REASONS: frozenset[ExpectationReason] = frozenset({
@@ -122,6 +136,23 @@ class RosterSnapshot:
     @property
     def expected(self) -> tuple[RosterEntry, ...]:
         return tuple(e for e in self.entries if e.is_expected)
+
+    @property
+    def not_expected(self) -> tuple[RosterEntry, ...]:
+        """On the roster and not in the denominator.
+
+        Nobody looks for these people and no row on the board mentions them, so
+        the count has to reach the operator some other way. `from_facetrack`
+        can put most of a site here on the strength of a turnstile.
+        """
+        return tuple(e for e in self.entries if not e.is_expected)
+
+    def excluded_by_reason(self) -> dict:
+        """How many were left out of the denominator, and on what grounds."""
+        counts: dict = {}
+        for entry in self.not_expected:
+            counts[entry.reason.value] = counts.get(entry.reason.value, 0) + 1
+        return counts
 
     @property
     def expected_count(self) -> int:
@@ -285,8 +316,12 @@ def from_facetrack(
             emp_id=emp_id,
             display_name=name,
             has_gallery_entry=bool(row.get("photo")),
+            # Not ON_LEAVE. The turnstile says whether somebody badged in, not
+            # why they did not, and this docstring's own warning -- a person who
+            # forgot to badge in is still in the building -- was being
+            # contradicted two lines below it.
             reason=(ExpectationReason.ON_SHIFT if row.get("present")
-                    else ExpectationReason.ON_LEAVE),
+                    else ExpectationReason.NOT_CHECKED_IN),
             **local_fields.get(emp_id, {}),
         )
     return roster

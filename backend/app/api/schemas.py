@@ -74,6 +74,10 @@ class BoardOut(BaseModel):
     currently_unobserved: int
     still_evacuating: int
     unknown_people: int
+    excluded_from_the_count: dict = {}
+    """On the roster and not in `expected`, by reason. No row on the board
+    mentions these people and nobody is looking for them, so the number reaches
+    an operator here or not at all."""
 
     all_clear: bool
     blocking_all_clear: list[str]

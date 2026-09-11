@@ -418,3 +418,37 @@ class TestAnEventNoHandlerCanUse:
         assert state.accepted == 1
         assert state.duplicates_dropped == 1
         assert state.rejected == 0
+
+
+class TestWhoIsNotOnTheBoardAtAll:
+    """The board builds a row per *expected* person, so anybody excluded from
+    the denominator appears nowhere: not as a row, not in a count.
+
+    `from_facetrack` can put most of a site there on the strength of a
+    turnstile record, so the number has to reach the operator some other way.
+    """
+
+    def board_for(self, rows):
+        from app.core.roster import from_facetrack
+        from app.ingest.ingestor import Ingestor
+        from app.ingest.projections import build_board
+
+        snapshot = from_facetrack(rows).snapshot(0)
+        return build_board(Ingestor().state, snapshot, now_ms=1_000)
+
+    ROWS = [
+        {"emp_id": "EMP-001", "first_name": "A", "photo": "x", "present": True},
+        {"emp_id": "EMP-002", "first_name": "B", "photo": "x", "present": False},
+        {"emp_id": "EMP-003", "first_name": "C", "photo": "x", "present": False},
+    ]
+
+    def test_the_excluded_are_counted_by_reason(self):
+        board = self.board_for(self.ROWS)
+        assert board.expected == 1
+        assert board.excluded_from_the_count == {"NOT_CHECKED_IN": 2}
+
+    def test_nothing_is_reported_when_everybody_is_expected(self):
+        everyone = [dict(row, present=True) for row in self.ROWS]
+        board = self.board_for(everyone)
+        assert board.expected == 3
+        assert board.excluded_from_the_count == {}

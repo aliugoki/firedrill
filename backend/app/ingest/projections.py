@@ -253,6 +253,10 @@ class LiveBoard:
     health: HealthSummary
     roster_trustworthy: bool
     unknown_people: int = 0
+    #: On the roster and not in `expected`, by reason. Nobody looks for these
+    #: people and no row mentions them, so the number reaches the operator here
+    #: or not at all.
+    excluded_from_the_count: dict = field(default_factory=dict)
 
     # -- counts ----------------------------------------------------------------
 
@@ -405,4 +409,5 @@ def build_board(
         now_ms=now_ms, rows=tuple(rows),
         health=state.health.summary(start, now_ms),
         roster_trustworthy=roster.is_trustworthy,
-        unknown_people=unknown_people)
+        unknown_people=unknown_people,
+        excluded_from_the_count=roster.excluded_by_reason())
