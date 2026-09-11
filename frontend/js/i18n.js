@@ -52,6 +52,15 @@ export const STRINGS = {
     'timing.none': 'No measurements yet',
     'timing.completion': 'Accountability settled after',
 
+    'bottleneck.title': 'Exits',
+    'bottleneck.limiting': 'Slowest exit',
+    'bottleneck.none_limiting': 'No exit is holding anyone up',
+    'bottleneck.none': 'No exit has been measured yet',
+    'bottleneck.through': 'through',
+    'bottleneck.queue': 'in the zone',
+    'bottleneck.dwell': 'median time to clear',
+    'bottleneck.not_measured': 'not measured',
+
     'drill.list': 'Drills',
     'drill.create': 'New drill',
     'drill.start': 'Start drill',
@@ -134,6 +143,15 @@ export const STRINGS = {
     'timing.coverage_low': 'من الأشخاص لم يُنتجوا أي قياس',
     'timing.none': 'لا قياسات بعد',
     'timing.completion': 'اكتمل الحصر بعد',
+
+    'bottleneck.title': 'المخارج',
+    'bottleneck.limiting': 'أبطأ مخرج',
+    'bottleneck.none_limiting': 'لا مخرج يعيق أحداً',
+    'bottleneck.none': 'لم يُقَس أي مخرج بعد',
+    'bottleneck.through': 'عبروا',
+    'bottleneck.queue': 'في المنطقة',
+    'bottleneck.dwell': 'الزمن الوسيط للعبور',
+    'bottleneck.not_measured': 'غير مقاس',
 
     'drill.list': 'التمارين',
     'drill.create': 'تمرين جديد',

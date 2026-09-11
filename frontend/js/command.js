@@ -12,7 +12,8 @@
 import { Api, Freshness } from './api.js';
 import { createTranslator, isRtl, formatDuration } from './i18n.js';
 import {
-  healthLine, orderForWarden, staleness, tiles, timingLine, verdict,
+  exitPressure, healthLine, orderForWarden, staleness, tiles, timingLine,
+  verdict,
 } from './render.js';
 
 const params = new URLSearchParams(location.search);
@@ -29,6 +30,7 @@ const api = new Api().withIdentity({
 const boardFreshness = new Freshness(10_000);
 const timingFreshness = new Freshness(30_000);
 const zoneFreshness = new Freshness(30_000);
+const exitFreshness = new Freshness(30_000);
 
 let drillId = params.get('drill') || null;
 
@@ -41,6 +43,7 @@ function applyLanguage() {
   document.getElementById('priority-title').textContent = t('board.priority');
   document.getElementById('timing-title').textContent = t('board.timing');
   document.getElementById('zones-title').textContent = t('board.zones');
+  document.getElementById('exits-title').textContent = t('bottleneck.title');
   document.getElementById('lang').textContent = lang === 'en' ? 'العربية' : 'English';
 }
 
@@ -93,6 +96,7 @@ async function poll() {
     refresh(boardFreshness, () => api.board(id)),
     refresh(timingFreshness, () => api.timing(id)),
     refresh(zoneFreshness, () => api.zones(id)),
+    refresh(exitFreshness, () => api.bottlenecks(id)),
   ]);
   paint();
 }
@@ -131,6 +135,7 @@ function paint() {
   paintPriority(board);
   paintTiming();
   paintZones();
+  paintExits();
 }
 
 function paintPriority(board) {
@@ -189,6 +194,31 @@ function paintZones() {
           (reason) => `<div class="reason">${escape(reason)}</div>`).join('')}
       </div>
     </div>`).join('');
+}
+
+function paintExits() {
+  const { headline, rows, caveats } = exitPressure(exitFreshness.value, t);
+  const host = document.getElementById('exits');
+
+  const measured = (value, suffix) => (value === null || value === undefined
+    ? `<span class="caveat">${escape(t('bottleneck.not_measured'))}</span>`
+    : `${value.toFixed(1)}${suffix}`);
+
+  host.innerHTML = `<div>${escape(headline)}</div>`
+    + rows.map((row) => `
+      <div class="row">
+        <span class="chip ${row.limiting ? 'ORANGE' : 'GREEN'}">${
+          row.queue}</span>
+        <div class="who">
+          <div class="name">${escape(row.zoneId)}</div>
+          <div class="meta">${row.through} ${escape(t('bottleneck.through'))}
+            · ${row.queue} ${escape(t('bottleneck.queue'))}</div>
+          <div class="reason">${escape(t('bottleneck.dwell'))} ${
+            measured(row.medianDwell, 's')}</div>
+        </div>
+      </div>`).join('')
+    + caveats.map(
+      (note) => `<div class="caveat">${escape(note)}</div>`).join('');
 }
 
 async function openDrawer(personRef) {

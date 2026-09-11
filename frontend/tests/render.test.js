@@ -10,6 +10,7 @@ import { createTranslator, missingKeys, STRINGS, isRtl } from '../js/i18n.js';
 import {
   filterRoster, headcountVerdict, healthLine, orderForWarden, staleness,
   syncStatus, tiles, timingLine, verdict,
+  exitPressure,
 } from '../js/render.js';
 
 const t = createTranslator('en');
@@ -312,5 +313,57 @@ describe('translation', () => {
   it('carries the safety notice in both languages', () => {
     assert.match(STRINGS.en['app.safety_notice'], /never replaces/);
     assert.ok(STRINGS.ar['app.safety_notice'].length > 40);
+  });
+});
+
+describe('which exit is holding the evacuation up', () => {
+  const panel = {
+    limiting_zone_id: 'exit-main',
+    total_through: 140,
+    measured_over_s: 300,
+    caveats: ['no capacity is recorded for exit-fire, so no density'],
+    exits: [
+      { zone_id: 'exit-fire', completed: 60, queue: 2,
+        throughput_per_min: 12, median_dwell_s: 4.0, density: null },
+      { zone_id: 'exit-main', completed: 80, queue: 14,
+        throughput_per_min: 16, median_dwell_s: 31.5, density: 0.8 },
+    ],
+  };
+
+  it('names the exit the server said is limiting', () => {
+    assert.match(exitPressure(panel, t).headline, /exit-main/);
+  });
+
+  it('puts the limiting exit first, then the longest queue', () => {
+    // An operator reading under pressure should not have to scan for it.
+    const rows = exitPressure(panel, t).rows;
+    assert.deepEqual(rows.map((r) => r.zoneId), ['exit-main', 'exit-fire']);
+    assert.equal(rows[0].limiting, true);
+  });
+
+  it('keeps an unmeasured density null rather than inventing one', () => {
+    // Density needs a capacity most sites never record, and a crowding figure
+    // against an invented denominator is worse than none.
+    const rows = exitPressure(panel, t).rows;
+    assert.equal(rows[1].density, null);
+    assert.equal(rows[0].density, 0.8);
+  });
+
+  it('carries the caveats through', () => {
+    assert.deepEqual(exitPressure(panel, t).caveats, panel.caveats);
+  });
+
+  it('says nothing has been measured rather than showing an empty table', () => {
+    for (const empty of [null, {}, { exits: [] }]) {
+      const result = exitPressure(empty, t);
+      assert.deepEqual(result.rows, []);
+      assert.match(result.headline, /No exit has been measured/);
+    }
+  });
+
+  it('says so when no exit is limiting', () => {
+    const clear = { ...panel, limiting_zone_id: null };
+    assert.match(exitPressure(clear, t).headline, /No exit is holding anyone up/);
+    assert.equal(exitPressure(clear, t).rows[0].limiting, false);
   });
 });

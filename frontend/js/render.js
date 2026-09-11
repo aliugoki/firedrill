@@ -170,6 +170,50 @@ export function orderForWarden(rows) {
   });
 }
 
+/**
+ * Which exit is holding the evacuation up.
+ *
+ * The backend has measured this since Phase 3 and no screen showed it, so the
+ * answer to "where is the queue" existed only in an HTTP response nobody
+ * fetched. Section 7 of the validation document leans on it.
+ *
+ * A field that was not measured stays null all the way to the screen. Density
+ * in particular: it needs a capacity most sites never record, and a crowding
+ * figure against an invented denominator is worse than none.
+ */
+export function exitPressure(bottlenecks, t) {
+  const exits = bottlenecks && Array.isArray(bottlenecks.exits)
+    ? bottlenecks.exits : [];
+  if (!exits.length) {
+    return { headline: t('bottleneck.none'), rows: [], caveats: [] };
+  }
+
+  const limiting = bottlenecks.limiting_zone_id || null;
+  const rows = exits
+    .map((exit) => ({
+      zoneId: exit.zone_id,
+      limiting: exit.zone_id === limiting,
+      through: exit.completed,
+      queue: exit.queue,
+      throughput: exit.throughput_per_min ?? null,
+      medianDwell: exit.median_dwell_s ?? null,
+      density: exit.density ?? null,
+    }))
+    // Worst first, the same reason a warden's list puts the unchecked on top:
+    // an operator reading under pressure should not have to scan for it.
+    .sort((a, b) => (Number(b.limiting) - Number(a.limiting))
+      || (b.queue - a.queue)
+      || a.zoneId.localeCompare(b.zoneId));
+
+  return {
+    headline: limiting
+      ? `${t('bottleneck.limiting')}: ${limiting}`
+      : t('bottleneck.none_limiting'),
+    rows,
+    caveats: bottlenecks.caveats || [],
+  };
+}
+
 /** What the sync indicator says. */
 export function syncStatus({ online, pending, stalenessMs, fromCache }, t) {
   if (fromCache) {

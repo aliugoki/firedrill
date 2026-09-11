@@ -89,6 +89,7 @@ export class Api {
   priority(id, limit = 50) { return this.request(`/api/evac/drills/${id}/priority?limit=${limit}`); }
   timing(id) { return this.request(`/api/evac/drills/${id}/timing`); }
   zones(id) { return this.request(`/api/evac/drills/${id}/zones`); }
+  bottlenecks(id) { return this.request(`/api/evac/drills/${id}/bottlenecks`); }
   explain(id, ref) {
     return this.request(`/api/evac/drills/${id}/people/${encodeURIComponent(ref)}/explain`);
   }
