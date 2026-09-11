@@ -300,3 +300,67 @@ class TestDisputeThresholdMatchesTheIdentityFsm:
     def test_a_nonsense_threshold_is_refused(self):
         with pytest.raises(ValueError):
             EvidenceLedger(min_claims_for_dispute=0)
+
+
+class TestExplainingSeveralTracksAtOnce:
+    """One person's evidence is split across as many global ids as the tracker
+    fragmented them into.
+
+    An explanation built from the first of them is a fraction of what is known,
+    and invariant 6 -- every decision reconstructable from stored events -- is
+    satisfied by the record only if the surface built to read it shows the
+    record.
+    """
+
+    def ledger_with_two_fragments(self):
+        ledger = EvidenceLedger()
+        ledger.record(subject="gp-1", kind=EvidenceKind.FACE_MATCH, ts_ms=10,
+                      stance=Stance.SUPPORTS, summary="seen on the stairs",
+                      identity="EMP-1")
+        ledger.record(subject="gp-1#1", kind=EvidenceKind.FACE_MATCH, ts_ms=20,
+                      stance=Stance.SUPPORTS, summary="seen at the exit",
+                      identity="EMP-1")
+        ledger.record(subject="gp-1#1", kind=EvidenceKind.CAMERA_DEGRADED,
+                      ts_ms=25, stance=Stance.CONTEXT, summary="camera down")
+        return ledger
+
+    def test_every_track_contributes(self):
+        ledger = self.ledger_with_two_fragments()
+        assert len(ledger.explain("gp-1").supporting) == 1
+
+        merged = ledger.explain_many(["gp-1", "gp-1#1"])
+        assert len(merged.supporting) == 2
+        assert len(merged.context) == 1
+
+    def test_the_account_stays_in_time_order(self):
+        # A narrative that jumps backwards is not an account of anything.
+        merged = self.ledger_with_two_fragments().explain_many(["gp-1#1", "gp-1"])
+        stamps = [e.ts_ms for e in merged.supporting]
+        assert stamps == sorted(stamps)
+
+    def test_it_names_the_tracks_it_covers(self):
+        merged = self.ledger_with_two_fragments().explain_many(["gp-1", "gp-1#1"])
+        assert "gp-1" in merged.subject and "gp-1#1" in merged.subject
+
+    def test_one_track_is_the_ordinary_explanation(self):
+        ledger = self.ledger_with_two_fragments()
+        assert ledger.explain_many(["gp-1"]) == ledger.explain("gp-1")
+
+    def test_a_repeated_track_is_not_counted_twice(self):
+        merged = self.ledger_with_two_fragments().explain_many(
+            ["gp-1", "gp-1", "gp-1#1"])
+        assert len(merged.supporting) == 2
+
+    def test_no_subjects_at_all_is_refused(self):
+        with pytest.raises(ValueError, match="at least one subject"):
+            self.ledger_with_two_fragments().explain_many([])
+
+    def test_the_latest_decision_wins(self):
+        ledger = self.ledger_with_two_fragments()
+        ledger.record(subject="gp-1", kind=EvidenceKind.DECISION, ts_ms=30,
+                      stance=Stance.CONTEXT, summary="UNCERTAIN")
+        ledger.record(subject="gp-1#1", kind=EvidenceKind.DECISION, ts_ms=40,
+                      stance=Stance.SUPPORTS, summary="ACCOUNTED")
+        merged = ledger.explain_many(["gp-1", "gp-1#1"])
+        assert merged.decision == "ACCOUNTED"
+        assert merged.decided_at_ms == 40

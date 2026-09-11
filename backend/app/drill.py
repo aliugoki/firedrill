@@ -174,10 +174,15 @@ class Drill:
         resolution = resolve_identities(self.ingestor.state, self.roster).get(person_ref)
         if resolution is None:
             return None
-        subjects = list(resolution.claimed_by) or list(resolution.contested_on)
+        # Every track, not the first of them. One person's evidence is split
+        # across as many global ids as the tracker fragmented them into, and a
+        # contested track holds evidence about this person too -- that is what
+        # put it in conflict, and it is usually why the operator opened the
+        # drawer.
+        subjects = list(resolution.claimed_by) + list(resolution.contested_on)
         if not subjects:
             return self.ingestor.state.ledger.explain(person_ref)
-        return self.ingestor.state.ledger.explain(subjects[0])
+        return self.ingestor.state.ledger.explain_many(subjects)
 
     def bottlenecks(self, now_ms: int):
         """Where the evacuation is slow, and which exit is holding it up."""
