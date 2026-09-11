@@ -60,6 +60,9 @@ _PATTERNS: tuple[tuple[ZoneKind, str, Confidence], ...] = (
      Confidence.GUESSED),
 )
 
+#: How strong each confidence is, for comparing two matches against one name.
+_STRENGTH: dict = {Confidence.LIKELY: 2, Confidence.GUESSED: 1}
+
 
 @dataclass(frozen=True, slots=True)
 class Proposal:
@@ -99,24 +102,60 @@ def propose(zone_id: str, zone_name: str,
     """
     tagged = tagged or {}
     if zone_id in tagged:
-        kind = tagged[zone_id]
-        kind = kind if isinstance(kind, ZoneKind) else ZoneKind(kind)
+        raw = tagged[zone_id]
+        try:
+            kind = raw if isinstance(raw, ZoneKind) else ZoneKind(raw)
+        except ValueError:
+            # A typo in the site's own tag file used to raise out of here and
+            # stop the sync. It is a blocker, not a crash: `review` names it and
+            # somebody fixes one line.
+            return Proposal(
+                zone_id=zone_id, zone_name=zone_name, kind=None,
+                confidence=Confidence.UNKNOWN,
+                because=(f'the site tagged this zone "{raw}", which is not a '
+                         "kind this system has"))
         return Proposal(zone_id=zone_id, zone_name=zone_name, kind=kind,
                         confidence=Confidence.CERTAIN,
                         because="tagged for this site")
 
     haystack = (zone_name or "").lower()
-    for kind, pattern, confidence in _PATTERNS:
-        match = re.search(pattern, haystack)
-        if match:
-            return Proposal(
-                zone_id=zone_id, zone_name=zone_name, kind=kind,
-                confidence=confidence,
-                because=f'the name contains "{match.group(0)}"')
+    matches = [(kind, confidence, re.search(pattern, haystack))
+               for kind, pattern, confidence in _PATTERNS]
+    matches = [(kind, confidence, found.group(0))
+               for kind, confidence, found in matches if found]
 
-    return Proposal(zone_id=zone_id, zone_name=zone_name, kind=None,
-                    confidence=Confidence.UNKNOWN,
-                    because="nothing in the name says what this zone is for")
+    if not matches:
+        return Proposal(zone_id=zone_id, zone_name=zone_name, kind=None,
+                        confidence=Confidence.UNKNOWN,
+                        because="nothing in the name says what this zone is for")
+
+    strongest = max(_STRENGTH[confidence] for _, confidence, _ in matches)
+    best = [m for m in matches if _STRENGTH[m[1]] == strongest]
+    kinds = {kind for kind, _, _ in best}
+
+    if len(kinds) > 1:
+        # Two readings of equal strength. Letting the order of `_PATTERNS`
+        # decide made "Exit Stairwell" an EXIT because the exit pattern is
+        # listed first, and the reason shown to whoever confirms it said only
+        # "the name contains \"exit\"" -- so the half that contradicts it never
+        # reached the person deciding. A stairwell tagged EXIT gets the 15-second
+        # grace window instead of the 45 an uncovered stairwell is owed, and
+        # people walking down it go LOST three times sooner.
+        #
+        # This module already argues there is no harmless default. An ambiguity
+        # has no harmless winner either.
+        words = ", ".join(sorted(f'"{word}"' for _, _, word in best))
+        return Proposal(
+            zone_id=zone_id, zone_name=zone_name, kind=None,
+            confidence=Confidence.UNKNOWN,
+            because=(f"the name contains {words}, which point to different "
+                     f"kinds ({', '.join(sorted(k.value for k in kinds))}); "
+                     "somebody has to say which"))
+
+    kind, confidence, word = best[0]
+    return Proposal(zone_id=zone_id, zone_name=zone_name, kind=kind,
+                    confidence=confidence,
+                    because=f'the name contains "{word}"')
 
 
 @dataclass(frozen=True, slots=True)

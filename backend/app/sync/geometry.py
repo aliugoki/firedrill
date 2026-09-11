@@ -83,7 +83,22 @@ class SyncProblem:
     kind: str
     subject: str
     detail: str
+
     fatal: bool = False
+    """Whether this alone stops a drill.
+
+    Nothing in `sync` currently sets it, and that is the policy rather than an
+    oversight: every geometry problem it can find is recoverable. A camera with
+    a broken homography is imported anyway, because losing a camera silently is
+    worse than keeping one that only contributes presence, and a zone with a
+    shape that has no inside is skipped -- if it was the only assembly zone,
+    the tagging report says so in words an operator can act on.
+
+    The mechanism stays because `blocking` and `ready_for_a_drill` consult it,
+    and a future importer that finds something genuinely unrecoverable should
+    not have to invent the concept. `tests/sync/test_geometry_sync.py` exercises
+    the branch so it is known to work rather than merely present.
+    """
 
 
 @dataclass(frozen=True, slots=True)

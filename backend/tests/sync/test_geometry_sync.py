@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import pytest
 
+from dataclasses import replace
+
 from app.core.presence_fsm import ZoneKind
 from app.sync.geometry import sync
 from app.sync.zone_kinds import Confidence, propose, review
@@ -259,3 +261,149 @@ class TestTheSyncedGeometryWorksWithTheVendoredCode:
                              [100.0, 200.0, 300.0, 600.0])
         assert point is not None
         assert all(isinstance(value, float) for value in point)
+
+
+class TestTwoReadingsOfEqualStrength:
+    """"Exit Stairwell" is both, and it is a stairwell.
+
+    The order of `_PATTERNS` used to decide it, and the reason shown to whoever
+    confirms said only the half that won -- so the contradicting half never
+    reached the person deciding. A stairwell tagged EXIT gets the 15-second
+    grace window instead of the 45 an uncovered stairwell is owed, and people
+    walking down it go LOST three times sooner.
+    """
+
+    @pytest.mark.parametrize("name", [
+        "Exit Stairwell", "Fire Exit Stair", "Emergency Exit Lift",
+    ])
+    def test_it_refuses_to_choose(self, name):
+        proposal = propose("z-1", name)
+        assert proposal.kind is None
+        assert proposal.confidence is Confidence.UNKNOWN
+
+    def test_the_reason_names_both_readings(self, name="Exit Stairwell"):
+        because = propose("z-1", name).because
+        assert '"exit"' in because and '"stairwell"' in because
+        assert "EXIT" in because and "BLIND" in because
+
+    def test_a_weaker_second_reading_does_not_block_a_stronger_one(self):
+        # ASSEMBLY is LIKELY on "assembly"; FLOOR is only GUESSED on "corridor".
+        proposal = propose("z-1", "Assembly Corridor")
+        assert proposal.kind is ZoneKind.ASSEMBLY
+        assert proposal.confidence is Confidence.LIKELY
+
+    def test_two_patterns_for_one_kind_are_not_an_ambiguity(self):
+        proposal = propose("z-1", "Office Corridor")
+        assert proposal.kind is ZoneKind.FLOOR
+
+    def test_a_human_tag_still_wins_over_an_ambiguous_name(self):
+        # The whole point of tagging: what a zone is for is a decision somebody
+        # made, not a reading of the label.
+        proposal = propose("z-1", "Exit Stairwell", tagged={"z-1": "BLIND"})
+        assert proposal.kind is ZoneKind.BLIND
+        assert proposal.confidence is Confidence.CERTAIN
+
+    def test_an_ambiguous_zone_blocks_the_site(self):
+        report = review([
+            propose("z-1", "Exit Stairwell"),
+            propose("z-2", "North Car Park Assembly"),
+        ])
+        assert report.ready is False
+        assert any("no confirmed kind" in b for b in report.blockers)
+
+
+class TestATagThisSystemDoesNotKnow:
+
+    def test_it_is_a_blocker_rather_than_a_crash(self):
+        # A typo in the site's own tag file used to raise out of `propose` and
+        # stop the sync. It is one line for somebody to fix, once they are told.
+        proposal = propose("z-1", "North Car Park", tagged={"z-1": "MUSTER_POINT"})
+        assert proposal.kind is None
+        assert "MUSTER_POINT" in proposal.because
+        assert "not a kind this system has" in proposal.because
+
+    def test_the_site_is_reported_as_not_ready(self):
+        report = review([propose("z-1", "North Car Park",
+                                 tagged={"z-1": "MUSTER_POINT"})])
+        assert report.ready is False
+
+
+class TestWhatAnOperatorReads:
+    """The startup text, which nothing exercised."""
+
+    def test_an_untagged_zone_says_a_drill_cannot_run(self):
+        assert "A drill cannot run" in propose("z-1", "Zone 1").describe()
+
+    def test_a_tagged_zone_says_what_it_is_and_why(self):
+        line = propose("z-1", "North Car Park Assembly").describe()
+        assert "ASSEMBLY" in line and "likely" in line and "assembly" in line
+
+    def test_a_ready_report_says_so_in_its_first_line(self):
+        report = review([propose("z-1", "Muster", tagged={"z-1": "ASSEMBLY"})])
+        assert report.describe()[0] == "Zone tagging"
+
+    def test_an_unready_report_says_so_in_its_first_line(self):
+        report = review([propose("z-1", "Zone 1")])
+        assert report.describe()[0].endswith("NOT READY")
+
+    def test_every_zone_appears_with_a_usable_marker(self):
+        report = review([
+            propose("z-1", "Muster", tagged={"z-1": "ASSEMBLY"}),
+            propose("z-2", "Zone 2"),
+        ])
+        lines = report.describe()
+        assert any(line.startswith("  ok ") for line in lines)
+        assert any(line.startswith("  ?? ") for line in lines)
+
+    def test_the_blockers_are_listed_under_a_heading(self):
+        lines = review([propose("z-1", "Zone 1")]).describe()
+        assert "Blocking:" in lines
+        assert any("no zone is tagged ASSEMBLY" in line for line in lines)
+
+
+class TestWhatTheSyncTellsAnOperator:
+    """The startup text and the readiness rule, which had no test.
+
+    A node prints this once at boot. It is the only place somebody learns that
+    a camera was imported without geometry, or that a zone was skipped.
+    """
+
+    def test_problems_are_listed_with_their_severity(self):
+        result = sync(
+            floor_plans=[plan([zone("z-assembly", "Zone 1")],
+                              [{"camera_id": "cam1", "x": 0.5, "y": 0.5}])],
+            cameras=[camera(homography=[1.0, 2.0])],
+            site_id="s1", tagged_zones={"z-assembly": ZoneKind.ASSEMBLY})
+
+        lines = result.describe()
+        assert "Problems:" in lines
+        assert any(line.startswith("  warn  ") for line in lines)
+        assert any("expected 9" in line for line in lines)
+
+    def test_a_fatal_problem_blocks_a_drill_and_is_marked(self):
+        """Nothing in `sync` raises one today -- every geometry problem it can
+        find is recoverable -- but `blocking` and `ready_for_a_drill` consult
+        the flag, so the branch is exercised rather than merely present."""
+        from app.sync.geometry import SyncProblem
+
+        result = ready_site()
+        assert result.ready_for_a_drill is True
+
+        broken = replace(result, problems=result.problems + (
+            SyncProblem(kind="plan", subject="fp1",
+                        detail="the floor plan has no dimensions", fatal=True),))
+        assert broken.ready_for_a_drill is False
+        assert any("no dimensions" in reason for reason in broken.blocking())
+        assert any(line.startswith("  FATAL ") for line in broken.describe())
+
+    def test_a_marker_without_a_camera_is_skipped_rather_than_crashing(self):
+        # VisionTrack's table allows it, so the importer has to.
+        result = sync(
+            floor_plans=[plan([zone("z-assembly", "Zone 1")],
+                              [{"x": 0.5, "y": 0.5},
+                               {"camera_id": "cam1", "x": 0.5, "y": 0.5}])],
+            cameras=[camera(homography=REAL_HOMOGRAPHY)],
+            site_id="s1", tagged_zones={"z-assembly": ZoneKind.ASSEMBLY})
+
+        assert [c.camera_id for c in result.cameras] == ["cam1"]
+        assert result.cameras[0].marker == (0.5, 0.5)
