@@ -10,6 +10,7 @@ be created, and a drill written nowhere is one a restart loses.
 from __future__ import annotations
 
 import os
+import time
 
 from app.api.app import create_app
 from app.core.roster import RosterSnapshot
@@ -98,11 +99,47 @@ def _stores(env: dict):
         return None, None, audit
 
 
-events_store, drill_store, audit = _stores(dict(os.environ))
+def _recovered_registry(env: dict, drill_store, events_store):
+    """A registry holding whatever was running when this process last stopped.
 
-app = create_app(roster_provider=_roster_provider(),
-                 assembly_zones=assembly_zones(dict(os.environ)),
-                 auth=settings_from_env(dict(os.environ)),
+    The edge node has done this since Phase 3 and the API never did, so the two
+    halves of one node disagreed after a restart: the edge came back with the
+    drill and the API came back with an empty board. The board is the half an
+    operator is looking at.
+
+    A failure here is reported, not raised. A process that refuses to start
+    gives an operator nothing to look at; one that starts and says what is
+    missing gives them the answer.
+    """
+    from app.drill import DrillRegistry, RecoveryUnavailable
+
+    registry = DrillRegistry()
+    site_id = env.get("EVAC_SITE_ID", "")
+    if drill_store is None or not site_id:
+        return registry, ()
+
+    try:
+        registry.recover(
+            drill_store=drill_store, events_store=events_store,
+            site_id=site_id, now_ms=int(time.time() * 1000),
+            assembly_zones=assembly_zones(env))
+    except RecoveryUnavailable as exc:
+        return registry, (
+            f"{exc}. A drill that was running when this process stopped has "
+            "not been reloaded, and the board is empty for that reason rather "
+            "than because the building is",)
+    return registry, ()
+
+
+_env = dict(os.environ)
+events_store, drill_store, audit = _stores(_env)
+registry, startup_gaps = _recovered_registry(_env, drill_store, events_store)
+
+app = create_app(registry=registry,
+                 roster_provider=_roster_provider(),
+                 assembly_zones=assembly_zones(_env),
+                 auth=settings_from_env(_env),
                  audit=audit,
                  events_store=events_store,
-                 drill_store=drill_store)
+                 drill_store=drill_store,
+                 startup_gaps=startup_gaps)

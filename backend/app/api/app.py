@@ -116,7 +116,8 @@ def create_app(registry: DrillRegistry | None = None,
                auth: AuthSettings | None = None,
                audit: AuditLog | None = None,
                events_store=None,
-               drill_store=None) -> FastAPI:
+               drill_store=None,
+               startup_gaps: tuple = ()) -> FastAPI:
     app = FastAPI(
         title="EVAC-120",
         version="0.4.0",
@@ -151,6 +152,11 @@ def create_app(registry: DrillRegistry | None = None,
     # nobody.
     app.state.events_store = events_store
     app.state.drill_store = drill_store
+    # Things the entry point could not do, reported through `/healthz` rather
+    # than raised at boot. A process that refuses to start gives an operator
+    # nothing to look at; one that starts and says what is missing gives them
+    # the answer.
+    app.state.startup_gaps = tuple(startup_gaps)
 
     def drill_or_404(drill_id: str, caller: Caller) -> Drill:
         """The drill, if it is this caller's to see.
@@ -553,6 +559,10 @@ def create_app(registry: DrillRegistry | None = None,
         if gap:
             report["degraded"] = True
             report.setdefault("configuration_gaps", []).append(gap)
+
+        for startup_gap in app.state.startup_gaps:
+            report["degraded"] = True
+            report.setdefault("configuration_gaps", []).append(startup_gap)
 
         if drill is not None:
             state = drill.ingestor.state

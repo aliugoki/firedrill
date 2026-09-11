@@ -192,3 +192,88 @@ class TestADrillCreatedHereIsWrittenDown:
 
         persisted = AuditStore(engine=engine).for_drill(drill_id)
         assert [entry.action.value for entry in persisted] == ["DRILL_CREATED"]
+
+
+class TestARestartComesBackWithTheDrill:
+    """The edge node has recovered running drills since Phase 3 and the API
+    never did, so the two halves of one node disagreed after a restart: the
+    edge came back with the drill and the API came back with an empty board.
+
+    The board is the half an operator is looking at.
+    """
+
+    def stores(self, tmp_path):
+        import sqlalchemy as sa
+
+        from app.store.drills import DrillStore
+        from app.store.events import EventStore
+        from app.store.schema import metadata
+
+        engine = sa.create_engine(f"sqlite:///{tmp_path / 'evac.db'}")
+        metadata.create_all(engine)
+        return EventStore(engine=engine), DrillStore(engine=engine)
+
+    def a_running_drill(self, tmp_path):
+        from app.api.main import _recovered_registry
+
+        events_store, drill_store = self.stores(tmp_path)
+        client = TestClient(create_app(
+            registry=DrillRegistry(), roster_provider=a_roster,
+            assembly_zones=frozenset({"north"}), auth=GATEWAY,
+            events_store=events_store, drill_store=drill_store))
+        made = client.post("/api/evac/drills", headers=OPERATOR,
+                           json={"tenant_id": "t", "site_id": "site-1",
+                                 "name": "Q3"})
+        drill_id = made.json()["drill_id"]
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        return drill_id, events_store, drill_store, _recovered_registry
+
+    def test_the_running_drill_is_reloaded(self, tmp_path):
+        drill_id, events, drills, recover = self.a_running_drill(tmp_path)
+
+        registry, gaps = recover({"EVAC_SITE_ID": "site-1"}, drills, events)
+        assert gaps == ()
+        assert [d.drill_id for d in registry.list()] == [drill_id]
+        assert registry.running() is not None
+
+    def test_the_reloaded_board_is_servable(self, tmp_path):
+        drill_id, events, drills, recover = self.a_running_drill(tmp_path)
+        registry, _ = recover({"EVAC_SITE_ID": "site-1"}, drills, events)
+
+        after_restart = TestClient(create_app(
+            registry=registry, roster_provider=a_roster,
+            assembly_zones=frozenset({"north"}), auth=GATEWAY,
+            events_store=events, drill_store=drills))
+        board = after_restart.get(f"/api/evac/drills/{drill_id}/board",
+                                  headers=OPERATOR)
+        assert board.status_code == 200
+        assert board.json()["expected"] == 3
+
+    def test_no_site_id_means_no_recovery_rather_than_a_crash(self, tmp_path):
+        _, events, drills, recover = self.a_running_drill(tmp_path)
+        registry, gaps = recover({}, drills, events)
+        assert registry.list() == []
+        assert gaps == ()
+
+    def test_a_store_that_cannot_answer_is_a_startup_gap(self):
+        import sqlalchemy as sa
+
+        from app.api.main import _recovered_registry
+        from app.store.drills import DrillStore
+
+        unmigrated = DrillStore(engine=sa.create_engine("sqlite:///:memory:"))
+        registry, gaps = _recovered_registry(
+            {"EVAC_SITE_ID": "site-1"}, unmigrated, None)
+
+        assert registry.list() == []
+        assert len(gaps) == 1
+        assert "the board is empty for that reason" in gaps[0]
+
+    def test_a_startup_gap_reaches_healthz_and_degrades_the_node(self):
+        client = TestClient(create_app(
+            registry=DrillRegistry(), roster_provider=a_roster,
+            auth=GATEWAY, startup_gaps=("the drill could not be reloaded",)))
+        report = client.get("/healthz").json()
+
+        assert report["degraded"] is True
+        assert "the drill could not be reloaded" in report["configuration_gaps"]
