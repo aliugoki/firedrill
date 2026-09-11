@@ -252,5 +252,12 @@ Stated plainly rather than left to be discovered.
   authenticated for one site cannot write another's history, and central never
   becomes authoritative — but none of that turns a shared secret into an
   identity.
+- **Nothing produces biometric material yet.** The face pipeline is blocked
+  behind the P2.3b segfault, so no embedding or crop exists to retain and the
+  retention check reports "nothing held, nothing overdue" truthfully rather
+  than vacuously. The control runs hourly on the edge node regardless, so the
+  first item produced is covered on the day it appears rather than on the day
+  somebody remembers. `/healthz` carries `retention_compliant`,
+  `retention_overdue`, `retention_held` and `retention_reviewed`.
 - **The retention durations are not reviewed.** They are marked `calibrated=False`
   and are a starting point for a data-protection review, not its conclusion.

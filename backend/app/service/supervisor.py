@@ -192,10 +192,12 @@ def build_supervisor(
     consumer=None,
     replicator=None,
     sync_runner: Callable[[int], object] | None = None,
+    retention_check: Callable[[int], object] | None = None,
     tick_interval_ms: int = 1_000,
     consume_interval_ms: int = 250,
     replicate_interval_ms: int = 15_000,
     sync_interval_ms: int = 300_000,
+    retention_interval_ms: int = 3_600_000,
 ) -> Supervisor:
     """Assemble the edge node's jobs. Anything not supplied is simply absent.
 
@@ -233,6 +235,14 @@ def build_supervisor(
     if sync_runner is not None:
         supervisor.add(Job(name="sync", interval_ms=sync_interval_ms,
                            run=sync_runner))
+
+    if retention_check is not None:
+        # Hourly, because the shortest retention class is measured in hours and
+        # the check is a scan of what is held rather than work. `retention.py`
+        # says a policy nobody checks is a promise; this is what makes it a
+        # control, and it reports through `/healthz` either way.
+        supervisor.add(Job(name="retention", interval_ms=retention_interval_ms,
+                           run=retention_check))
 
     return supervisor
 

@@ -409,3 +409,56 @@ class TestADatabaseThatWillNotOpen:
     def test_no_database_configured_is_its_own_message(self):
         node = build_edge({"EVAC_SITE_ID": "site-1"})
         assert any("no database is configured" in gap for gap in node.gaps)
+
+
+class TestRetentionIsAControlRatherThanAPromise:
+    """`retention.py` says a policy nobody checks is a promise, and until this
+    ran on a schedule that is exactly what it was.
+
+    Nothing outside its own tests had ever constructed a `RetentionLedger`,
+    called `purge`, or called `verify`. Three hundred lines governing the
+    deletion of biometric material, wired to nothing.
+    """
+
+    def test_the_node_runs_a_retention_job(self):
+        node = build_edge({"EVAC_SITE_ID": "site-1"})
+        assert any(job.name == "retention" for job in node.supervisor.jobs)
+
+    def test_the_check_reaches_the_health_report(self):
+        node = build_edge({"EVAC_SITE_ID": "site-1"})
+        node.supervisor.job("retention").execute(1_000)
+
+        report = node.health(1_000)
+        assert report["retention_compliant"] is True
+        assert report["retention_overdue"] == 0
+        assert report["retention_held"] == 0
+
+    def test_something_overdue_makes_the_node_say_so(self):
+        from app.infra.retention import DataClass, Item
+
+        node = build_edge({"EVAC_SITE_ID": "site-1"})
+        # A face crop from a drill that ended long ago. The producers of these
+        # are blocked behind the P2.3b segfault, so this is the shape the first
+        # real one will have rather than one the system can make today.
+        node.retention.track(Item(item_id="crop-1",
+                                  data_class=DataClass.FACE_CROP,
+                                  created_ms=0, drill_id="d1"))
+        node.supervisor.job("retention").execute(10_000_000_000)
+
+        report = node.health(10_000_000_000)
+        assert report["retention_compliant"] is False
+        assert report["retention_overdue"] == 1
+        assert report["retention_held"] == 1
+
+    def test_an_unreviewed_policy_is_reported_but_is_not_a_gap(self):
+        """The durations are a starting point for a data-protection review, and
+        a node that does not say so invites them being taken as its outcome.
+
+        Not a configuration gap, though: nothing an operator can set fixes it,
+        and a node that is permanently degraded has a degraded signal that
+        means nothing. It is recorded as a known limit in
+        EVAC120_SECURITY.md §6 and reported as its own fact here.
+        """
+        node = build_edge({"EVAC_SITE_ID": "site-1"})
+        assert node.health(1_000)["retention_reviewed"] is False
+        assert not any("retention" in gap for gap in node.gaps)

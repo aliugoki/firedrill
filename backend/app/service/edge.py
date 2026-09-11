@@ -21,6 +21,7 @@ from app.ingest.consumer import EventConsumer, RedisStreamClient
 from app.ingest.ingestor import Ingestor
 from app.ingest.replication import Outbox, Replicator
 from app.service.supervisor import Supervisor, build_supervisor
+from app.infra.retention import RetentionLedger
 from app.sync.runner import GeometryStore, JsonExport, VisionTrackDatabase, run_sync
 
 
@@ -40,6 +41,12 @@ class EdgeNode:
     registry: object | None = None
     recovered_drills: tuple = ()
     gaps: tuple = ()
+
+    retention: RetentionLedger = field(default_factory=RetentionLedger)
+    #: The last compliance check. `retention.py` says a policy nobody checks is
+    #: a promise rather than a control, and until this ran on a schedule that
+    #: is what it was: nothing outside its own tests ever called `verify`.
+    retention_report: dict = field(default_factory=dict)
 
     @property
     def is_complete(self) -> bool:
@@ -66,6 +73,19 @@ class EdgeNode:
             "replication_blocked": (self.replicator.blocked_reason
                                     if self.replicator else None),
             "geometry_ready": self.geometry.ready_for_a_drill(),
+            # Reported even while it is trivially true. The producers of
+            # biometric material are blocked behind the P2.3b segfault, so the
+            # honest reading today is "nothing held, nothing overdue" -- and
+            # the day the first face crop exists, the control is already
+            # running rather than being remembered.
+            "retention_compliant": self.retention_report.get("compliant", True),
+            "retention_overdue": self.retention_report.get("overdue", 0),
+            "retention_held": len(self.retention.held()),
+            # Not a configuration gap: nothing an operator can set fixes it,
+            # and a permanently-degraded node is a degraded signal that means
+            # nothing. Reported as its own fact, and recorded as a known limit
+            # in EVAC120_SECURITY.md §6.
+            "retention_reviewed": self.retention.policy.calibrated,
             "durable": self.events_store is not None,
             "recovered_drills": list(self.recovered_drills),
             "configuration_gaps": list(self.gaps),
@@ -226,9 +246,19 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
         gaps.append("no roster source is configured; a drill has no "
                     "denominator and cannot be created")
 
+    retention = RetentionLedger()
+    node_holder: dict = {}
+
+    def retention_check(when_ms: int) -> dict:
+        report = retention.verify(when_ms)
+        node = node_holder.get("node")
+        if node is not None:
+            node.retention_report = report
+        return report
+
     supervisor = build_supervisor(
         ingestor=ingestor, consumer=consumer, replicator=replicator,
-        sync_runner=sync_runner)
+        sync_runner=sync_runner, retention_check=retention_check)
 
     if events_store is not None:
         from app.service.supervisor import Job
@@ -238,12 +268,17 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
         supervisor.add(Job(name="persist", interval_ms=5_000,
                            run=events_store.flush))
 
-    return EdgeNode(
+    node = EdgeNode(
         site_id=site_id, tenant_id=tenant_id, ingestor=ingestor,
         supervisor=supervisor, consumer=consumer, replicator=replicator,
         geometry=geometry, events_store=events_store, drill_store=drill_store,
         registry=registry, recovered_drills=tuple(recovered),
-        gaps=tuple(gaps))
+        gaps=tuple(gaps), retention=retention)
+    # The job closes over this so its report reaches `health()`. The node
+    # cannot be built before the supervisor it holds, and the supervisor needs
+    # the job, so one of the two has to be handed over afterwards.
+    node_holder["node"] = node
+    return node
 
 
 def _database_url(env: dict) -> str:

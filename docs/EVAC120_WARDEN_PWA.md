@@ -133,10 +133,19 @@ say so when you report.
 
 ## 5. After the drill
 
-Nothing to do. The photos cached on the tablet are deleted when the drill ends,
-whether or not the tablet has been back on the network. The tablet never holds
-face data, only small thumbnails, and never anything that could be used to
-recognise someone elsewhere.
+Nothing to do.
+
+**What the tablet actually holds today**, because the paragraph that used to be
+here described a mechanism that does not exist yet: the names, departments and
+zones of the people at your assembly point, and any actions still waiting to
+sync. No photographs of anybody. The face pipeline that would produce them is
+blocked (see `docs/EVAC120_DEEPSTREAM.md`), so there is nothing of that kind to
+cache and nothing of that kind to delete.
+
+When it does land, thumbnails are the shortest-lived class in the system --
+purged at drill end, on the device, whether or not it has been back on the
+network -- and the tablet will still never hold a face embedding or anything
+that could be used to recognise somebody elsewhere.
 
 Leave the app installed. It will be ready for the next one.
 
@@ -150,7 +159,7 @@ Leave the app installed. It will be ready for the next one.
 | *Install app* does not appear | The edge node has no certificate. It is a setup problem, not yours |
 | Cannot see your zone | You are not assigned to it. Ask the command centre |
 | Actions stuck waiting for a long time | Normal with no signal. They are saved. Tell the command centre your count over the radio |
-| The tablet is lost | Tell the safety officer. It holds thumbnails, no face data, and they expire at drill end |
+| The tablet is lost | Tell the safety officer. Today it holds your zone's roster — names, departments, zones — and any unsynced actions. No photographs and no face data |
 
 ---
 
