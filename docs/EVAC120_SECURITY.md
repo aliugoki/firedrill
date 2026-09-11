@@ -82,6 +82,20 @@ A single-site edge node has one tenant and nothing to separate. The central
 replica is where this matters, and the central replica is the one place several
 sites share a process.
 
+**Where the check lives, and where it does not.** Both tables carry a
+`tenant_id`, and no query filters on it. The stores scope by drill id and by
+site id instead, which is transitively correct -- a drill belongs to one tenant
+-- and correct only because the API has already established that this caller
+may have this drill. The authorisation is at the edge of the system and the
+storage layer trusts it.
+
+That is a deliberate placement and not an oversight, but it means a new query
+path added below the API inherits no protection. `backend/tests/api/
+test_tenant_isolation.py` enumerates the drill-scoped routes from the
+application itself rather than listing them, so a route added without the check
+fails the sweep the day it appears; there is no equivalent guard beneath the
+API, and a query written there has to scope itself.
+
 ---
 
 ## 2. What is reachable without a token, and why
