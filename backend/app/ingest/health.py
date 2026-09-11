@@ -187,6 +187,7 @@ class HealthLog:
         return HealthSummary(
             total_outages=len(self.degradations),
             open_outages=len(self.open_now()),
+            is_blind=self.is_blind,
             blind_fraction=self.degraded_fraction(start_ms, end_ms,
                                                   blinding_only=True),
             degraded_fraction=self.degraded_fraction(start_ms, end_ms,
@@ -212,6 +213,11 @@ class HealthSummary:
     blind_fraction: float
     degraded_fraction: float
     longest_blind_ms: int
+    is_blind: bool = False
+    """Whether a blinding outage is open *now*, as opposed to the historical
+    `blind_fraction`. Callers used to reconstruct it as "some blindness has
+    happened and some outage is open", which is true of a drill where a camera
+    dropped for ten seconds an hour ago and the database is slow now."""
     by_component: dict[Component, int] = field(default_factory=dict)
 
     @property

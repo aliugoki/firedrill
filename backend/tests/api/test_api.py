@@ -694,3 +694,53 @@ class TestAGatewayCanSayWhichTenant:
                     json={"tenant_id": "tenant-a", "site_id": "site-1",
                           "name": "theirs"})
         assert len(client.get("/api/evac/drills", headers=VIEWER).json()) == 1
+
+
+class TestTheBlindBannerIsSpentOnBlindness:
+    """`blind` is the operator screen's most serious state.
+
+    It means nothing on the board can be trusted over a warden's own eyes. It
+    used to be reconstructed as "some blindness has happened at some point and
+    some outage is open now", so a camera that dropped for ten seconds early in
+    the drill plus a slow database raised it. A banner that cries wolf over
+    storage is a banner that gets ignored on the day a camera really is down.
+    """
+
+    def _running(self, client) -> str:
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        return drill_id
+
+    def _board_health(self, client, drill_id) -> dict:
+        return client.get(f"/api/evac/drills/{drill_id}/board",
+                          headers=OPERATOR).json()["health"]
+
+    def test_an_old_camera_outage_plus_a_live_database_one_is_not_blind(
+            self, client):
+        from app.ingest.health import Component
+
+        drill_id = self._running(client)
+        drill = client.app.state.registry.get(drill_id)
+        health = drill.ingestor.state.health
+        # Anchored to the drill's own start: the board measures the fraction
+        # over [started_ms, now], and an outage stamped outside that window
+        # contributes nothing.
+        began = drill.started_ms
+        health.degrade(Component.CAMERA, "cam-1", began, "offline")
+        health.recover(Component.CAMERA, "cam-1", began + 10_000)
+        health.degrade(Component.DATABASE, "events", began + 20_000,
+                       "unreachable")
+
+        body = self._board_health(client, drill_id)
+        assert body["degraded"] is True
+        assert body["blind_fraction"] > 0
+        assert body["blind"] is False
+
+    def test_a_camera_that_is_down_now_is_blind(self, client):
+        from app.ingest.health import Component
+
+        drill_id = self._running(client)
+        drill = client.app.state.registry.get(drill_id)
+        drill.ingestor.state.health.degrade(
+            Component.CAMERA, "cam-1", drill.started_ms, "offline")
+        assert self._board_health(client, drill_id)["blind"] is True

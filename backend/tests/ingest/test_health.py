@@ -153,3 +153,40 @@ class TestSummaryCaveats:
         by_component = log.summary(T0, T0 + 600_000).by_component
         assert by_component[Component.CAMERA] == 2
         assert by_component[Component.DATABASE] == 1
+
+
+class TestTheSummarySaysWhetherItIsBlindNow:
+    """A historical fraction and a present state are different questions.
+
+    `blind_fraction` is what happened over the drill. Whether the system can
+    see *right now* is what decides the operator screen's most serious banner,
+    and callers reconstructed it as "some blindness has happened and some
+    outage is open". A camera that dropped for ten seconds early in the drill
+    and a database that is slow now satisfies both halves, and neither of them
+    means the system is blind.
+    """
+
+    def test_an_old_camera_outage_and_a_live_database_one_is_not_blind(self, log):
+        log.degrade(Component.CAMERA, "cam-1", T0, "offline")
+        log.recover(Component.CAMERA, "cam-1", T0 + 10_000)
+        log.degrade(Component.DATABASE, "events", T0 + 300_000, "unreachable")
+
+        summary = log.summary(T0, T0 + 600_000)
+        assert summary.blind_fraction > 0
+        assert summary.open_outages == 1
+        assert summary.is_blind is False
+
+    def test_an_open_camera_outage_is_blind(self, log):
+        log.degrade(Component.CAMERA, "cam-1", T0 + 300_000, "offline")
+        assert log.summary(T0, T0 + 600_000).is_blind is True
+
+    def test_a_camera_that_just_went_down_is_already_blind(self, log):
+        # The fraction is still zero -- no time has passed inside the outage --
+        # and the old reconstruction read that as sighted.
+        log.degrade(Component.CAMERA, "cam-1", T0 + 600_000, "offline")
+        summary = log.summary(T0, T0 + 600_000)
+        assert summary.blind_fraction == 0.0
+        assert summary.is_blind is True
+
+    def test_a_clean_drill_is_not_blind(self, log):
+        assert log.summary(T0, T0 + 600_000).is_blind is False

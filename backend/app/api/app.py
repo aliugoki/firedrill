@@ -678,7 +678,13 @@ def _row_out(row) -> schemas.PersonRowOut:
 def _health(board) -> schemas.HealthOut:
     return schemas.HealthOut(
         degraded=board.health.open_outages > 0,
-        blind=board.health.blind_fraction > 0 and board.health.open_outages > 0,
+        # Asked of the health log rather than inferred from two other numbers.
+        # `blind_fraction > 0 and open_outages > 0` says true when a camera
+        # dropped for ten seconds early in the drill and a non-blinding
+        # database outage is open now -- and `blind` is the flag that tells an
+        # operator nothing on the screen can be trusted over a warden's eyes.
+        # Spending it on a slow database is how it stops being believed.
+        blind=board.health.is_blind,
         open_outages=board.health.open_outages,
         total_outages=board.health.total_outages,
         blind_fraction=board.health.blind_fraction,
