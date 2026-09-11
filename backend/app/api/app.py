@@ -86,8 +86,21 @@ def get_caller(
 
 
 def requires(permission: str) -> Callable:
-    def dependency(caller: Caller = Depends(get_caller)) -> Caller:
+    def dependency(request: Request,
+                   caller: Caller = Depends(get_caller)) -> Caller:
         if not caller.may(permission):
+            # Logged because a refusal is a fact about who tried, and a run of
+            # them is the shape of somebody looking for a way in. The audit
+            # log defined `ACCESS_DENIED` from the start and nothing recorded
+            # one.
+            audit = getattr(request.app.state, "audit", None)
+            if audit is not None:
+                audit.record(
+                    action=AuditAction.ACCESS_DENIED, actor_id=caller.user_id,
+                    ts_ms=now_ms(),
+                    summary=f"{permission} is required for this action",
+                    path=request.url.path, method=request.method,
+                    held=sorted(caller.permissions))
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN,
                 f"{permission} is required for this action")
@@ -430,6 +443,33 @@ def create_app(registry: DrillRegistry | None = None,
             drill.record_warden_action(action)
             accepted += 1
 
+            # Finishing a sweep and escalating are single consequential acts a
+            # review asks about by name. Confirmations are not logged one by
+            # one: they are evidence and they are already in the ledger, and
+            # forty of them per sync would bury the two entries that matter.
+            if kind is ActionKind.SWEEP_COMPLETE:
+                app.state.audit.record(
+                    action=AuditAction.SWEEP_COMPLETED,
+                    actor_id=action.warden_id, ts_ms=action.ts_ms,
+                    drill_id=drill_id,
+                    summary=f"finished the sweep of {action.zone_id}",
+                    zone_id=action.zone_id, device_id=action.device_id)
+            elif kind is ActionKind.ESCALATE:
+                app.state.audit.record(
+                    action=AuditAction.ESCALATED,
+                    actor_id=action.warden_id, ts_ms=action.ts_ms,
+                    drill_id=drill_id, summary=action.note or "",
+                    zone_id=action.zone_id, device_id=action.device_id)
+
+        if accepted or refusals:
+            app.state.audit.record(
+                action=AuditAction.WARDEN_ACTION, actor_id=caller.user_id,
+                ts_ms=now_ms(), drill_id=drill_id,
+                summary=(f"synced {accepted} action(s), {duplicates} "
+                         f"duplicate(s), {len(refusals)} refused"),
+                accepted=accepted, duplicates=duplicates,
+                refused=[r.reason for r in refusals])
+
         return schemas.WardenSyncOut(
             accepted=accepted, duplicates=duplicates, refusals=refusals,
             rejected=[f"seq {r.device_seq}: {r.reason}" for r in refusals])
@@ -452,6 +492,17 @@ def create_app(registry: DrillRegistry | None = None,
             physical_count=body.physical_count, system_count=system_count,
             policy=DEFAULT_POLICY, note=body.note)
         drill.record_headcount(headcount)
+        app.state.audit.record(
+            action=AuditAction.HEADCOUNT_RECORDED, actor_id=body.warden_id,
+            ts_ms=body.ts_ms, drill_id=drill_id, summary=headcount.summary(),
+            zone_id=headcount.zone_id,
+            physical_count=headcount.physical_count,
+            system_count=headcount.system_count,
+            severity=headcount.severity.value,
+            # Recorded even when the site's policy asked nothing of the warden.
+            # Somebody reviewing afterwards needs to see the count that was
+            # absorbed as well as the ones that were acted on.
+            tolerated_overcount=headcount.tolerated_overcount)
         return schemas.HeadcountOut(
             zone_id=headcount.zone_id, physical_count=headcount.physical_count,
             system_count=headcount.system_count, difference=headcount.difference,

@@ -162,3 +162,102 @@ class TestAnInjectedLogIsTheOneUsed:
         settings = AuthSettings(secret="x")
         app = create_app(registry=DrillRegistry(), auth=settings)
         assert app.state.auth is settings
+
+
+class TestTheWardenSideIsRecordedToo:
+    """Sweeps and escalations by name, confirmations in bulk.
+
+    A confirmation is evidence and it is already in the ledger; forty of them
+    per sync would bury the two entries a review actually asks about.
+    """
+
+    WARDEN = {"X-User-Id": "warden-7", "X-Permissions": "evac:warden",
+              "X-Zones": "assembly-north"}
+
+    def sync(self, client, drill_id, *actions):
+        return client.post(
+            f"/api/evac/drills/{drill_id}/warden/sync", headers=self.WARDEN,
+            json={"actions": [
+                {"warden_id": "warden-7", "device_id": "tablet-3",
+                 "zone_id": "assembly-north", "ts_ms": T0 + 60_000,
+                 "device_seq": i + 1, **action}
+                for i, action in enumerate(actions)]})
+
+    def test_a_sweep_is_recorded_by_name(self, client, audit):
+        drill_id = a_running_drill(client)
+        assert self.sync(client, drill_id,
+                         {"kind": "SWEEP_COMPLETE"}).json()["accepted"] == 1
+
+        swept = [e for e in audit.for_drill(drill_id)
+                 if e.action is AuditAction.SWEEP_COMPLETED]
+        assert len(swept) == 1
+        assert swept[0].actor_id == "warden-7"
+        assert swept[0].context["zone_id"] == "assembly-north"
+
+    def test_an_escalation_keeps_the_warden_s_words(self, client, audit):
+        drill_id = a_running_drill(client)
+        self.sync(client, drill_id,
+                  {"kind": "ESCALATE", "note": "smoke in the west stairwell"})
+
+        raised = [e for e in audit.for_drill(drill_id)
+                  if e.action is AuditAction.ESCALATED]
+        assert raised[0].summary == "smoke in the west stairwell"
+
+    def test_confirmations_are_summarised_rather_than_listed(
+            self, client, audit):
+        drill_id = a_running_drill(client)
+        self.sync(client, drill_id,
+                  *[{"kind": "CONFIRM_PRESENT", "subject": f"emp:EMP-{i:03d}"}
+                    for i in range(4)])
+
+        batches = [e for e in audit.for_drill(drill_id)
+                   if e.action is AuditAction.WARDEN_ACTION]
+        assert len(batches) == 1
+        assert batches[0].context["accepted"] == 4
+
+    def test_a_refused_action_is_named_in_the_batch(self, client, audit):
+        drill_id = a_running_drill(client)
+        self.sync(client, drill_id, {"kind": "WRONG_PERSON",
+                                     "subject": "emp:EMP-000"})
+
+        batch = [e for e in audit.for_drill(drill_id)
+                 if e.action is AuditAction.WARDEN_ACTION][0]
+        assert batch.context["accepted"] == 0
+        assert "name the identity" in batch.context["refused"][0]
+
+    def test_a_headcount_is_recorded_with_both_numbers(self, client, audit):
+        drill_id = a_running_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/warden/headcount",
+                    headers=self.WARDEN,
+                    json={"zone_id": "assembly-north", "warden_id": "warden-7",
+                          "device_id": "tablet-3", "ts_ms": T0 + 120_000,
+                          "physical_count": 3})
+
+        counted = [e for e in audit.for_drill(drill_id)
+                   if e.action is AuditAction.HEADCOUNT_RECORDED][0]
+        assert counted.context["physical_count"] == 3
+        assert counted.context["system_count"] == 0
+        assert counted.context["tolerated_overcount"] == 0
+
+
+class TestARefusalIsRecorded:
+    """A refusal is a fact about who tried, and a run of them is the shape of
+    somebody looking for a way in."""
+
+    def test_a_caller_without_the_permission_is_logged(self, client, audit):
+        response = client.get("/api/evac/drills",
+                              headers={"X-User-Id": "nosy-1",
+                                       "X-Permissions": "some:other"})
+        assert response.status_code == 403
+
+        denied = [e for e in audit.entries
+                  if e.action is AuditAction.ACCESS_DENIED]
+        assert len(denied) == 1
+        assert denied[0].actor_id == "nosy-1"
+        assert denied[0].context["path"] == "/api/evac/drills"
+        assert denied[0].context["held"] == ["some:other"]
+
+    def test_an_allowed_caller_is_not(self, client, audit):
+        client.get("/api/evac/drills", headers=VIEWER)
+        assert not any(e.action is AuditAction.ACCESS_DENIED
+                       for e in audit.entries)

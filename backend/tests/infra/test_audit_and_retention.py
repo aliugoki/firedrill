@@ -251,3 +251,37 @@ class TestVerification:
         ledger.track(Item("crop-1", DataClass.FACE_CROP, T0, "d1"))
         ledger.purge(T0)
         assert ledger.verify(T0 + 1000)["compliant"] is True
+
+
+class TestEveryActionEitherHappensOrIsDeclaredUnbuilt:
+    """An action kind with no call site is one of two things, and the
+    difference matters: a feature nobody has built, or a place somebody forgot
+    to log.
+
+    Until this week every one of the fourteen was the second.
+    """
+
+    def recorded_somewhere(self) -> set:
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parents[2] / "app"
+        source = "\n".join(
+            path.read_text() for path in root.rglob("*.py")
+            if "vendor" not in path.parts and path.name != "audit.py")
+        return {action for action in AuditAction
+                if f"AuditAction.{action.name}" in source}
+
+    def test_everything_not_declared_unbuilt_has_a_call_site(self):
+        from app.infra.audit import NOT_YET_REACHABLE
+
+        expected = set(AuditAction) - NOT_YET_REACHABLE
+        assert self.recorded_somewhere() == expected
+
+    def test_the_unbuilt_ones_really_have_none(self):
+        # Otherwise the list is an excuse rather than a description.
+        from app.infra.audit import NOT_YET_REACHABLE
+
+        assert not (self.recorded_somewhere() & NOT_YET_REACHABLE)
+
+    def test_most_of_the_vocabulary_is_in_use(self):
+        assert len(self.recorded_somewhere()) >= 10

@@ -59,6 +59,22 @@ STATE_CHANGING: frozenset[AuditAction] = frozenset({
 #: Actions that disclose personal data outside the system.
 DISCLOSING: frozenset[AuditAction] = frozenset({AuditAction.REPORT_EXPORTED})
 
+#: Actions for operations this system does not offer yet.
+#:
+#: Every other member has a call site. These four name features that do not
+#: exist -- no endpoint lets an operator change a decision, alter a threshold,
+#: override the roster, or declare all clear (the board derives that from the
+#: counts and the sweeps, and nobody declares it). They are kept because the
+#: vocabulary is the design, and separated because "defined and never recorded"
+#: otherwise reads as an oversight rather than as a feature nobody has built.
+#:
+#: `tests/infra/test_audit_and_retention.py` checks the split, so an action
+#: added without a call site is noticed rather than assumed.
+NOT_YET_REACHABLE: frozenset[AuditAction] = frozenset({
+    AuditAction.MANUAL_OVERRIDE, AuditAction.ALL_CLEAR_DECLARED,
+    AuditAction.THRESHOLD_CHANGED, AuditAction.ROSTER_OVERRIDDEN,
+})
+
 
 class AuditError(ValueError):
     """An entry that would not be reviewable."""
