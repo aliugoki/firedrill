@@ -222,10 +222,10 @@ class TestDurability:
 
     def test_a_password_has_no_default(self, tmp_path):
         # A password with a default is a password that ends up in production.
-        from app.service.edge import _database_url
+        from app.infra.config import database_url
 
-        assert _database_url({"EVAC_DB_HOST": "db"}) == ""
-        assert _database_url({"EVAC_DB_PASSWORD": "s3cret"}).startswith(
+        assert database_url({"EVAC_DB_HOST": "db"}) == ""
+        assert database_url({"EVAC_DB_PASSWORD": "s3cret"}).startswith(
             "postgresql+psycopg2://")
 
     def test_an_unopenable_database_degrades_rather_than_crashes(self, tmp_path):

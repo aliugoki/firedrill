@@ -22,6 +22,7 @@ from app.ingest.ingestor import Ingestor
 from app.ingest.replication import Outbox, Replicator
 from app.service.supervisor import Supervisor, build_supervisor
 from app.infra.audit import AuditLog
+from app.infra.config import assembly_zones, database_url
 from app.infra.retention import RetentionLedger
 from app.sync.runner import GeometryStore, JsonExport, VisionTrackDatabase, run_sync
 
@@ -213,9 +214,9 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
     # looking for in the wrong place.
     audit = AuditLog()
 
-    database_url = _database_url(env)
+    url = database_url(env)
 
-    if database_url:
+    if url:
         try:
             import sqlalchemy as sa
 
@@ -224,7 +225,7 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
             from app.store.drills import DrillStore
             from app.store.events import EventStore
 
-            engine = sa.create_engine(database_url, pool_pre_ping=True)
+            engine = sa.create_engine(url, pool_pre_ping=True)
             events_store = EventStore(engine=engine, health=ingestor.state.health)
             audit.store = AuditStore(engine=engine)
             drill_store = DrillStore(engine=engine)
@@ -238,7 +239,7 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
                 for drill in registry.recover(
                         drill_store=drill_store, events_store=events_store,
                         site_id=site_id, now_ms=now_ms,
-                        assembly_zones=_assembly_zones(env)):
+                        assembly_zones=assembly_zones(env)):
                     recovered.append(drill.drill_id)
         except RecoveryUnavailable as exc:
             # The database opened; the recovery query failed. Persistence stays
@@ -295,28 +296,6 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
     # the job, so one of the two has to be handed over afterwards.
     node_holder["node"] = node
     return node
-
-
-def _database_url(env: dict) -> str:
-    explicit = env.get("EVAC_DATABASE_URL")
-    if explicit:
-        return explicit
-    password = env.get("EVAC_DB_PASSWORD")
-    if not password:
-        # No default. A password with a default is a password that ends up in
-        # production, and a node that silently persists nowhere is worse than
-        # one that says it has no database.
-        return ""
-    host = env.get("EVAC_DB_HOST", "localhost")
-    port = env.get("EVAC_DB_PORT", "5432")
-    name = env.get("EVAC_DB_NAME", "firedrill")
-    user = env.get("EVAC_DB_USER", "firedrill")
-    return f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{name}"
-
-
-def _assembly_zones(env: dict) -> frozenset:
-    raw = env.get("EVAC_ASSEMBLY_ZONES", "")
-    return frozenset(z.strip() for z in raw.split(",") if z.strip())
 
 
 def _tagged_zones(env: dict) -> dict:

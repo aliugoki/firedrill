@@ -114,7 +114,9 @@ def create_app(registry: DrillRegistry | None = None,
                assembly_zones: frozenset = frozenset(),
                replica=None,
                auth: AuthSettings | None = None,
-               audit: AuditLog | None = None) -> FastAPI:
+               audit: AuditLog | None = None,
+               events_store=None,
+               drill_store=None) -> FastAPI:
     app = FastAPI(
         title="EVAC-120",
         version="0.4.0",
@@ -143,6 +145,12 @@ def create_app(registry: DrillRegistry | None = None,
     # and none was ever recorded, so "who declared the drill over at 10:44"
     # had no answer anywhere.
     app.state.audit = AuditLog() if audit is None else audit
+    # Handed to every drill this process creates. Without them a drill created
+    # through the API was entirely in memory: no rows, no events, nothing for
+    # the edge node's recovery to find, and `Drill.is_durable` said so to
+    # nobody.
+    app.state.events_store = events_store
+    app.state.drill_store = drill_store
 
     def drill_or_404(drill_id: str, caller: Caller) -> Drill:
         """The drill, if it is this caller's to see.
@@ -199,7 +207,9 @@ def create_app(registry: DrillRegistry | None = None,
         drill = Drill(
             drill_id=str(uuid.uuid4()), tenant_id=body.tenant_id,
             site_id=body.site_id, name=body.name, roster=roster,
-            created_ms=now_ms(), assembly_zones=app.state.assembly_zones)
+            created_ms=now_ms(), assembly_zones=app.state.assembly_zones,
+            events_store=app.state.events_store,
+            drill_store=app.state.drill_store)
         app.state.registry.add(drill)
         app.state.audit.record(
             action=AuditAction.DRILL_CREATED, actor_id=caller.user_id,
@@ -526,6 +536,8 @@ def create_app(registry: DrillRegistry | None = None,
         drill = app.state.registry.running()
 
         report = {
+            "audit_durable": app.state.audit.store is not None,
+            "audit_unpersisted": app.state.audit.unpersisted,
             "status": "ok",
             "degraded": False,
             "drill": drill.drill_id if drill else None,
@@ -552,6 +564,9 @@ def create_app(registry: DrillRegistry | None = None,
                 "events_accepted": state.accepted,
                 "duplicates_dropped": state.duplicates_dropped,
                 "malformed_rejected": state.rejected,
+                # Whether this drill's events and rows are reaching a database.
+                # A restart mid-evacuation loses everything that is not.
+                "durable": drill.is_durable,
                 "outstanding_gaps": len(state.tracker.outstanding_gaps()),
             })
 

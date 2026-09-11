@@ -15,7 +15,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import create_app
-from app.api.main import _assembly_zones, _roster_provider
+from app.api.main import _roster_provider
+from app.infra.config import assembly_zones
 from app.drill import DrillRegistry
 from app.infra.auth import AuthSettings
 from app.infra.permissions import EVAC_OPERATE, EVAC_READ
@@ -46,11 +47,11 @@ def with_env(monkeypatch, **values):
 class TestAssemblyZones:
     def test_absent_means_none_rather_than_one_empty_name(self, monkeypatch):
         with_env(monkeypatch, EVAC_ASSEMBLY_ZONES=None)
-        assert _assembly_zones() == frozenset()
+        assert assembly_zones(dict(os.environ)) == frozenset()
 
     def test_blanks_and_spacing_are_tolerated(self, monkeypatch):
         with_env(monkeypatch, EVAC_ASSEMBLY_ZONES=" north , , south ")
-        assert _assembly_zones() == frozenset({"north", "south"})
+        assert assembly_zones(dict(os.environ)) == frozenset({"north", "south"})
 
 
 class TestTheRosterSource:
@@ -103,3 +104,91 @@ class TestABrokenRosterSource:
         assert response.status_code == 503
         assert "roster source could not be read" in response.json()["detail"]
         assert "FileNotFoundError" in response.json()["detail"]
+
+
+def a_roster(site_id: str):
+    from app.core.roster import ExpectationReason, Roster
+
+    roster = Roster()
+    for i in range(3):
+        roster.add_employee(
+            emp_id=f"EMP-{i:03d}", display_name=f"Person {i}",
+            has_gallery_entry=True, reason=ExpectationReason.ON_SHIFT,
+            assigned_assembly_zone="north")
+    return roster.snapshot(0)
+
+
+class TestADrillCreatedHereIsWrittenDown:
+    """Every drill created through this API used to live in memory alone.
+
+    No rows, no events, nothing for the edge node's recovery to find, and
+    `Drill.is_durable` reporting it to nobody. A restart mid-evacuation lost
+    the board.
+    """
+
+    def with_stores(self, tmp_path):
+        import sqlalchemy as sa
+
+        from app.infra.audit import AuditLog
+        from app.store.audit import AuditStore
+        from app.store.drills import DrillStore
+        from app.store.events import EventStore
+        from app.store.schema import metadata
+
+        engine = sa.create_engine(f"sqlite:///{tmp_path / 'evac.db'}")
+        metadata.create_all(engine)
+        audit = AuditLog(store=AuditStore(engine=engine))
+        return engine, audit, TestClient(create_app(
+            registry=DrillRegistry(), roster_provider=a_roster,
+            assembly_zones=frozenset({"north"}), auth=GATEWAY, audit=audit,
+            events_store=EventStore(engine=engine),
+            drill_store=DrillStore(engine=engine)))
+
+    def test_the_drill_reaches_the_database(self, tmp_path):
+        from app.store.drills import DrillStore
+
+        engine, _, client = self.with_stores(tmp_path)
+        made = client.post("/api/evac/drills", headers=OPERATOR,
+                           json={"tenant_id": "t", "site_id": "site-1",
+                                 "name": "Q3"})
+        drill_id = made.json()["drill_id"]
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+
+        running = DrillStore(engine=engine).unfinished("site-1")
+        assert [row["drill_id"] for row in running] == [drill_id]
+
+    def test_the_board_says_whether_it_is_durable(self, tmp_path):
+        _, _, client = self.with_stores(tmp_path)
+        made = client.post("/api/evac/drills", headers=OPERATOR,
+                           json={"tenant_id": "t", "site_id": "site-1",
+                                 "name": "Q3"})
+        client.post(f"/api/evac/drills/{made.json()['drill_id']}/start",
+                    headers=OPERATOR)
+
+        assert client.get("/healthz").json()["durable"] is True
+
+    def test_a_process_with_no_database_says_so(self):
+        client = TestClient(create_app(
+            registry=DrillRegistry(), roster_provider=a_roster,
+            assembly_zones=frozenset(), auth=GATEWAY))
+        made = client.post("/api/evac/drills", headers=OPERATOR,
+                           json={"tenant_id": "t", "site_id": "site-1",
+                                 "name": "Q3"})
+        client.post(f"/api/evac/drills/{made.json()['drill_id']}/start",
+                    headers=OPERATOR)
+
+        report = client.get("/healthz").json()
+        assert report["durable"] is False
+        assert report["audit_durable"] is False
+
+    def test_the_audit_log_reaches_the_database_too(self, tmp_path):
+        from app.store.audit import AuditStore
+
+        engine, _, client = self.with_stores(tmp_path)
+        made = client.post("/api/evac/drills", headers=OPERATOR,
+                           json={"tenant_id": "t", "site_id": "site-1",
+                                 "name": "Q3"})
+        drill_id = made.json()["drill_id"]
+
+        persisted = AuditStore(engine=engine).for_drill(drill_id)
+        assert [entry.action.value for entry in persisted] == ["DRILL_CREATED"]
