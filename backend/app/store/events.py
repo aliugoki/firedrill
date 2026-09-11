@@ -188,6 +188,36 @@ class EventStore:
             return [_from_row(row._mapping)
                     for row in connection.execute(query)]
 
+    def replay_since(self, drill_id: str, after_id: int = 0,
+                     limit: int | None = None) -> tuple[list, int]:
+        """Everything stored since a cursor, and the cursor to use next.
+
+        `replay` takes an `after_id` and gives no way to learn what the next one
+        should be, so nothing could use it incrementally and nothing did. That
+        left one process able to catch up with another only by reading the
+        whole drill from the beginning, every time.
+
+        The returned cursor is the highest row id seen, not the id of the last
+        event in the list: rows come back in event-time order, so a late
+        arrival written after an earlier one is delivered before it. Taking the
+        last row's id would move the cursor backwards and re-read the tail
+        forever.
+        """
+        query = (sa.select(evac_events)
+                 .where(evac_events.c.drill_id == drill_id)
+                 .where(evac_events.c.id > after_id)
+                 .order_by(evac_events.c.ts_ms, evac_events.c.id))
+        if limit:
+            query = query.limit(limit)
+
+        events, highest = [], after_id
+        with self.engine.connect() as connection:
+            for row in connection.execute(query):
+                mapping = row._mapping
+                events.append(_from_row(mapping))
+                highest = max(highest, mapping["id"])
+        return events, highest
+
     def count(self, drill_id: str) -> int:
         query = (sa.select(sa.func.count())
                  .select_from(evac_events)

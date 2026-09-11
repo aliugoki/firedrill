@@ -19,11 +19,15 @@ from app.api.main import _roster_provider
 from app.infra.config import assembly_zones
 from app.drill import DrillRegistry
 from app.infra.auth import AuthSettings
-from app.infra.permissions import EVAC_OPERATE, EVAC_READ
+from app.infra.permissions import EVAC_OPERATE, EVAC_READ, EVAC_WARDEN
 
 GATEWAY = AuthSettings(trust_headers=True)
 OPERATOR = {"X-User-Id": "commander-1",
             "X-Permissions": f"{EVAC_READ},{EVAC_OPERATE}"}
+WARDEN = {"X-User-Id": "warden-7",
+          "X-Permissions": f"{EVAC_READ},{EVAC_WARDEN}",
+          "X-Zones": "north"}
+T0 = 1_788_000_000_000
 
 
 @pytest.fixture
@@ -333,3 +337,140 @@ class TestARestartComesBackWithTheDrill:
 
         assert report["degraded"] is True
         assert "the drill could not be reloaded" in report["configuration_gaps"]
+
+
+class TestTheBoardSeesWhatTheEdgeProcessWroteDown:
+    """One drill, two processes, and until now no path between them.
+
+    The edge process drains the camera stream and writes each observation to
+    the shared event store. This process holds the board an operator is looking
+    at, and it read that store exactly once, at startup. Everything a camera
+    saw after that reached the database and stopped there.
+
+    `replay(after_id=...)` was built for this and had no caller: it took a
+    cursor and gave no way to learn the next one, so nothing could use it
+    incrementally.
+    """
+
+    def with_stores(self, tmp_path):
+        import sqlalchemy as sa
+
+        from app.infra.audit import AuditLog
+        from app.store.audit import AuditStore
+        from app.store.drills import DrillStore
+        from app.store.events import EventStore
+        from app.store.schema import metadata
+
+        engine = sa.create_engine(f"sqlite:///{tmp_path / 'evac.db'}")
+        metadata.create_all(engine)
+        audit = AuditLog(store=AuditStore(engine=engine))
+        return engine, audit, TestClient(create_app(
+            registry=DrillRegistry(), roster_provider=a_roster,
+            assembly_zones=frozenset({"north"}), auth=GATEWAY, audit=audit,
+            events_store=EventStore(engine=engine),
+            drill_store=DrillStore(engine=engine)))
+
+    def camera_event(self, drill_id, seq, subject="gp-1", zone="north",
+                     kind="ASSEMBLY", ts_ms=None):
+        from app.core.events import Event, EventType, SourceKind
+
+        return Event(
+            tenant_id="t", site_id="site-1", drill_id=drill_id, source="cam-9",
+            source_kind=SourceKind.CAMERA, seq=seq,
+            type=EventType.TRACK_UPDATED, ts_ms=ts_ms or (T0 + seq * 1_000),
+            subject=subject,
+            payload={"zone_id": zone, "zone_kind": kind, "camera_id": "cam-9"})
+
+    def face_event(self, drill_id, seq, subject, emp_id):
+        from app.core.events import Event, EventType, SourceKind
+
+        return Event(
+            tenant_id="t", site_id="site-1", drill_id=drill_id, source="cam-9",
+            source_kind=SourceKind.CAMERA, seq=seq,
+            type=EventType.FACE_OBSERVED, ts_ms=T0 + seq * 1_000,
+            subject=subject,
+            payload={"candidate_id": emp_id, "score": 0.92, "margin": 0.3,
+                     "quality": 0.9, "camera_id": "cam-9"})
+
+    def running(self, client):
+        made = client.post("/api/evac/drills", headers=OPERATOR,
+                           json={"tenant_id": "t", "site_id": "site-1",
+                                 "name": "Q3"})
+        drill_id = made.json()["drill_id"]
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        return drill_id
+
+    def test_an_observation_written_elsewhere_reaches_the_board(self, tmp_path):
+        _, _, client = self.with_stores(tmp_path)
+        drill_id = self.running(client)
+        store = client.app.state.events_store
+
+        before = client.get(f"/api/evac/drills/{drill_id}/board",
+                            headers=OPERATOR).json()
+        assert all(row["last_camera_id"] is None for row in before["rows"])
+
+        # The edge process's half: written to the store, never handed to this
+        # process's drill object. Enough face evidence to name the track, so
+        # the effect is visible as a row on the board rather than only in the
+        # fold behind it.
+        for seq in range(1, 4):
+            store.append(self.camera_event(drill_id, seq, subject="gp-1"))
+            store.append(self.face_event(drill_id, 100 + seq, "gp-1", "EMP-000"))
+
+        after = client.get(f"/api/evac/drills/{drill_id}/board",
+                           headers=OPERATOR).json()
+        row = next(r for r in after["rows"] if r["person_ref"] == "emp:EMP-000")
+        assert row["last_camera_id"] == "cam-9"
+        assert row["last_zone_id"] == "north"
+
+    def test_the_cursor_moves_so_the_same_rows_are_not_reread(self, tmp_path):
+        _, _, client = self.with_stores(tmp_path)
+        drill_id = self.running(client)
+        store = client.app.state.events_store
+        store.append(self.camera_event(drill_id, 1))
+
+        client.get(f"/api/evac/drills/{drill_id}/board", headers=OPERATOR)
+        drill = client.app.state.registry.get(drill_id)
+        first = drill._replay_cursor
+        assert first > 0
+
+        client.get(f"/api/evac/drills/{drill_id}/board", headers=OPERATOR)
+        assert drill._replay_cursor == first
+
+    def test_a_warden_action_this_process_made_is_not_applied_twice(self, tmp_path):
+        """The ingest fold is idempotent and warden state is not.
+
+        A sweep's confirmations are a set, but its tagged-unknown count and its
+        headcounts are lists. Re-reading this process's own warden events out
+        of the store on every board refresh would invent evidence a warden
+        never gave.
+        """
+        _, _, client = self.with_stores(tmp_path)
+        drill_id = self.running(client)
+        client.post(f"/api/evac/drills/{drill_id}/warden/sync", headers=WARDEN,
+                    json={"actions": [{
+                        "kind": "TAG_UNKNOWN", "warden_id": "warden-7",
+                        "device_id": "tablet-3", "zone_id": "north",
+                        "ts_ms": T0 + 60_000, "device_seq": 1,
+                        "note": "contractor"}]})
+
+        drill = client.app.state.registry.get(drill_id)
+        assert drill.warden.tagged_unknowns() == 1
+
+        for _ in range(3):
+            client.get(f"/api/evac/drills/{drill_id}/board", headers=OPERATOR)
+        assert drill.warden.tagged_unknowns() == 1
+
+    def test_an_unreadable_store_does_not_take_the_board_down(self, tmp_path):
+        # Refusing to show a board during an evacuation because a replica
+        # failed over is the wrong trade in every direction.
+        import sqlalchemy as sa
+
+        _, _, client = self.with_stores(tmp_path)
+        drill_id = self.running(client)
+        client.app.state.events_store.engine = sa.create_engine(
+            "postgresql+psycopg2://nobody@127.0.0.1:1/nothing")
+
+        response = client.get(f"/api/evac/drills/{drill_id}/board",
+                              headers=OPERATOR)
+        assert response.status_code == 200

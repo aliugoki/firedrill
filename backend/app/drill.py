@@ -94,6 +94,15 @@ class Drill:
     ingestor: Ingestor = field(init=False)
     warden: WardenState = field(init=False)
     _system_seq: int = 0
+    #: Highest stored row this drill has folded. The API process and the edge
+    #: process each hold a `Drill` for the same evacuation and write different
+    #: halves of it, so each has to pick up what the other wrote.
+    _replay_cursor: int = 0
+    #: Warden events already folded into `self.warden`. The ingest fold is
+    #: idempotent on `(source, seq)` and warden state is not: a sweep's
+    #: confirmations are a set, but its tagged-unknown count and its headcounts
+    #: are lists, and applying one twice invents evidence.
+    _folded_warden: set = field(default_factory=set)
 
     def __post_init__(self) -> None:
         self.ingestor = Ingestor(identity_config=self.identity_config,
@@ -215,6 +224,7 @@ class Drill:
                          drill_id=self.drill_id, seq=queue.next_seq)
         queue.next_seq += 1
         self.warden.apply(action)
+        self._folded_warden.add(event.event_id)
         self.feed([event])
         return event
 
@@ -234,6 +244,7 @@ class Drill:
             recorded, tenant_id=self.tenant_id, site_id=self.site_id,
             drill_id=self.drill_id, seq=queue.next_seq)
         queue.next_seq += 1
+        self._folded_warden.add(event.event_id)
         self.feed([event])
         return recorded
 
@@ -371,11 +382,31 @@ class Drill:
         that restarted mid-drill came back with every zone unswept, every note
         gone, and its wardens asked to walk the building again.
         """
+        return self.catch_up(now_ms)
+
+    def catch_up(self, now_ms: int) -> int:
+        """Fold whatever the store has gained since this drill last looked.
+
+        The same work as `recover`, done repeatedly and cheaply, and it is what
+        makes two processes one drill. The edge process consumes the camera
+        stream and writes it down; the API process holds the board an operator
+        is looking at. Without this the board showed only what the API process
+        itself produced -- the start, the wardens' work -- and the cameras
+        might as well have been switched off.
+
+        Nothing is written here. Events read out of the store are already
+        stored and already queued for central, and re-persisting them on every
+        board refresh would be a write amplification measured in drills.
+        """
         if self.events_store is None:
             return 0
-        events = self.events_store.replay(self.drill_id)
+        events, cursor = self.events_store.replay_since(
+            self.drill_id, self._replay_cursor)
+        if not events:
+            return 0
         applied = self.ingestor.feed_batch(events)
         self._replay_warden_actions(events)
+        self._replay_cursor = cursor
         self.ingestor.tick(now_ms)
         return applied
 
@@ -394,6 +425,9 @@ class Drill:
         for event in events:
             if event.source_kind is not SourceKind.WARDEN:
                 continue
+            if event.event_id in self._folded_warden:
+                continue
+            self._folded_warden.add(event.event_id)
             count = headcount_from_event(event)
             if count is not None:
                 self.warden.record_headcount(count)

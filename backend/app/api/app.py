@@ -178,6 +178,22 @@ def create_app(registry: DrillRegistry | None = None,
         if caller.tenant_id and drill.tenant_id != caller.tenant_id:
             raise HTTPException(status.HTTP_404_NOT_FOUND,
                                 f"no drill {drill_id}")
+
+        # Every route reaches a drill through here, which is why the catch-up
+        # lives here and not at six call sites. The edge process consumes the
+        # camera stream and writes it to the shared store; this process holds
+        # the board. Without a read of what the other half wrote, the board
+        # shows only what this process produced.
+        #
+        # One indexed query for rows past a cursor, and usually zero rows. A
+        # failure is swallowed on purpose: a database that cannot be read is
+        # already reported through `/healthz` and `durable`, and refusing to
+        # show a board during an evacuation because a replica failed over is
+        # the wrong trade in every direction.
+        try:
+            drill.catch_up(now_ms())
+        except Exception:
+            pass
         return drill
 
     # --- drills ---------------------------------------------------------------
