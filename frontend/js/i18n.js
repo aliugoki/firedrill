@@ -69,6 +69,9 @@ export const STRINGS = {
     'drill.status.DRAFT': 'Not started',
     'drill.status.RUNNING': 'Running',
     'drill.status.COMPLETE': 'Finished',
+    'drill.none': 'No drill',
+    'drill.complete_confirm': 'End it — press again',
+    'drill.still_outstanding': 'Still outstanding',
 
     'warden.my_zone': 'My zone',
     'warden.roster': 'People',
@@ -161,6 +164,9 @@ export const STRINGS = {
     'drill.status.DRAFT': 'لم يبدأ',
     'drill.status.RUNNING': 'جارٍ',
     'drill.status.COMPLETE': 'انتهى',
+    'drill.none': 'لا تمرين',
+    'drill.complete_confirm': 'أنهِ — اضغط مرة أخرى',
+    'drill.still_outstanding': 'ما زال معلقاً',
 
     'warden.my_zone': 'منطقتي',
     'warden.roster': 'الأشخاص',

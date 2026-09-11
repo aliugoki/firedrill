@@ -11,6 +11,7 @@ import {
   filterRoster, headcountVerdict, healthLine, orderForWarden, staleness,
   syncStatus, tiles, timingLine, verdict,
   exitPressure,
+  drillControl,
 } from '../js/render.js';
 
 const t = createTranslator('en');
@@ -365,5 +366,87 @@ describe('which exit is holding the evacuation up', () => {
     const clear = { ...panel, limiting_zone_id: null };
     assert.match(exitPressure(clear, t).headline, /No exit is holding anyone up/);
     assert.equal(exitPressure(clear, t).rows[0].limiting, false);
+  });
+});
+
+describe('what an operator can do to the drill', () => {
+  it('offers nothing when there is no drill', () => {
+    const control = drillControl(null, t);
+    assert.equal(control.action, null);
+    assert.equal(control.status, 'No drill');
+  });
+
+  it('offers to start a drill that has not started', () => {
+    const control = drillControl({ status: 'DRAFT' }, t);
+    assert.equal(control.action.kind, 'start');
+    assert.equal(control.status, 'Not started');
+  });
+
+  it('offers nothing on a drill that is over', () => {
+    assert.equal(drillControl({ status: 'COMPLETE' }, t).action, null);
+  });
+
+  it('arms before it ends a running drill', () => {
+    // Ending stops accountability, so the first press only arms.
+    const first = drillControl({ status: 'RUNNING' }, t);
+    assert.equal(first.action.kind, 'complete');
+    assert.equal(first.action.armed, false);
+    assert.match(first.action.label, /End drill/);
+
+    const second = drillControl({ status: 'RUNNING' }, t, { armed: true });
+    assert.equal(second.action.armed, true);
+    assert.match(second.action.label, /press again/);
+  });
+
+  it('says what is outstanding only once the operator reaches for it', () => {
+    const drill = {
+      status: 'RUNNING', all_clear: false,
+      blocking_all_clear: ['3 of 40 people not accounted for'],
+    };
+    assert.deepEqual(drillControl(drill, t).blocking, []);
+    assert.deepEqual(drillControl(drill, t, { armed: true }).blocking,
+      ['3 of 40 people not accounted for']);
+  });
+
+  it('has nothing outstanding to report when the board is clear', () => {
+    const clear = { status: 'RUNNING', all_clear: true,
+                    blocking_all_clear: [] };
+    assert.deepEqual(drillControl(clear, t, { armed: true }).blocking, []);
+  });
+
+  it('takes the blocking reasons from the server, never its own view', () => {
+    // A screen that decided for itself would bypass the outage and sweep
+    // checks entirely.
+    const lying = { status: 'RUNNING', all_clear: false, blocking_all_clear: [] };
+    assert.deepEqual(drillControl(lying, t, { armed: true }).blocking, []);
+  });
+});
+
+describe('when the commander can stand down', () => {
+  it('is shown beside the evacuation times', () => {
+    // Separate from the percentiles and usually much longer: the building
+    // empties in two minutes, and establishing that nobody is left takes as
+    // long as the last uncertain person takes to resolve.
+    const line = timingLine({
+      building: { p50: 60, p95: 114, reliable: true, coverage: 1 },
+      target_p95_s: 120, accountability_completion_s: 418.5,
+    }, t);
+    assert.match(line.settled, /Accountability settled after 418\.5s/);
+  });
+
+  it('is null while it is still unsettled rather than zero', () => {
+    const line = timingLine({
+      building: { p50: 60, p95: 114, reliable: true, coverage: 1 },
+      target_p95_s: 120, accountability_completion_s: null,
+    }, t);
+    assert.equal(line.settled, null);
+  });
+
+  it('is reported even when no percentile could be produced', () => {
+    const line = timingLine({
+      building: { p95: null, p50: null, reliable: false, coverage: 0 },
+      accountability_completion_s: 300.0,
+    }, t);
+    assert.match(line.settled, /300\.0s/);
   });
 });

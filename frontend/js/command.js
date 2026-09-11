@@ -12,8 +12,8 @@
 import { Api, Freshness } from './api.js';
 import { createTranslator, isRtl, formatDuration } from './i18n.js';
 import {
-  exitPressure, healthLine, orderForWarden, staleness, tiles, timingLine,
-  verdict,
+  drillControl, exitPressure, healthLine, orderForWarden, staleness, tiles,
+  timingLine, verdict,
 } from './render.js';
 
 const params = new URLSearchParams(location.search);
@@ -33,6 +33,9 @@ const zoneFreshness = new Freshness(30_000);
 const exitFreshness = new Freshness(30_000);
 
 let drillId = params.get('drill') || null;
+let drill = null;
+//: Ending a drill stops accountability, so the button arms before it acts.
+let endArmed = false;
 
 function applyLanguage() {
   t = createTranslator(lang);
@@ -55,10 +58,14 @@ document.getElementById('lang').addEventListener('click', () => {
 });
 
 async function pickDrill() {
-  if (drillId) return drillId;
   const drills = await api.listDrills();
-  const running = (Array.isArray(drills) ? drills : []).find((d) => d.status === 'RUNNING');
-  drillId = (running || (Array.isArray(drills) ? drills[0] : null))?.drill_id || null;
+  const all = Array.isArray(drills) ? drills : [];
+  if (drillId) {
+    drill = all.find((d) => d.drill_id === drillId) || drill;
+    return drillId;
+  }
+  drill = all.find((d) => d.status === 'RUNNING') || all[0] || null;
+  drillId = drill?.drill_id || null;
   return drillId;
 }
 
@@ -127,8 +134,8 @@ function paint() {
   healthEl.className = `health ${health.tone}`;
   healthEl.textContent = health.text;
 
-  document.getElementById('drill-name').textContent = board
-    ? `${board.status}` : '';
+  document.getElementById('drill-name').textContent = drill?.name || '';
+  paintDrillControl(board);
   document.getElementById('elapsed').textContent = board
     ? `${t('board.elapsed')} ${formatDuration(board.elapsed_ms, lang)}` : '';
 
@@ -137,6 +144,49 @@ function paint() {
   paintZones();
   paintExits();
 }
+
+function paintDrillControl(board) {
+  // The board's own blocking reasons, not a second opinion computed here: a
+  // screen that decides for itself whether a building is clear would bypass
+  // the outage and sweep checks the server makes.
+  const { status, action, blocking } = drillControl(
+    board ? { ...drill, all_clear: board.all_clear,
+              blocking_all_clear: board.blocking_all_clear } : drill,
+    t, { armed: endArmed });
+
+  document.getElementById('drill-status').textContent = status;
+
+  const button = document.getElementById('drill-action');
+  button.hidden = action === null;
+  if (action === null) return;
+  button.textContent = action.label;
+  button.className = action.armed ? 'primary' : '';
+  button.dataset.kind = action.kind;
+
+  const host = document.getElementById('stale-banner');
+  if (blocking.length) {
+    host.innerHTML += `<div class="stale">${escape(t('drill.still_outstanding'))}: `
+      + blocking.map(escape).join('; ') + '</div>';
+  }
+}
+
+document.getElementById('drill-action').addEventListener('click', async () => {
+  const kind = document.getElementById('drill-action').dataset.kind;
+  if (kind === 'start') {
+    await api.startDrill(drillId);
+  } else if (!endArmed) {
+    // First press arms it and shows what is still outstanding. Ending a drill
+    // stops accountability, and the moment somebody reaches for this button is
+    // the moment "is everybody out" is actually being answered.
+    endArmed = true;
+    paint();
+    return;
+  } else {
+    await api.completeDrill(drillId);
+  }
+  endArmed = false;
+  await poll();
+});
 
 function paintPriority(board) {
   const host = document.getElementById('priority');
@@ -169,8 +219,9 @@ function paintPriority(board) {
 function paintTiming() {
   const line = timingLine(timingFreshness.value, t);
   const host = document.getElementById('timing');
-  host.innerHTML = `<div>${escape(line.text)}</div>` +
-    line.caveats.map(
+  host.innerHTML = `<div>${escape(line.text)}</div>`
+    + (line.settled ? `<div>${escape(line.settled)}</div>` : '')
+    + line.caveats.map(
       (note) => `<div class="caveat">${escape(note)}</div>`).join('');
 }
 

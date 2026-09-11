@@ -95,7 +95,7 @@ export function staleness(freshness, t, now = Date.now()) {
  */
 export function timingLine(timing, t) {
   if (!timing || !timing.building) {
-    return { text: t('timing.none'), caveats: [] };
+    return { text: t('timing.none'), caveats: [], settled: null };
   }
   const b = timing.building;
   const caveats = [];
@@ -105,8 +105,17 @@ export function timingLine(timing, t) {
     caveats.push(`${missing}% ${t('timing.coverage_low')}`);
   }
 
+  // Separate from the evacuation percentiles and usually much longer: the
+  // building empties in two minutes, and establishing that nobody is left
+  // takes as long as the last uncertain person takes to resolve. It is the
+  // number that decides when a commander can stand down, and no screen showed
+  // it.
+  const settled = typeof timing.accountability_completion_s === 'number'
+    ? `${t('timing.completion')} ${timing.accountability_completion_s.toFixed(1)}s`
+    : null;
+
   if (b.p95 === null || b.p95 === undefined) {
-    return { text: t('timing.none'), caveats };
+    return { text: t('timing.none'), caveats, settled };
   }
   const p50 = b.p50 === null ? '—' : `${b.p50.toFixed(1)}s`;
   const p95 = `${b.p95.toFixed(1)}s`;
@@ -115,6 +124,7 @@ export function timingLine(timing, t) {
           `${t('timing.target')} ${timing.target_p95_s}s`,
     meetsTarget: timing.meets_target,
     caveats,
+    settled,
   };
 }
 
@@ -168,6 +178,46 @@ export function orderForWarden(rows) {
     if (byBand !== 0) return byBand;
     return (a.display_name || '').localeCompare(b.display_name || '');
   });
+}
+
+/**
+ * What the operator can do to the drill right now, and what to call it.
+ *
+ * `api.js` has had `startDrill` and `completeDrill` since Phase 4 and nothing
+ * called them, so a commander could watch a drill and not start one. The
+ * strings were written in both languages and left unused.
+ *
+ * Ending a drill stops accountability, so it takes two presses: the first arms
+ * it and says what is still outstanding, the second does it. Starting does not,
+ * because a drill that starts a second too early costs nothing and hesitating
+ * at an alarm costs the thing this product is for.
+ */
+export function drillControl(drill, t, { armed = false } = {}) {
+  if (!drill) {
+    return { status: t('drill.none'), action: null, blocking: [] };
+  }
+  const status = t(`drill.status.${drill.status}`, drill.status);
+
+  if (drill.status === 'DRAFT') {
+    return { status, action: { kind: 'start', label: t('drill.start') },
+             blocking: [] };
+  }
+  if (drill.status !== 'RUNNING') {
+    return { status, action: null, blocking: [] };
+  }
+
+  const blocking = drill.all_clear ? [] : (drill.blocking_all_clear || []);
+  return {
+    status,
+    action: {
+      kind: 'complete',
+      label: armed ? t('drill.complete_confirm') : t('drill.complete'),
+      armed,
+    },
+    // Shown only once the operator has reached for the button, because it is
+    // the moment the question "is everybody out" is actually being answered.
+    blocking: armed ? blocking : [],
+  };
 }
 
 /**
