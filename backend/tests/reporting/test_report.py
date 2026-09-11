@@ -338,3 +338,110 @@ class TestADisagreementOutranksMissingEvidence:
                             timing_coverage=0.02, p95_s=None,
                             p95_reliable=False)
         assert validate(**unmeasurable).outcome is Outcome.INCONCLUSIVE
+
+
+class TestTheReportASafetyOfficerReads:
+    """The rendered text, which had no test.
+
+    It is the artefact of the whole drill: what gets filed, quoted in a
+    post-incident review, and read by somebody deciding whether the system can
+    be relied on. Its numbers were exercised through the dataclass and its words
+    were not.
+    """
+
+    def report(self, **overrides):
+        from app.reporting.drill_report import Disagreement, DrillReport
+
+        base = dict(
+            drill_id="d1", name="Q3 drill", site_id="site-1",
+            started_ms=T0, completed_ms=T0 + 600_000, duration_s=600.0,
+            expected=10, accounted=9, unaccounted=1, uncertain=0,
+            needing_verification=0, unknown_people=0,
+            p50_s=64.0, p90_s=104.0, p95_s=114.0, p99_s=195.0, max_s=210.0,
+            timing_samples=200, timing_coverage=0.95,
+            accountability_completion_s=420.0, slowest_floor="basement at P95 158.9s",
+            warden_confirmations=9, sweeps_completed=2, sweeps_expected=2,
+            zones_with_headcount=2, outages=1, blind_fraction=0.05,
+            longest_blind_s=30.0)
+        base.update(overrides)
+        return DrillReport(**base), Disagreement
+
+    def test_every_false_accounted_is_listed_with_its_reasoning(self):
+        """Each one is a person somebody has to go and find.
+
+        A count tells a safety officer how many; the list tells them who, and
+        the reasoning tells them what the system believed when it got it wrong.
+        """
+        from app.reporting.drill_report import Disagreement
+
+        report, _ = self.report(false_accounted=(
+            Disagreement(person_ref="emp:EMP-003", display_name="Sara",
+                         system_state="ACCOUNTED", warden_said="not here",
+                         system_reason="observed at an assembly zone with a "
+                                       "confirmed identity"),
+            Disagreement(person_ref="emp:EMP-007", display_name="Bilal",
+                         system_state="ACCOUNTED",
+                         warden_said="did not confirm",
+                         system_reason="warden confirmed at assembly-south"),
+        ))
+
+        text = "\n".join(report.render())
+        assert "Every false accounted, in full:" in text
+        for name in ("Sara", "Bilal"):
+            assert name in text
+        assert text.count("system reasoning:") == 2
+        assert report.is_safe_result is False
+
+    def test_the_timing_block_carries_its_coverage(self):
+        report, _ = self.report()
+        text = "\n".join(report.render())
+        assert "P95 114.0s" in text
+        assert "200 people (95% coverage)" in text
+        assert "slowest individual      210.0s" in text
+        assert "basement at P95 158.9s" in text
+
+    def test_a_drill_with_no_measurements_says_so_rather_than_zero(self):
+        # `slowest_floor` is None here because that is what the real builder
+        # produces: it comes from the per-floor timings, and there are none.
+        report, _ = self.report(p95_s=None, p50_s=None, timing_samples=0,
+                                timing_coverage=0.0, slowest_floor=None,
+                                timing_caveats=("No measurements: nobody had "
+                                                "both a start and an arrival.",))
+        lines = report.render()
+        start = lines.index("Evacuation times")
+        percentiles = [line for line in lines[start:start + 3]
+                       if "accountability settled" not in line]
+
+        assert any("none — No measurements" in line for line in percentiles)
+        # No fabricated percentiles: "nobody evacuated in 0 seconds" and "we
+        # have no measurements" must not look alike.
+        assert not any("P95" in line for line in percentiles)
+
+    def test_disagreements_and_escalations_are_quoted(self):
+        # A count of mismatches is a number; the words are what a commander
+        # acts on.
+        report, _ = self.report(
+            headcount_mismatches=("assembly-north: system 12, physical 9",),
+            escalations=("two people unaccounted and the stairwell is smoky",))
+        text = "\n".join(report.render())
+        assert "! assembly-north: system 12, physical 9" in text
+        assert "! escalated: two people unaccounted" in text
+
+    def test_the_health_caveat_sits_beside_the_numbers(self):
+        report, _ = self.report(
+            health_caveat="The system was blind for 20% of this drill.")
+        text = "\n".join(report.render())
+        assert "blind for               5% of the drill" in text
+        assert "blind for 20% of this drill" in text
+
+    def test_uncalibrated_thresholds_are_said_out_loud(self):
+        # No number in this system has been validated against a calibration
+        # set, and a report that does not say so invites being quoted as if it
+        # had.
+        report, _ = self.report()
+        text = "\n".join(report.render())
+        assert "no threshold in this system has been validated" in text
+
+    def test_calibrated_thresholds_drop_the_note(self):
+        report, _ = self.report(thresholds_calibrated=True)
+        assert "no threshold in this system" not in "\n".join(report.render())
