@@ -411,6 +411,16 @@ class IdentityRegistry:
             self._people[person_id] = person
         return person
 
+    def find(self, person_id: str) -> PersonIdentity | None:
+        """The record for a track, or None. Unlike `get`, it invents nothing.
+
+        A caller holding an id that may not be a track id needs this: `get`
+        would create an identity record for whatever string it was handed, and
+        a record keyed on something no camera ever saw is a person the drill
+        does not have.
+        """
+        return self._people.get(person_id)
+
     def observe(self, person_id: str, obs: FaceObservation) -> Transition | None:
         return self.get(person_id).observe(obs)
 

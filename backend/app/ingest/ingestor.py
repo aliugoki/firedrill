@@ -276,8 +276,10 @@ class Ingestor:
         subject, payload = event.subject, event.payload
         if not subject or "identity" not in payload:
             return
-        self.state.identity.get(subject).warden_confirms(
-            payload["identity"], event.ts_ms, payload.get("warden_id", "unknown"))
+        tracked = self.state.identity.find(subject)
+        if tracked is not None:
+            tracked.warden_confirms(payload["identity"], event.ts_ms,
+                                    payload.get("warden_id", "unknown"))
         self.state.ledger.record(
             subject=subject, kind=EvidenceKind.WARDEN_CONFIRMATION,
             ts_ms=event.ts_ms, stance=Stance.SUPPORTS, source=event.source,
@@ -289,8 +291,17 @@ class Ingestor:
         subject, payload = event.subject, event.payload
         if not subject or "identity" not in payload:
             return
-        self.state.identity.get(subject).warden_rejects(
-            payload["identity"], event.ts_ms, payload.get("warden_id", "unknown"))
+        # Only when the subject is a track the cameras actually produced. The
+        # warden PWA acts on roster rows, so its subject is a person reference,
+        # and `get` used to invent an identity record under that key: a person
+        # the drill never saw, whose rejected identity then matched no roster
+        # entry and so reached nobody. The ruling still lands in the ledger
+        # below and in the warden's own state, which is what accountability
+        # reads, so nothing is lost by not inventing the record.
+        tracked = self.state.identity.find(subject)
+        if tracked is not None:
+            tracked.warden_rejects(payload["identity"], event.ts_ms,
+                                   payload.get("warden_id", "unknown"))
         self.state.ledger.record(
             subject=subject, kind=EvidenceKind.WARDEN_REJECTION,
             ts_ms=event.ts_ms, stance=Stance.CONTRADICTS, source=event.source,

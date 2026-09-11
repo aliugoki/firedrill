@@ -59,18 +59,41 @@ async function pickDrill() {
   return drillId;
 }
 
-async function poll() {
+/** Refresh one panel, recording the outcome against that panel. */
+async function refresh(freshness, fetchOne) {
   try {
-    const id = await pickDrill();
-    if (!id) { boardFreshness.fail(new Error('no drill')); return; }
-    boardFreshness.succeed(await api.board(id));
-    timingFreshness.succeed(await api.timing(id));
-    zoneFreshness.succeed(await api.zones(id));
+    freshness.succeed(await fetchOne());
   } catch (error) {
     // Keep the last good picture. Blanking it would look like an empty
     // building rather than a broken connection.
-    boardFreshness.fail(error);
+    freshness.fail(error);
   }
+}
+
+async function poll() {
+  let id;
+  try {
+    id = await pickDrill();
+  } catch (error) {
+    boardFreshness.fail(error);
+    paint();
+    return;
+  }
+  if (!id) {
+    boardFreshness.fail(new Error('no drill'));
+    paint();
+    return;
+  }
+
+  // One try block around all three put every failure on the board's record.
+  // A timing request failing marked the board stale when the board had just
+  // arrived, and a zone request failing was recorded nowhere at all, so the
+  // assembly panel aged silently while the screen looked current.
+  await Promise.all([
+    refresh(boardFreshness, () => api.board(id)),
+    refresh(timingFreshness, () => api.timing(id)),
+    refresh(zoneFreshness, () => api.zones(id)),
+  ]);
   paint();
 }
 
@@ -120,7 +143,7 @@ function paintPriority(board) {
   }
   host.innerHTML = rows.map((row) => `
     <div class="row">
-      <span class="chip ${row.colour}">${escape(t('state.' + row.state, row.state))}</span>
+      <span class="chip ${escape(row.colour)}">${escape(t('state.' + row.state, row.state))}</span>
       <div class="who">
         <div class="name">${escape(row.display_name)}</div>
         <div class="meta">${escape(row.department || '')}${
@@ -161,8 +184,8 @@ function paintZones() {
         <div class="meta">${panel.confirmed}/${panel.expected} ${
           escape(t('warden.confirmed'))} · ${panel.outstanding} ${
           escape(t('warden.outstanding'))}</div>
-        ${panel.blocking?.length
-          ? `<div class="reason">${escape(panel.blocking[0])}</div>` : ''}
+        ${(panel.blocking || []).map(
+          (reason) => `<div class="reason">${escape(reason)}</div>`).join('')}
       </div>
     </div>`).join('');
 }
@@ -172,11 +195,19 @@ async function openDrawer(personRef) {
   host.innerHTML = `<div class="scrim"></div><aside class="drawer">
     <h3>${escape(personRef)}</h3><pre>loading…</pre></aside>`;
   host.querySelector('.scrim').addEventListener('click', () => { host.innerHTML = ''; });
+
+  // The element is captured before the request, not looked up after it. Asking
+  // the host for its `pre` on the way back found whichever drawer was open by
+  // then: open one person's explanation, click another before it lands, and the
+  // first narrative arrives under the second name. An explanation filed against
+  // the wrong person is worse than no explanation, because it reads as an
+  // answer.
+  const body = host.querySelector('pre');
   try {
     const explanation = await api.explain(drillId, personRef);
-    host.querySelector('pre').textContent = explanation.narrative.join('\n');
+    if (body.isConnected) body.textContent = explanation.narrative.join('\n');
   } catch (error) {
-    host.querySelector('pre').textContent = `could not load: ${error.message}`;
+    if (body.isConnected) body.textContent = `could not load: ${error.message}`;
   }
 }
 

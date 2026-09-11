@@ -277,3 +277,67 @@ class TestWardenEvidenceReachesTheBoard:
         assert board.rows[0].state is AccountabilityState.ACCOUNTED
         # The person is safe. The system still is not healthy, and says so.
         assert board.all_clear is False
+
+
+class TestAWardenRulingOnSomethingTheCamerasNeverSaw:
+    """The warden tablet acts on roster rows, so its subject is a person
+    reference and not a track id.
+
+    The ingest used to hand that string to `IdentityRegistry.get`, which
+    creates on miss, so a warden confirming somebody invented an identity
+    record for a person the drill had never observed. The rejected identity
+    stored on it then matched no roster key, so the one thing the record was
+    for reached nobody. The ruling belongs in the warden's own state, which is
+    what accountability reads, and that is where it stays.
+    """
+
+    def test_it_invents_no_identity_record(self):
+        from app.core.events import Event, EventType, SourceKind
+        from app.ingest.ingestor import Ingestor
+
+        ingestor = Ingestor()
+        ingestor.feed_batch([
+            Event(tenant_id="t", site_id="s", drill_id="d", source="tablet-1",
+                  source_kind=SourceKind.WARDEN, seq=1,
+                  type=EventType.WARDEN_CONFIRMED, ts_ms=1,
+                  subject="emp:EMP-0001",
+                  payload={"identity": "EMP-0001", "warden_id": "w"}),
+            Event(tenant_id="t", site_id="s", drill_id="d", source="tablet-1",
+                  source_kind=SourceKind.WARDEN, seq=2,
+                  type=EventType.WARDEN_REJECTED, ts_ms=2,
+                  subject="emp:EMP-0002",
+                  payload={"identity": "EMP-0002", "warden_id": "w"}),
+        ])
+        assert [p.person_id for p in ingestor.state.identity] == []
+
+    def test_the_evidence_is_still_recorded(self):
+        # Not inventing the record must not mean losing the ruling.
+        from app.core.events import Event, EventType, SourceKind
+        from app.ingest.ingestor import Ingestor
+
+        ingestor = Ingestor()
+        ingestor.feed_batch([
+            Event(tenant_id="t", site_id="s", drill_id="d", source="tablet-1",
+                  source_kind=SourceKind.WARDEN, seq=1,
+                  type=EventType.WARDEN_REJECTED, ts_ms=2,
+                  subject="emp:EMP-0002",
+                  payload={"identity": "EMP-0002", "warden_id": "w"}),
+        ])
+        assert ingestor.state.ledger.for_subject("emp:EMP-0002")
+
+    def test_a_ruling_on_a_real_track_still_lands(self):
+        from app.core.events import Event, EventType, SourceKind
+        from app.core.identity_fsm import IdentityState
+        from app.ingest.ingestor import Ingestor
+
+        ingestor = Ingestor()
+        ingestor.state.identity.get("gp-1")
+        ingestor.feed_batch([
+            Event(tenant_id="t", site_id="s", drill_id="d", source="tablet-1",
+                  source_kind=SourceKind.WARDEN, seq=1,
+                  type=EventType.WARDEN_REJECTED, ts_ms=2, subject="gp-1",
+                  payload={"identity": "EMP-0002", "warden_id": "w"}),
+        ])
+        person = ingestor.state.identity.find("gp-1")
+        assert person.state is IdentityState.REJECTED
+        assert "EMP-0002" in person.rejected_identities

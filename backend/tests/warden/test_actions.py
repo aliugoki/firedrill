@@ -41,6 +41,18 @@ class TestProvenance:
         with pytest.raises(WardenActionError, match="name the identity"):
             validate(action(ActionKind.WRONG_PERSON, identity=None))
 
+    def test_a_person_reference_is_not_a_gallery_identity(self):
+        """`emp:EMP-0001` is the roster reference; `EMP-0001` is the identity.
+
+        The warden tablet sent the first. It is truthy, so it passed, and then
+        matched no candidate the matcher had ever proposed -- the rejection was
+        recorded and changed nothing. Shape is all this layer can check, and it
+        is enough to turn a silent no-op into a refusal the warden sees.
+        """
+        with pytest.raises(WardenActionError, match="not a person reference"):
+            validate(action(ActionKind.WRONG_PERSON, identity="emp:EMP-0001"))
+        validate(action(ActionKind.WRONG_PERSON, identity="EMP-0001"))
+
     def test_tagging_an_unknown_person_must_say_what_they_are(self):
         with pytest.raises(WardenActionError, match="visitor, contractor"):
             validate(action(ActionKind.TAG_UNKNOWN, subject=None, note=None))

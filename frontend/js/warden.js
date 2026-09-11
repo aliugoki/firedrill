@@ -226,8 +226,10 @@ function paintRoster(zone) {
           escape(t('warden.confirm'))}</button>
         <button data-act="NOT_HERE" data-ref="${escape(row.person_ref)}">${
           escape(t('warden.not_here'))}</button>
-        <button data-act="WRONG_PERSON" data-ref="${escape(row.person_ref)}">${
-          escape(t('warden.wrong_person'))}</button>
+        ${row.person_ref.startsWith('emp:')
+          ? `<button data-act="WRONG_PERSON" data-ref="${escape(row.person_ref)}">${
+              escape(t('warden.wrong_person'))}</button>`
+          : ''}
         <button data-act="MARK_ABSENT" data-ref="${escape(row.person_ref)}">${
           escape(t('warden.mark_absent'))}</button>
       </div>
@@ -236,10 +238,17 @@ function paintRoster(zone) {
   host.querySelectorAll('[data-act]').forEach((button) => {
     button.addEventListener('click', () => {
       const kind = button.dataset.act;
-      const extra = { subject: button.dataset.ref };
+      const ref = button.dataset.ref;
+      const extra = { subject: ref };
       // Rejecting an identity must name the one being rejected, or there is
-      // nothing for the system to stop believing.
-      if (kind === 'WRONG_PERSON') extra.identity = button.dataset.ref;
+      // nothing for the system to stop believing -- and it must be the gallery
+      // identity the matcher proposed, `EMP-0001`, not the roster reference,
+      // `emp:EMP-0001`. Sending the reference was truthy enough to pass
+      // validation and then matched no candidate the matcher had ever
+      // proposed, so the rejection was recorded and changed nothing. The
+      // button is only offered on an employee row, because a visitor has no
+      // gallery identity to reject.
+      if (kind === 'WRONG_PERSON') extra.identity = ref.replace(/^emp:/, '');
       act(kind, extra);
     });
   });

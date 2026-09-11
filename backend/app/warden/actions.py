@@ -125,10 +125,21 @@ def validate(action: WardenAction) -> WardenAction:
         raise WardenActionError(
             f"{action.kind.value} must name the person it is about")
 
-    if action.kind is ActionKind.WRONG_PERSON and not action.identity:
-        raise WardenActionError(
-            "WRONG_PERSON must name the identity being rejected, or there is "
-            "nothing for the system to stop believing")
+    if action.kind is ActionKind.WRONG_PERSON:
+        if not action.identity:
+            raise WardenActionError(
+                "WRONG_PERSON must name the identity being rejected, or there "
+                "is nothing for the system to stop believing")
+        if ":" in action.identity:
+            # A gallery identity is `EMP-0001`; a person reference is
+            # `emp:EMP-0001`. The warden tablet sent the second, which is
+            # truthy, so this passed and then matched no candidate the matcher
+            # ever proposed -- the warden's rejection was recorded and did
+            # nothing. Shape is all this layer can check, and it is enough to
+            # turn a silent no-op into a refusal the warden sees.
+            raise WardenActionError(
+                f"identity must be the gallery identity the system claimed, "
+                f"not a person reference ({action.identity})")
 
     if action.kind is ActionKind.TAG_UNKNOWN and not action.note:
         raise WardenActionError(

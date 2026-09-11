@@ -149,6 +149,31 @@ Leave the app installed. It will be ready for the next one.
 
 ---
 
+## 6a. A limit of "wrong person", for whoever maintains this
+
+Tapping **wrong person** does two things and not a third.
+
+It records the warden's ruling, and the board stops accounting for that person
+and asks for a human check. That part is invariant 9 working: a human said the
+system's answer was wrong, and the board believes them.
+
+What it does not do is stop the cameras re-attaching that identity. The identity
+machine keeps a set of rejected identities so that no amount of later camera
+evidence can put the name back, and that set is keyed by **track**. The tablet
+acts on roster rows, so what it sends is a person reference, and the ingest has
+no roster with which to turn one into the other. The ruling reaches the warden's
+state, which is what accountability reads; it does not reach the track.
+
+In practice this matters only where the track is still live and still being
+matched after the warden has ruled. It is written down because the guard exists
+and looks like it covers this case, and the next person to read
+`identity_fsm.warden_rejects` should know it is not reachable from the tablet
+yet. Closing it means giving the ingest path a way to resolve a person reference
+to the tracks claiming it, which is what `resolve_identities` does and where it
+would have to come from.
+
+---
+
 ## 7. One thing to remember
 
 The system supplements the fire alarm. It does not replace it, and it does not
