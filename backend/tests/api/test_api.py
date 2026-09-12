@@ -879,3 +879,60 @@ class TestTheExplainDrawerNamesTheDisagreement:
         body = self._explain(client, self._running(client))
         assert body["disputes"] == []
         assert body["blindness"] == []
+
+
+class TestTheRecordOfWhoDidWhat:
+    """Written in nine places, persisted, and readable by nobody.
+
+    `AUDIT_VIEW` is defined, is in the safety officer's role, and no route used
+    it. A permission that unlocks nothing and a record nobody can consult are
+    the same problem seen from two sides: "who declared the drill over at
+    10:44" had an answer in the database and no way to ask it.
+    """
+
+    def _running(self, client) -> str:
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        return drill_id
+
+    def _auditor(self):
+        from app.infra.permissions import AUDIT_VIEW
+
+        return headers(EVAC_READ, AUDIT_VIEW, user="safety-officer-1")
+
+    def test_the_drills_entries_can_be_read(self, client):
+        drill_id = self._running(client)
+        body = client.get(f"/api/evac/drills/{drill_id}/audit",
+                          headers=self._auditor()).json()
+
+        actions = [e["action"] for e in body["entries"]]
+        assert "DRILL_CREATED" in actions
+        assert "DRILL_STARTED" in actions
+
+    def test_it_says_who(self, client):
+        drill_id = self._running(client)
+        body = client.get(f"/api/evac/drills/{drill_id}/audit",
+                          headers=self._auditor()).json()
+        assert all(e["actor_id"] == "commander-1" for e in body["entries"])
+
+    def test_a_reader_without_the_permission_is_refused(self, client):
+        drill_id = self._running(client)
+        assert client.get(f"/api/evac/drills/{drill_id}/audit",
+                          headers=OPERATOR).status_code == 403
+
+    def test_it_says_whether_the_answer_is_durable(self, client):
+        # An in-memory log holds only what this process did and is gone on a
+        # restart, which changes what the list can be used to prove.
+        drill_id = self._running(client)
+        body = client.get(f"/api/evac/drills/{drill_id}/audit",
+                          headers=self._auditor()).json()
+        assert body["durable"] is False
+
+    def test_another_tenants_drill_is_not_readable(self, client):
+        from app.infra.permissions import AUDIT_VIEW
+
+        drill_id = self._running(client)
+        outsider = headers(EVAC_READ, AUDIT_VIEW, user="nosy-1")
+        outsider["X-Tenant-Id"] = "tenant-elsewhere"
+        assert client.get(f"/api/evac/drills/{drill_id}/audit",
+                          headers=outsider).status_code == 404

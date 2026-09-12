@@ -130,6 +130,35 @@ class EvidenceOut(BaseModel):
     is_human: bool = False
 
 
+class AuditEntryOut(BaseModel):
+    """One line of the record of who did what."""
+
+    entry_id: str
+    action: str
+    actor_id: str
+    ts_ms: int
+    subject: str | None = None
+    summary: str = ""
+    is_override: bool = False
+    """A human changed what the system believed. `AuditLog.overrides` calls
+    this the first thing anyone reviewing a drill should read, because it is
+    the list of places where the recorded outcome is not the one the evidence
+    produced."""
+    is_disclosure: bool = False
+    before: dict | None = None
+    after: dict | None = None
+
+
+class AuditOut(BaseModel):
+    drill_id: str
+    entries: list[AuditEntryOut]
+    durable: bool
+    """Whether these came from the database or from this process's memory. An
+    in-memory log is complete only for what this process did, and is gone on a
+    restart, which changes what the list can be used to prove."""
+    summary: dict
+
+
 class DisputeOut(BaseModel):
     """Two identities claimed for one track, reported and never adjudicated."""
 

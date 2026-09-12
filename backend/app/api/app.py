@@ -37,6 +37,7 @@ from app.infra.auth import (
     verify,
 )
 from app.infra.permissions import (
+    AUDIT_VIEW,
     EVAC_ADMIN,
     EVAC_OPERATE,
     EVAC_READ,
@@ -353,6 +354,45 @@ def create_app(registry: DrillRegistry | None = None,
                 evidence=[_evidence(e) for e in d.evidence])
                 for d in explanation.disputes],
             blindness=[_evidence(e) for e in explanation.blindness])
+
+    @app.get("/api/evac/drills/{drill_id}/audit",
+             response_model=schemas.AuditOut, tags=["audit"])
+    def get_audit(drill_id: str,
+                  caller: Caller = Depends(requires(AUDIT_VIEW))):
+        """Who did what, for one drill.
+
+        The log has been written since Phase 5 and read by nobody: nine places
+        record into it, the store persists it, `AUDIT_VIEW` is in the safety
+        officer's role, and no route used it. A permission that unlocks nothing
+        and a record nobody can consult are the same problem from two sides.
+
+        Read from the database when there is one, and from this process's
+        memory otherwise. The two differ in what they can prove: an in-memory
+        log holds only what this process did and is gone on a restart, and the
+        drill's events were very likely written by the other one.
+        """
+        drill = drill_or_404(drill_id, caller)
+        log = app.state.audit
+        durable = log.store is not None
+        if durable:
+            try:
+                entries = log.store.for_drill(drill.drill_id)
+            except Exception:
+                # A database that cannot be read must not mean "nothing
+                # happened". Fall back and say which this is.
+                entries, durable = log.for_drill(drill.drill_id), False
+        else:
+            entries = log.for_drill(drill.drill_id)
+
+        return schemas.AuditOut(
+            drill_id=drill.drill_id, durable=durable,
+            entries=[schemas.AuditEntryOut(
+                entry_id=e.entry_id, action=e.action.value,
+                actor_id=e.actor_id, ts_ms=e.ts_ms, subject=e.subject,
+                summary=e.summary, is_override=e.is_override,
+                is_disclosure=e.is_disclosure, before=e.before, after=e.after)
+                for e in entries],
+            summary=log.summarise(drill.drill_id))
 
     @app.get("/api/evac/drills/{drill_id}/report",
              response_model=schemas.DrillReportOut, tags=["board"])

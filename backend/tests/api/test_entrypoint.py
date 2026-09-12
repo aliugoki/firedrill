@@ -475,3 +475,64 @@ class TestTheBoardSeesWhatTheEdgeProcessWroteDown:
         response = client.get(f"/api/evac/drills/{drill_id}/board",
                               headers=OPERATOR)
         assert response.status_code == 200
+
+
+class TestTheAuditLogSurvivesTheProcess:
+    """The durable read path. `AuditStore.for_drill` existed and no route
+    called it, so the answer to "who declared this drill over" was in the
+    database and unreachable."""
+
+    def with_stores(self, tmp_path):
+        import sqlalchemy as sa
+
+        from app.infra.audit import AuditLog
+        from app.store.audit import AuditStore
+        from app.store.drills import DrillStore
+        from app.store.events import EventStore
+        from app.store.schema import metadata
+
+        engine = sa.create_engine(f"sqlite:///{tmp_path / 'evac.db'}")
+        metadata.create_all(engine)
+        audit = AuditLog(store=AuditStore(engine=engine))
+        return engine, audit, TestClient(create_app(
+            registry=DrillRegistry(), roster_provider=a_roster,
+            assembly_zones=frozenset({"north"}), auth=GATEWAY, audit=audit,
+            events_store=EventStore(engine=engine),
+            drill_store=DrillStore(engine=engine)))
+
+    def auditor(self):
+        from app.infra.permissions import AUDIT_VIEW, EVAC_READ
+
+        return {"X-User-Id": "safety-officer-1",
+                "X-Permissions": f"{EVAC_READ},{AUDIT_VIEW}"}
+
+    def test_the_entries_come_from_the_database(self, tmp_path):
+        _, _, client = self.with_stores(tmp_path)
+        made = client.post("/api/evac/drills", headers=OPERATOR,
+                           json={"tenant_id": "t", "site_id": "site-1",
+                                 "name": "Q3"})
+        drill_id = made.json()["drill_id"]
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+
+        body = client.get(f"/api/evac/drills/{drill_id}/audit",
+                          headers=self.auditor()).json()
+        assert body["durable"] is True
+        assert "DRILL_STARTED" in [e["action"] for e in body["entries"]]
+
+    def test_an_unreadable_database_falls_back_and_says_so(self, tmp_path):
+        # Answering "nothing happened" because a replica failed over would be
+        # the worst possible lie for an audit log to tell.
+        import sqlalchemy as sa
+
+        _, audit, client = self.with_stores(tmp_path)
+        made = client.post("/api/evac/drills", headers=OPERATOR,
+                           json={"tenant_id": "t", "site_id": "site-1",
+                                 "name": "Q3"})
+        drill_id = made.json()["drill_id"]
+        audit.store.engine = sa.create_engine(
+            "postgresql+psycopg2://nobody@127.0.0.1:1/nothing")
+
+        body = client.get(f"/api/evac/drills/{drill_id}/audit",
+                          headers=self.auditor()).json()
+        assert body["durable"] is False
+        assert body["entries"], "the in-memory log still had them"

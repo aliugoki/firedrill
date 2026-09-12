@@ -20,7 +20,13 @@ from app.api.app import create_app
 from app.core.roster import ExpectationReason, Roster
 from app.drill import DrillRegistry
 from app.infra.auth import AuthSettings, issue
-from app.infra.permissions import EVAC_ADMIN, EVAC_OPERATE, EVAC_READ, EVAC_WARDEN
+from app.infra.permissions import (
+    AUDIT_VIEW,
+    EVAC_ADMIN,
+    EVAC_OPERATE,
+    EVAC_READ,
+    EVAC_WARDEN,
+)
 
 T0 = 1_788_000_000_000
 JWT = AuthSettings(secret="a-test-signing-secret")
@@ -49,10 +55,17 @@ def client() -> TestClient:
 
 
 def headers_for(tenant: str) -> dict:
+    """A caller who holds everything, so a 403 here means a tenant check fired.
+
+    Every permission the drill-scoped routes require, `AUDIT_VIEW` included: a
+    sweep whose caller is short one permission stops testing tenant isolation
+    on that route and starts testing the permission, which passes for the wrong
+    reason and hides whatever the tenant check does.
+    """
     token = issue(f"user-of-{tenant}", JWT, tenant_id=tenant,
                   zones=["assembly-north"],
                   permissions=[EVAC_READ, EVAC_OPERATE, EVAC_WARDEN,
-                               EVAC_ADMIN])
+                               EVAC_ADMIN, AUDIT_VIEW])
     return {"Authorization": f"Bearer {token}"}
 
 

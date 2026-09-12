@@ -86,6 +86,14 @@ class DrillReport:
     warden_confirmations: int = 0
     warden_rejections: int = 0
     warden_overrides: int = 0
+    overrides_in_full: tuple = ()
+    """Each one in words. `AuditLog.overrides` calls itself the first thing
+    anyone reviewing a drill should read, because it is the list of places
+    where the recorded outcome is not the one the evidence produced -- and the
+    report printed the length of that list and nothing else."""
+    disclosures: tuple = ()
+    """Who looked at what. Recorded since the audit log existed and reported
+    nowhere, which makes it a control that cannot be checked."""
     sweeps_completed: int = 0
     sweeps_expected: int = 0
     zones_with_headcount: int = 0
@@ -225,6 +233,10 @@ class DrillReport:
             lines.append(f"    ! {mismatch}")
         for absorbed in self.tolerated_overcounts:
             lines.append(f"    ! {absorbed}")
+        for override in self.overrides_in_full:
+            lines.append(f"    ! override: {override}")
+        for disclosure in self.disclosures:
+            lines.append(f"    disclosure: {disclosure}")
         for escalation in self.escalations:
             lines.append(f"    ! escalated: {escalation}")
 
@@ -358,7 +370,8 @@ def build_report(
         if (warden.sweeps.get(zone)
             and warden.sweeps[zone].headcounts.latest is not None))
 
-    overrides = len(audit.overrides(drill.drill_id)) if audit else 0
+    overrides = audit.overrides(drill.drill_id) if audit else []
+    disclosures = audit.disclosures(drill.drill_id) if audit else []
 
     # `all_disputes` existed and nothing called it, so the one outcome
     # invariant 3 produces reached no document. Named by track rather than by
@@ -419,7 +432,9 @@ def build_report(
         warden_confirmations=len(confirmed_by_warden),
         warden_rejections=sum(
             1 for a in warden.actions if a.kind is ActionKind.WRONG_PERSON),
-        warden_overrides=overrides,
+        warden_overrides=len(overrides),
+        overrides_in_full=tuple(e.describe() for e in overrides),
+        disclosures=tuple(e.describe() for e in disclosures),
         sweeps_completed=sweeps_completed, sweeps_expected=sweeps_expected,
         zones_with_headcount=zones_with_headcount,
         headcount_mismatches=tuple(m.summary() for m in mismatches),
