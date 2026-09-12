@@ -94,6 +94,11 @@ class DrillReport:
     """Counts a site's own overcount tolerance absorbed. Not mismatches -- the
     site decided that -- and not nothing either: each one is a person the
     system called safe whom a warden could not see."""
+    count_history: tuple = ()
+    """Zones whose physical count moved. A count that reached the dangerous
+    direction and was then resolved leaves no trace in `headcount_mismatches`,
+    which reads only the latest figure -- and two people unaccounted for four
+    minutes is a fact about the drill whatever the final number says."""
     escalations: tuple = ()
 
     outages: int = 0
@@ -223,6 +228,12 @@ class DrillReport:
         for escalation in self.escalations:
             lines.append(f"    ! escalated: {escalation}")
 
+        if self.count_history:
+            lines.append("")
+            lines.append("  How the counts moved")
+            for line in self.count_history:
+                lines.append(f"    {line}")
+
         lines += [
             "",
             "System health",
@@ -263,6 +274,25 @@ class DrillReport:
         if seconds is None:
             return "—"
         return f"{seconds:.1f}s"
+
+
+def _count_line(history: dict) -> str:
+    """One zone's count series, and what was wrong with it.
+
+    The series first, because "38, 40, 38" says something a single number
+    cannot and the reader can see it at a glance.
+    """
+    series = ", ".join(str(n) for n in history["physical_counts"])
+    line = (f"{history['zone_id']}: counted {series} against the system's "
+            f"{history['system_count']}")
+    notes = []
+    if history["ever_escalated"]:
+        notes.append("reached the dangerous direction at least once")
+    if history["unstable"]:
+        notes.append("the warden's own counts disagree")
+    if history["ever_escalated"] and history["settled_now"]:
+        notes.append("agrees now")
+    return f"{line} — {'; '.join(notes)}" if notes else line
 
 
 def build_report(
@@ -399,6 +429,7 @@ def build_report(
         escalations=tuple(
             s.escalation_reason or "no reason recorded"
             for s in warden.escalations()),
+        count_history=tuple(_count_line(h) for h in warden.count_history()),
         outages=board.health.total_outages,
         blind_fraction=board.health.blind_fraction,
         longest_blind_s=board.health.longest_blind_ms / 1000,

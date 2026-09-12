@@ -165,6 +165,46 @@ class WardenState:
                 out.append(latest)
         return sorted(out, key=lambda h: -h.tolerated_overcount)
 
+    def count_history(self) -> list:
+        """How each zone's physical count moved, where it moved at all.
+
+        The report reads `headcounts.latest` everywhere, so a zone that counted
+        38 against the system's 40 and then agreed at 40 appears clean and the
+        moment of disagreement is gone. `ever_escalated` says in its own
+        docstring that a post-drill report should say so rather than showing
+        only the reassuring final number, and nothing called it.
+
+        Two things are worth surfacing and neither is the final figure: a count
+        that reached the dangerous direction at any point, and a warden whose
+        own counts disagree with each other. The first means two people were
+        unaccounted for a while. The second means the count itself is shaky,
+        which is a different problem and needs a different response.
+
+        Zones that were counted once and agreed are left out: this is a list of
+        exceptions, and padding it with the quiet zones buries them.
+        """
+        out = []
+        for zone_id, sweep in sorted(self.sweeps.items()):
+            counts = sweep.headcounts.counts
+            if not counts:
+                continue
+            escalated = sweep.headcounts.ever_escalated
+            unstable = sweep.headcounts.unstable()
+            if not escalated and not unstable:
+                continue
+            out.append({
+                "zone_id": zone_id,
+                "physical_counts": [c.physical_count for c in counts],
+                "system_count": counts[-1].system_count,
+                "ever_escalated": escalated,
+                "unstable": unstable,
+                "settled_now": sweep.headcounts.is_settled,
+                "first_escalated_ms": next(
+                    (c.ts_ms for c in counts
+                     if c.severity is Severity.ESCALATE), None),
+            })
+        return out
+
     def escalations(self) -> list:
         return [s for s in self.sweeps.values() if s.is_escalated]
 

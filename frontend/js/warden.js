@@ -21,7 +21,7 @@ import { Api, ApiError, Freshness } from './api.js';
 import { createTranslator, isRtl } from './i18n.js';
 import {
   composer, escapeHtml, filterRoster, headcountVerdict, healthLine,
-  orderForWarden, syncStatus,
+  needsAHuman, orderForWarden, syncStatus,
 } from './render.js';
 import { OfflineQueue, reconcileSync } from './queue.js';
 
@@ -225,6 +225,11 @@ function paintRoster(zone) {
           <div class="name">${escapeHtml(row.display_name)}</div>
           <div class="meta">${escapeHtml(row.department || '')}</div>
           <div class="reason">${escapeHtml(row.reason)}</div>
+          ${(() => {
+            const mark = needsAHuman(row, t);
+            return mark ? `<div class="reason ${escapeHtml(mark.tone)}">${
+              escapeHtml(mark.text)}</div>` : '';
+          })()}
         </div>
       </div>
       <div class="person-actions">

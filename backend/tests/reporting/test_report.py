@@ -757,3 +757,67 @@ class TestTheIdentitiesTheSystemCouldNotSettle:
         report = build_report(drill_with(people=2), now_ms=T0 + 120_000)
         assert report.identity_disputes == ()
         assert "could not settle" not in "\n".join(report.render())
+
+
+class TestHowTheCountsMoved:
+    """Every reader of a headcount read the latest one.
+
+    A zone that counted 38 against the system's 40 and then agreed at 40 is
+    clean, correctly, and for four minutes two people were unaccounted for.
+    `ever_escalated` says in its own docstring that a report should say so
+    rather than showing only the reassuring final number, and it was called by
+    nothing. `unstable` -- a warden whose own counts disagree -- was the same.
+    """
+
+    def count(self, drill, physical, system=2, zone="assembly-north",
+              ts_ms=T0 + 60_000):
+        from app.warden.headcount import Headcount
+
+        drill.record_headcount(Headcount(
+            zone_id=zone, warden_id="warden-7", device_id="tablet-3",
+            ts_ms=ts_ms, physical_count=physical, system_count=system))
+
+    def test_a_resolved_escalation_still_reaches_the_report(self):
+        drill = drill_with(people=2)
+        self.count(drill, physical=0, ts_ms=T0 + 60_000)   # 0 against 2
+        self.count(drill, physical=2, ts_ms=T0 + 90_000)   # agrees
+
+        report = build_report(drill, now_ms=T0 + 120_000)
+        assert report.headcount_mismatches == (), "the zone agrees now"
+        assert len(report.count_history) == 1
+        assert "dangerous direction" in report.count_history[0]
+        assert "agrees now" in report.count_history[0]
+
+    def test_the_series_is_shown_rather_than_the_last_figure(self):
+        # "0, 2, 0" says something a single number cannot.
+        drill = drill_with(people=2)
+        for i, physical in enumerate((0, 2, 0)):
+            self.count(drill, physical=physical, ts_ms=T0 + 60_000 + i * 1_000)
+
+        line = build_report(drill, now_ms=T0 + 120_000).count_history[0]
+        assert "counted 0, 2, 0" in line
+
+    def test_a_warden_whose_counts_disagree_is_named_as_such(self):
+        # A shaky count is a different problem from a count that disagrees with
+        # the system, and it needs a different response.
+        drill = drill_with(people=2)
+        self.count(drill, physical=2, ts_ms=T0 + 60_000)
+        self.count(drill, physical=1, ts_ms=T0 + 90_000)
+
+        line = build_report(drill, now_ms=T0 + 120_000).count_history[0]
+        assert "own counts disagree" in line
+
+    def test_a_zone_counted_once_and_agreeing_is_left_out(self):
+        # A list of exceptions padded with the quiet zones buries them.
+        drill = drill_with(people=2)
+        self.count(drill, physical=2)
+        assert build_report(drill, now_ms=T0 + 120_000).count_history == ()
+
+    def test_it_reaches_the_page_a_safety_officer_reads(self):
+        drill = drill_with(people=2)
+        self.count(drill, physical=0, ts_ms=T0 + 60_000)
+        self.count(drill, physical=2, ts_ms=T0 + 90_000)
+
+        text = "\n".join(build_report(drill, now_ms=T0 + 120_000).render())
+        assert "How the counts moved" in text
+        assert "counted 0, 2" in text

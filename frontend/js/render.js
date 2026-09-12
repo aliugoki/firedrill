@@ -176,8 +176,32 @@ export function orderForWarden(rows) {
   return [...(rows || [])].sort((a, b) => {
     const byBand = (band[a.colour] ?? 9) - (band[b.colour] ?? 9);
     if (byBand !== 0) return byBand;
+    // Within a band, the people no camera will ever settle. They have no
+    // gallery entry or they need help moving, so waiting changes nothing for
+    // them and the warden is the only way they get accounted for.
+    const byHuman = Number(Boolean(b.needs_human_to_account))
+      - Number(Boolean(a.needs_human_to_account));
+    if (byHuman !== 0) return byHuman;
     return (a.display_name || '').localeCompare(b.display_name || '');
   });
+}
+
+/**
+ * The mark on a person the cameras cannot settle, or null.
+ *
+ * `needs_human_to_account` reached the API on every row and no screen read it.
+ * `roster.py` says it should be surfaced at drill start rather than discovered
+ * at minute four while an operator waits for a match that can never arrive --
+ * and the flag travelled the whole way to the browser and stopped.
+ *
+ * Only while they are unaccounted for. Once a warden has confirmed them the
+ * fact has done its work, and a badge on a settled row is clutter on a screen
+ * that cannot afford any.
+ */
+export function needsAHuman(row, t) {
+  if (!row || !row.needs_human_to_account) return null;
+  if (row.state === 'ACCOUNTED') return null;
+  return { tone: 'yellow', text: t('board.needs_human') };
 }
 
 /**

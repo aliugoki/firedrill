@@ -12,8 +12,9 @@
 import { Api, Freshness } from './api.js';
 import { createTranslator, isRtl, formatDuration } from './i18n.js';
 import {
-  drillControl, escapeHtml, exitPressure, healthLine, orderForWarden,
-  explainSummary, staleness, tiles, timingLine, verdict, wardenContact,
+  drillControl, escapeHtml, exitPressure, healthLine, needsAHuman,
+  orderForWarden, explainSummary, staleness, tiles, timingLine, verdict,
+  wardenContact,
 } from './render.js';
 
 const params = new URLSearchParams(location.search);
@@ -207,6 +208,11 @@ function paintPriority(board) {
                 row.last_camera_id ? ` (${escapeHtml(row.last_camera_id)})` : ''}`
             : ''}</div>
         <div class="reason">${escapeHtml(row.reason)}</div>
+        ${(() => {
+          const mark = needsAHuman(row, t);
+          return mark ? `<div class="reason ${escapeHtml(mark.tone)}">${
+            escapeHtml(mark.text)}</div>` : '';
+        })()}
       </div>
       <button data-explain="${escapeHtml(row.person_ref)}">?</button>
     </div>`).join('');

@@ -15,6 +15,7 @@ import {
   composer,
   wardenContact,
   explainSummary,
+  needsAHuman,
 } from '../js/render.js';
 
 const t = createTranslator('en');
@@ -559,5 +560,41 @@ describe('what the explain drawer was only implying', () => {
 
   it('survives an explanation that never arrived', () => {
     assert.deepEqual(explainSummary(null, t), { disputes: [], blindness: [] });
+  });
+});
+
+describe('the people no camera can settle', () => {
+  // `needs_human_to_account` reached the API on every row and no screen read
+  // it. `roster.py` says it must be surfaced at drill start rather than
+  // discovered at minute four while an operator waits for a match that can
+  // never arrive, and the flag travelled to the browser and stopped.
+  const t = (key) => key;
+
+  it('marks somebody with no gallery entry who is not accounted for', () => {
+    const mark = needsAHuman(
+      { needs_human_to_account: true, state: 'UNCERTAIN' }, t);
+    assert.equal(mark.tone, 'yellow');
+  });
+
+  it('says nothing once a warden has confirmed them', () => {
+    // The fact has done its work; a badge on a settled row is clutter on a
+    // screen that cannot afford any.
+    assert.equal(needsAHuman(
+      { needs_human_to_account: true, state: 'ACCOUNTED' }, t), null);
+  });
+
+  it('says nothing about an ordinary person', () => {
+    assert.equal(needsAHuman({ state: 'UNCERTAIN' }, t), null);
+  });
+
+  it('puts them first inside their colour band', () => {
+    // Waiting changes nothing for them, so the warden is the only way they get
+    // accounted for and they belong at the top of the band.
+    const ordered = orderForWarden([
+      { colour: 'RED', display_name: 'Aaa' },
+      { colour: 'RED', display_name: 'Zzz', needs_human_to_account: true },
+      { colour: 'GREEN', display_name: 'Bbb', needs_human_to_account: true },
+    ]);
+    assert.deepEqual(ordered.map((r) => r.display_name), ['Zzz', 'Aaa', 'Bbb']);
   });
 });
