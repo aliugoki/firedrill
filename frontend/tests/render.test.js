@@ -19,6 +19,7 @@ import {
   lostSightBecause,
   rowNotes,
   syncProblems,
+  describeReason,
 } from '../js/render.js';
 
 const t = createTranslator('en');
@@ -751,5 +752,84 @@ describe('the default fetch, which no test had ever used', () => {
     // a correct default that the wrapper unwraps would be no fix at all.
     const api = new Api().withIdentity({ userId: 'c1', permissions: [] });
     assert.notEqual(api._fetch, globalThis.fetch);
+  });
+});
+
+describe('the reason under a name, in the language being read', () => {
+  // The server sends prose and a code. Prose is right for the post-drill
+  // report, which is a document; this line is read in Arabic on a tablet at an
+  // assembly point and it is what tells a warden what to do about the person
+  // in front of them.
+  const t = createTranslator('en');
+  const ar = createTranslator('ar');
+
+  it('words a code rather than showing the server sentence', () => {
+    const text = describeReason({
+      reason: 'track went stale; last seen in FLOOR zone floor-2 on cam-4',
+      reason_code: 'TRACK_LOST',
+      reason_detail: { zone_kind: 'FLOOR', zone_id: 'floor-2', camera_id: 'cam-4' },
+    }, t);
+    assert.match(text, /lost track/);
+    assert.match(text, /floor-2/);
+    assert.match(text, /cam-4/);
+  });
+
+  it('words the same code in Arabic', () => {
+    const text = describeReason({
+      reason: 'track went stale', reason_code: 'TRACK_LOST',
+      reason_detail: { zone_id: 'floor-2' },
+    }, ar);
+    assert.ok(!/lost track/.test(text), text);
+    assert.match(text, /floor-2/, 'the zone id is an identifier, not a word');
+  });
+
+  it('falls back to the server sentence when there is no code', () => {
+    // An older edge node. An English sentence under somebody's name beats a
+    // blank line.
+    const text = describeReason({ reason: 'on the roster, not yet observed' }, t);
+    assert.equal(text, 'on the roster, not yet observed');
+  });
+
+  it('falls back when the code is one this device does not know', () => {
+    // A code added in a version this tablet has not been updated to. `t`
+    // renders a missing key as the key itself, which is useful in testing and
+    // useless at an assembly point.
+    const text = describeReason({
+      reason: 'something the server explained',
+      reason_code: 'INVENTED_LATER',
+    }, t);
+    assert.equal(text, 'something the server explained');
+  });
+
+  it('says when a confirmed face is no longer visible', () => {
+    // The same code, two meanings. "Identified" and "identified earlier, face
+    // not visible now" are different things to tell somebody.
+    const fresh = describeReason({
+      reason_code: 'ASSEMBLY_WITH_IDENTITY',
+      reason_detail: { face_visible: true },
+    }, t);
+    const stale = describeReason({
+      reason_code: 'ASSEMBLY_WITH_IDENTITY',
+      reason_detail: { face_visible: false },
+    }, t);
+    assert.notEqual(fresh, stale);
+    assert.match(stale, /not visible/);
+  });
+
+  it('names the warden who confirmed somebody', () => {
+    const text = describeReason({
+      reason_code: 'WARDEN_CONFIRMED_AT_ASSEMBLY',
+      reason_detail: { warden_id: 'warden-7', zone_id: 'assembly-north' },
+    }, t);
+    assert.match(text, /warden-7/);
+    assert.match(text, /assembly-north/);
+  });
+
+  it('says nothing about a location nobody has one for', () => {
+    const text = describeReason({
+      reason_code: 'NEVER_OBSERVED_OVERDUE', reason_detail: { seconds: 240 },
+    }, t);
+    assert.match(text, /240/);
+    assert.ok(!/last seen/.test(text), text);
   });
 });

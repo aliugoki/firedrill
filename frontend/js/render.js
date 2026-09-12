@@ -472,3 +472,50 @@ export function syncProblems({ refusals = [], unanswered = [] }, t) {
   }
   return lines;
 }
+
+/**
+ * A person's reason, worded in the language being read.
+ *
+ * The server sends `reason` as English prose and `reason_code` plus the values
+ * the wording needs. Prose is right for the post-drill report, which is a
+ * document; a screen is not a document. This line is read in Arabic on a
+ * tablet at an assembly point and it is what tells a warden what to do about
+ * the person in front of them.
+ *
+ * Falls back to the server's prose when the code is missing or unknown -- an
+ * older edge node, or a code added in a version this device has not been
+ * updated to. An English sentence under somebody's name beats a blank line.
+ */
+export function describeReason(row, t) {
+  if (!row) return '';
+  const code = row.reason_code;
+  if (!code) return row.reason || '';
+
+  const detail = row.reason_detail || {};
+  const key = code === 'ASSEMBLY_WITH_IDENTITY' && detail.face_visible === false
+    ? 'reason.ASSEMBLY_WITH_IDENTITY_STALE'
+    : `reason.${code}`;
+  const headline = t(key);
+  // `t` renders the key itself when a string is missing, which is deliberately
+  // ugly in testing and useless on a tablet. The server's own sentence is a
+  // better thing to show than `reason.TRACK_LOST`.
+  if (headline === key) return row.reason || '';
+
+  const parts = [headline];
+  if (detail.warden_id) parts.push(detail.warden_id);
+  if (detail.zone_id && code === 'WARDEN_CONFIRMED_AT_ASSEMBLY') {
+    parts.push(`· ${detail.zone_id}`);
+  }
+  if (detail.why) parts.push(`· ${detail.why}`);
+  if (typeof detail.seconds === 'number') {
+    parts.push(`· ${detail.seconds} ${t('reason.seconds_in')}`);
+  }
+  if (detail.zone_id && code !== 'WARDEN_CONFIRMED_AT_ASSEMBLY') {
+    parts.push(`· ${t('reason.last_seen')} ${detail.zone_id}`);
+    if (detail.camera_id) parts.push(`${t('reason.on_camera')} ${detail.camera_id}`);
+  }
+  if (Array.isArray(detail.identities) && detail.identities.length) {
+    parts.push(`· ${detail.identities.join(' / ')}`);
+  }
+  return parts.join(' ');
+}

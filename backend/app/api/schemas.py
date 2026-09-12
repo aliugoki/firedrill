@@ -50,6 +50,14 @@ class PersonRowOut(BaseModel):
     state: str
     colour: str
     reason: str
+    """English prose, and the fallback. A client that does not recognise the
+    code below shows this rather than nothing, because an English sentence
+    beats a blank line under somebody's name."""
+    reason_code: str | None = None
+    reason_detail: dict = {}
+    """The same reason as something a screen can word in the language it is
+    being read in. The warden PWA is used in Arabic on a tablet at an assembly
+    point and this line is what tells a warden what to do about the person."""
     qualifying_evidence: list[str] = []
     blockers: list[str] = []
     last_zone_id: str | None = None

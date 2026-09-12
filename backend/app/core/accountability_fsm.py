@@ -128,6 +128,39 @@ class Context:
     config: AccountabilityConfig = PROVISIONAL_CONFIG
 
 
+class ReasonCode(str, Enum):
+    """Why a person is in the state they are in, as something to translate.
+
+    `reason` is English prose and stays that way: the post-drill report is a
+    document a safety officer reads, and prose is what a document is made of.
+    A screen is not. The warden PWA is read in Arabic on a tablet at an
+    assembly point, and the reason under a person's name is the sentence that
+    tells the warden what to do about them -- so it arrives as a code and a
+    handful of values, and the screen words it in the language being read.
+
+    `timing.py` made the same call for its caveats and says why: "worded here
+    rather than passed through from the server, because the server's caveats
+    are English prose and this screen is read in Arabic too". The reasons were
+    the other half of that and stayed English.
+    """
+
+    IDENTITY_DISPUTED = "IDENTITY_DISPUTED"
+    WARDEN_REJECTED_IDENTITY = "WARDEN_REJECTED_IDENTITY"
+    WARDEN_CONFIRMED_AT_ASSEMBLY = "WARDEN_CONFIRMED_AT_ASSEMBLY"
+    ASSEMBLY_WITH_IDENTITY = "ASSEMBLY_WITH_IDENTITY"
+    ASSEMBLY_WITHOUT_IDENTITY = "ASSEMBLY_WITHOUT_IDENTITY"
+    COVERAGE_DEGRADED = "COVERAGE_DEGRADED"
+    NOT_ON_ROSTER = "NOT_ON_ROSTER"
+    WARDEN_MARKED_ABSENT = "WARDEN_MARKED_ABSENT"
+    TRACK_LOST = "TRACK_LOST"
+    BRIEFLY_UNOBSERVED = "BRIEFLY_UNOBSERVED"
+    MOVING_THROUGH_EXIT = "MOVING_THROUGH_EXIT"
+    INSIDE_OVERDUE = "INSIDE_OVERDUE"
+    INSIDE = "INSIDE"
+    NEVER_OBSERVED_OVERDUE = "NEVER_OBSERVED_OVERDUE"
+    NEVER_OBSERVED = "NEVER_OBSERVED"
+
+
 @dataclass(frozen=True, slots=True)
 class Decision:
     """A state and the reason for it. The reason is not optional."""
@@ -137,6 +170,15 @@ class Decision:
     reason: str
     qualifying_evidence: tuple[str, ...] = ()
     blockers: tuple[str, ...] = ()
+    code: ReasonCode | None = None
+    """The same reason, as something a screen can translate. Optional in the
+    type and mandatory in practice: a branch that returns no code renders as
+    English on an Arabic tablet, which `TestEveryBranchCanBeTranslated`
+    refuses."""
+    detail: dict = field(default_factory=dict)
+    """The values the wording needs -- a warden's name, a zone, a count of
+    seconds, where somebody was last seen. Names rather than positions, so a
+    translation can put them in a different order."""
 
     @property
     def is_safe(self) -> bool:
@@ -167,6 +209,9 @@ def derive(ctx: Context) -> Decision:
             ctx.person_id, AccountabilityState.MANUAL_VERIFICATION_REQUIRED,
             reason=f"{detail}; the system will not choose between them",
             blockers=(detail,),
+            code=ReasonCode.IDENTITY_DISPUTED,
+            detail={"state": ctx.identity.state.value,
+                    "identities": list(ctx.identity.conflict_with)},
         )
 
     if ctx.warden.rejected:
@@ -174,6 +219,7 @@ def derive(ctx: Context) -> Decision:
             ctx.person_id, AccountabilityState.MANUAL_VERIFICATION_REQUIRED,
             reason="a warden rejected the system's identity for this person",
             blockers=("warden rejection",),
+            code=ReasonCode.WARDEN_REJECTED_IDENTITY,
         )
 
     # --- 2. A human at the muster point outranks every camera ----------------
@@ -187,6 +233,9 @@ def derive(ctx: Context) -> Decision:
                 f"at assembly zone {ctx.warden.at_assembly_zone}"
             ),
             qualifying_evidence=("warden confirmation at an assembly zone",),
+            code=ReasonCode.WARDEN_CONFIRMED_AT_ASSEMBLY,
+            detail={"warden_id": ctx.warden.warden_id or "",
+                    "zone_id": ctx.warden.at_assembly_zone or ""},
         )
 
     # --- 3. System evidence: both halves, or nothing -------------------------
@@ -208,6 +257,8 @@ def derive(ctx: Context) -> Decision:
                 "assembly-zone presence",
                 f"identity {ctx.identity.state.value}",
             ),
+            code=ReasonCode.ASSEMBLY_WITH_IDENTITY,
+            detail={"face_visible": not note},
         )
 
     if reached_assembly and not identity_usable:
@@ -218,6 +269,7 @@ def derive(ctx: Context) -> Decision:
             reason="someone reached an assembly zone but their identity is not confirmed",
             qualifying_evidence=("assembly-zone presence",),
             blockers=("identity not confirmed",),
+            code=ReasonCode.ASSEMBLY_WITHOUT_IDENTITY,
         )
 
     # --- 4. If we could not see, say so ---------------------------------------
@@ -230,6 +282,8 @@ def derive(ctx: Context) -> Decision:
             ctx.person_id, AccountabilityState.MANUAL_VERIFICATION_REQUIRED,
             reason=f"cannot decide while coverage is degraded: {why}",
             blockers=(why,),
+            code=ReasonCode.COVERAGE_DEGRADED,
+            detail={"why": why},
         )
 
     if identity_usable and not reached_assembly:
@@ -247,6 +301,7 @@ def derive(ctx: Context) -> Decision:
             reason="not on the roster; an unknown person needing a visitor or "
                    "contractor tag",
             blockers=("not on the roster",),
+            code=ReasonCode.NOT_ON_ROSTER,
         )
 
     return _still_inside(ctx, identity_known=identity_usable)
@@ -267,6 +322,8 @@ def _still_inside(ctx: Context, *, identity_known: bool) -> Decision:
                    "is not on site today; confirm against the roster",
             qualifying_evidence=("warden marked absent",),
             blockers=("absence not independently verified",),
+            code=ReasonCode.WARDEN_MARKED_ABSENT,
+            detail={"warden_id": ctx.warden.warden_id or ""},
         )
 
     if presence_state is PresenceState.LOST:
@@ -274,18 +331,21 @@ def _still_inside(ctx: Context, *, identity_known: bool) -> Decision:
             ctx.person_id, AccountabilityState.UNCERTAIN,
             reason=_last_seen(ctx, "track went stale"),
             blockers=("track lost before reaching an assembly zone",),
+            code=ReasonCode.TRACK_LOST, detail=_where(ctx),
         )
 
     if presence_state is PresenceState.TEMPORARILY_UNOBSERVED:
         return Decision(
             ctx.person_id, AccountabilityState.EVACUATING,
             reason=_last_seen(ctx, "briefly unobserved, still within the grace window"),
+            code=ReasonCode.BRIEFLY_UNOBSERVED, detail=_where(ctx),
         )
 
     if presence_state is PresenceState.IN_TRANSIT:
         return Decision(
             ctx.person_id, AccountabilityState.EVACUATING,
             reason=_last_seen(ctx, "moving through an exit"),
+            code=ReasonCode.MOVING_THROUGH_EXIT, detail=_where(ctx),
         )
 
     if presence_state is PresenceState.IN_BUILDING:
@@ -297,10 +357,14 @@ def _still_inside(ctx: Context, *, identity_known: bool) -> Decision:
                     f"still inside {ctx.drill_elapsed_ms // 1000} s into the drill",
                 ),
                 blockers=("inside the building, past the drill deadline",),
+                code=ReasonCode.INSIDE_OVERDUE,
+                detail={**_where(ctx),
+                        "seconds": ctx.drill_elapsed_ms // 1000},
             )
         return Decision(
             ctx.person_id, AccountabilityState.NOT_EVACUATED,
             reason=_last_seen(ctx, "inside the building"),
+            code=ReasonCode.INSIDE, detail=_where(ctx),
         )
 
     # NOT_OBSERVED: expected on the roster, never seen by any camera.
@@ -312,11 +376,23 @@ def _still_inside(ctx: Context, *, identity_known: bool) -> Decision:
                 "into the drill"
             ),
             blockers=("no observation at all",),
+            code=ReasonCode.NEVER_OBSERVED_OVERDUE,
+            detail={"seconds": ctx.drill_elapsed_ms // 1000},
         )
     return Decision(
         ctx.person_id, AccountabilityState.NOT_EVACUATED,
         reason="on the roster, not yet observed",
+        code=ReasonCode.NEVER_OBSERVED,
     )
+
+
+def _where(ctx: Context) -> dict:
+    """Where a human should go and look, as values rather than as a sentence."""
+    known = ctx.presence.last_known if ctx.presence else None
+    if known is None:
+        return {}
+    return {"zone_kind": known.zone_kind.value, "zone_id": known.zone_id,
+            "camera_id": known.camera_id or ""}
 
 
 def _last_seen(ctx: Context, situation: str) -> str:

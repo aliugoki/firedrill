@@ -13,7 +13,7 @@ import { Api, Freshness } from './api.js';
 import { createTranslator, isRtl, formatDuration } from './i18n.js';
 import {
   drillControl, escapeHtml, explainSummary, exitPressure, healthLine,
-  orderForWarden, rowNotes, staleness, tiles, timingLine, verdict,
+  describeReason, orderForWarden, rowNotes, staleness, tiles, timingLine, verdict,
   wardenContact,
 } from './render.js';
 
@@ -207,7 +207,7 @@ function paintPriority(board) {
             ? ` · ${escapeHtml(t('board.last_seen'))} ${escapeHtml(row.last_zone_id)}${
                 row.last_camera_id ? ` (${escapeHtml(row.last_camera_id)})` : ''}`
             : ''}</div>
-        <div class="reason">${escapeHtml(row.reason)}</div>
+        <div class="reason">${escapeHtml(describeReason(row, t))}</div>
         ${rowNotes(row, t).map((note) => `<div class="reason ${
           escapeHtml(note.tone)}">${escapeHtml(note.text)}</div>`).join('')}
       </div>

@@ -756,6 +756,8 @@ def _row_out(row) -> schemas.PersonRowOut:
         department=row.department,
         assigned_assembly_zone=row.assigned_assembly_zone,
         state=row.state.value, colour=row.colour, reason=row.decision.reason,
+        reason_code=(row.decision.code.value if row.decision.code else None),
+        reason_detail=dict(row.decision.detail),
         qualifying_evidence=list(row.decision.qualifying_evidence),
         blockers=list(row.decision.blockers),
         last_zone_id=row.last_zone_id, last_camera_id=row.last_camera_id,

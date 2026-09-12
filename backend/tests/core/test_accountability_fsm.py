@@ -330,3 +330,71 @@ class TestConfig:
     def test_a_nonsense_deadline_is_refused(self):
         with pytest.raises(ValueError):
             AccountabilityConfig(unaccounted_after_ms=0)
+
+
+class TestEveryBranchCanBeTranslated:
+    """A branch that returns no code renders as English on an Arabic tablet.
+
+    `reason` is prose and stays that way for the report, which is a document.
+    The warden PWA is not a document: the reason under a person's name is the
+    sentence telling a warden what to do about them, and it is read in Arabic
+    at an assembly point. So every branch carries a code and the values its
+    wording needs, and the screen does the wording.
+    """
+
+    def test_the_enum_covers_every_branch(self):
+        # Counted from the source rather than asserted as a number somebody
+        # keeps up to date: a branch added without a code is the failure.
+        import ast
+        import inspect
+
+        from app.core import accountability_fsm
+
+        tree = ast.parse(inspect.getsource(accountability_fsm))
+        without = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Return) or not isinstance(node.value, ast.Call):
+                continue
+            called = node.value.func
+            if getattr(called, "id", "") != "Decision":
+                continue
+            if not any(kw.arg == "code" for kw in node.value.keywords):
+                without.append(node.lineno)
+        assert without == [], f"Decision without a code at lines {without}"
+
+    def test_every_code_is_reachable(self):
+        """An enum member nothing returns is a string somebody translates for
+        nothing, and a screen that will never show it."""
+        import ast
+        import inspect
+
+        from app.core import accountability_fsm
+        from app.core.accountability_fsm import ReasonCode
+
+        source = inspect.getsource(accountability_fsm)
+        tree = ast.parse(source)
+        used = {
+            node.attr for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute)
+            and getattr(node.value, "id", "") == "ReasonCode"
+        }
+        assert {c.name for c in ReasonCode} == used
+
+    def test_where_somebody_was_last_seen_travels_as_values(self):
+        # "last seen in FLOOR zone floor-2 on cam-4" is a sentence with three
+        # values in it, and a translation puts them in a different order.
+        presence = PersonPresence(person_id="gp-1", config=PRESENCE_CFG)
+        presence.observe(ZoneSighting(ts_ms=T0, zone_id="floor-2",
+                                      zone_kind=ZoneKind.FLOOR,
+                                      camera_id="cam-4"))
+        decision = derive(Context(person_id="gp-1", drill_elapsed_ms=1_000,
+                                  presence=presence))
+        assert decision.detail["zone_id"] == "floor-2"
+        assert decision.detail["zone_kind"] == "FLOOR"
+        assert decision.detail["camera_id"] == "cam-4"
+
+    def test_a_person_nobody_has_seen_carries_no_location(self):
+        # An empty dict rather than "unknown": the screen decides what to say
+        # about not knowing, and it says it in the reader's language.
+        decision = derive(Context(person_id="gp-1", drill_elapsed_ms=1_000))
+        assert "zone_id" not in decision.detail

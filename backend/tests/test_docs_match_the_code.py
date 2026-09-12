@@ -130,3 +130,59 @@ class TestARouteNamedInADocumentExists:
         mounted = self.routes()
         missing = [path for path in self.documented() if path not in mounted]
         assert missing == [], f"documented and not mounted: {missing}"
+
+
+class TestEveryReasonCodeIsWordedInBothLanguages:
+    """The server decides the codes and the browser holds the words.
+
+    A code added on one side and not the other renders as `reason.TRACK_LOST`
+    under somebody's name, or falls back to an English sentence on an Arabic
+    tablet -- the failure being avoided. Neither language's table can see the
+    Python enum, so this is the seam and it is checked from here.
+    """
+
+    def codes(self) -> set:
+        from app.core.accountability_fsm import ReasonCode
+
+        return {code.value for code in ReasonCode}
+
+    def tables(self) -> dict:
+        """The two string tables, parsed out of `i18n.js`.
+
+        Read rather than imported, because the frontend has no build step and
+        no Python can execute it. The shape is a literal object of quoted keys,
+        which is stable enough to scan and obvious enough to fix if it changes.
+        """
+        import re
+
+        source = (DOCS.parent / "frontend" / "js" / "i18n.js").read_text()
+        tables = {}
+        for language in ("en", "ar"):
+            start = source.index(f"  {language}: {{")
+            end = source.index("\n  },", start)
+            tables[language] = set(
+                re.findall(r"'(reason\.[A-Za-z_]+)'", source[start:end]))
+        return tables
+
+    def test_the_scan_found_both_tables(self):
+        tables = self.tables()
+        assert len(tables["en"]) > 10 and len(tables["ar"]) > 10
+
+    def test_the_two_tables_carry_the_same_reason_keys(self):
+        tables = self.tables()
+        assert tables["en"] == tables["ar"]
+
+    def test_every_code_the_server_can_send_has_words(self):
+        worded = {key.split(".", 1)[1] for key in self.tables()["en"]}
+        missing = sorted(self.codes() - worded)
+        assert missing == [], f"no wording for {missing}"
+
+    def test_nothing_is_worded_for_a_code_that_cannot_arrive(self):
+        # A string nobody will ever show is a translation somebody paid for and
+        # a line the next reader has to work out.
+        worded = {key.split(".", 1)[1] for key in self.tables()["en"]}
+        # These are the pieces a sentence is assembled from rather than codes.
+        parts = {"last_seen", "on_camera", "seconds_in",
+                 "ASSEMBLY_WITH_IDENTITY_STALE"}
+        extra = sorted(worded - self.codes() - parts)
+        assert extra == [], f"worded but unreachable: {extra}"
