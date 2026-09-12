@@ -19,8 +19,12 @@ from dataclasses import dataclass, field
 
 from app.ingest.consumer import EventConsumer, RedisStreamClient
 from app.ingest.ingestor import Ingestor
-from app.ingest.replication import Outbox, Replicator
-from app.service.supervisor import Supervisor, build_supervisor
+from app.ingest.replication import Outbox, Replicator, measure_rpo
+from app.service.supervisor import (
+    DEFAULT_REPLICATE_INTERVAL_MS,
+    Supervisor,
+    build_supervisor,
+)
 from app.infra.audit import AuditLog
 from app.infra.config import assembly_zones, database_url
 from app.infra.retention import RetentionLedger
@@ -37,6 +41,11 @@ class EdgeNode:
     supervisor: Supervisor
     consumer: EventConsumer | None = None
     replicator: Replicator | None = None
+    #: How often the supervisor flushes to central. The producer half of the
+    #: recovery point objective: events made in this window exist only in
+    #: memory, so the number belongs beside the buffer's own counters rather
+    #: than in a paragraph somewhere describing them.
+    replicate_interval_ms: int = DEFAULT_REPLICATE_INTERVAL_MS
     geometry: GeometryStore = field(default_factory=GeometryStore)
     events_store: object | None = None
     drill_store: object | None = None
@@ -55,6 +64,20 @@ class EdgeNode:
     def is_complete(self) -> bool:
         return not self.gaps
 
+    def _rpo(self, now_ms: int) -> dict | None:
+        """What a power cut or a dead disk would cost right now."""
+        if self.replicator is None:
+            return None
+        measured = measure_rpo(self.replicator, now_ms=now_ms,
+                               flush_interval_ms=self.replicate_interval_ms)
+        return {
+            "unsent_events": measured.unsent_events,
+            "oldest_unsent_age_ms": measured.oldest_unsent_age_ms,
+            "loss_on_power_failure": measured.durable_loss_on_power_failure,
+            "loss_on_disk_failure": measured.loss_on_disk_failure,
+            "producer_exposure_ms": measured.exposure_window_ms,
+        }
+
     def health(self, now_ms: int) -> dict:
         state = self.ingestor.state
         report = {
@@ -65,7 +88,13 @@ class EdgeNode:
             # `degraded: false` at the top and the truth three levels down.
             "degraded": (state.health.is_degraded or bool(self.gaps)
                          or (self.events_store is not None
-                             and self.events_store.is_degraded)),
+                             and self.events_store.is_degraded)
+                         # Blocked replication is a node that has sent central
+                         # nothing since it booted and will not until somebody
+                         # acts. It had its own key and was absent from the one
+                         # a monitor alerts on.
+                         or (self.replicator is not None
+                             and self.replicator.is_blocked)),
             "blind": state.health.is_blind,
             "open_outages": len(state.health.open_now()),
             "events_accepted": state.accepted,
@@ -81,6 +110,22 @@ class EdgeNode:
             # never will, and the two look identical from the depth alone.
             "replication_blocked": (self.replicator.blocked_reason
                                     if self.replicator else None),
+            # What to do about it, beside the fact of it. The token is read
+            # from the environment at startup and this process has no HTTP
+            # surface, so there is no button anywhere that resolves this and an
+            # operator staring at a reason from central needs to be told.
+            "replication_blocked_action": (
+                "central refused this node's credential. Correct "
+                "EVAC_CENTRAL_TOKEN and restart the edge process; nothing is "
+                "lost in the meantime, the events stay in the outbox."
+                if self.replicator is not None and self.replicator.is_blocked
+                else None),
+            # The recovery point objective, from live counters. The module's
+            # own docstring says it is reported "from real counters rather than
+            # from this paragraph", and `measure_rpo` was called by nothing --
+            # so the paragraph was all there was. These are the numbers a site
+            # needs before it decides how much it trusts the buffer.
+            "rpo": self._rpo(now_ms),
             "geometry_ready": self.geometry.ready_for_a_drill(),
             # Reported even while it is trivially true. The producers of
             # biometric material are blocked behind the P2.3b segfault, so the

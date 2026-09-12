@@ -289,7 +289,18 @@ class Replicator:
         return total
 
     def unblock(self) -> None:
-        """Resume after a human has fixed the credential."""
+        """Clear the block and retry with whatever credential is held now.
+
+        Not a resume path on its own, and it used to say it was. Retrying with
+        the credential central already refused will be refused again, so this
+        only means anything if the transport's token has been replaced first.
+
+        The edge process reads `EVAC_CENTRAL_TOKEN` from the environment at
+        startup and has no HTTP surface of its own, so in production the way an
+        operator applies a corrected token is to restart the process. Nothing
+        calls this at runtime for that reason; it exists for a caller that
+        holds the transport and can swap the credential, and for tests.
+        """
         self.blocked_reason = None
 
     @property

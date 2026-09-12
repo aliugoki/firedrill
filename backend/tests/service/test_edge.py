@@ -528,3 +528,113 @@ class TestTheAuditLogIsDurableWhenItCanBe:
 
         assert node.health(0)["audit_unpersisted"] == 1
         assert len(node.audit.entries) == 1
+
+
+class TestBlockedReplicationIsNotAHealthyJob:
+    """A node that has sent central nothing since it booted, reporting fine.
+
+    `Replicator.flush` returns zero when central refuses the credential, on
+    purpose: it stops the retrying that would hide a problem waiting cannot
+    fix. But zero is also what a quiet drill returns, so the supervisor's
+    replicate job succeeded every fifteen seconds forever, `is_healthy` stayed
+    true, and the only trace was one key three levels down in the health
+    report.
+    """
+
+    class Blocked:
+        blocked_reason = "401 Unauthorized: unknown site credential"
+        backlog = 12
+
+        @property
+        def is_blocked(self):
+            return True
+
+        def flush(self, now_ms=None):
+            return 0
+
+        def lag_ms(self, now_ms):
+            return 90_000
+
+        def __init__(self):
+            from app.ingest.replication import ReplicationStats
+
+            self.stats = ReplicationStats(buffered=12)
+
+    def node(self, tmp_path):
+        node = build_edge(full_env(tmp_path), now_ms=T0)
+        node.ingestor.state.health.close_all(T0)
+        node.replicator = self.Blocked()
+        return node
+
+    def test_the_job_reports_the_reason_rather_than_succeeding(self, tmp_path):
+        from app.service.supervisor import build_supervisor
+
+        supervisor = build_supervisor(ingestor=self.node(tmp_path).ingestor,
+                                      replicator=self.Blocked())
+        supervisor.start(T0)
+        supervisor.run_due(T0 + 60_000)
+
+        job = {j.name: j for j in supervisor.jobs}["replicate"]
+        assert job.failures == 1
+        assert "credential" in job.last_error
+        assert job.last_ok_ms is None
+
+    def test_the_node_says_it_is_degraded(self, tmp_path):
+        # The key a monitor alerts on. The fact had its own key and was absent
+        # from this one.
+        assert self.node(tmp_path).health(T0)["degraded"] is True
+
+    def test_and_says_what_to_do_about_it(self, tmp_path):
+        # There is no button anywhere that resolves this: the token is read
+        # from the environment at startup and this process has no HTTP surface.
+        action = self.node(tmp_path).health(T0)["replication_blocked_action"]
+        assert "EVAC_CENTRAL_TOKEN" in action
+        assert "restart" in action
+        assert "nothing is lost" in action
+
+    def test_a_working_link_carries_no_instruction(self, tmp_path):
+        node = build_edge(full_env(tmp_path), now_ms=T0)
+        assert node.health(T0)["replication_blocked_action"] is None
+
+
+class TestTheRecoveryPointObjectiveIsReported:
+    """`replication.py` says `measure_rpo` reports the loss window "from real
+    counters rather than from this paragraph". It was called by nothing, so the
+    paragraph was all there was.
+
+    The module is careful about this for a reason it states itself: "we buffer
+    events" invites the belief that nothing can be lost, and something can. It
+    is a bounded, measured amount, and the bound is worth knowing before
+    somebody relies on it.
+    """
+
+    def test_a_node_with_a_link_reports_its_loss_window(self, tmp_path):
+        env = full_env(tmp_path)
+        env["EVAC_CENTRAL_URL"] = "https://central.example"
+        env["EVAC_CENTRAL_TOKEN"] = "t0ken"
+        env["EVAC_OUTBOX_DIR"] = str(tmp_path / "outbox")
+        rpo = build_edge(env, now_ms=T0).health(T0)["rpo"]
+
+        assert rpo["unsent_events"] == 0
+        assert rpo["loss_on_power_failure"] == 0
+        assert rpo["producer_exposure_ms"] > 0
+
+    def test_the_exposure_is_the_interval_the_supervisor_actually_uses(self,
+                                                                       tmp_path):
+        # Two copies of the number would drift, and the one in the report is
+        # the one a site plans against.
+        from app.service.supervisor import DEFAULT_REPLICATE_INTERVAL_MS
+
+        env = full_env(tmp_path)
+        env["EVAC_CENTRAL_URL"] = "https://central.example"
+        env["EVAC_CENTRAL_TOKEN"] = "t0ken"
+        env["EVAC_OUTBOX_DIR"] = str(tmp_path / "outbox")
+        node = build_edge(env, now_ms=T0)
+
+        assert node.health(T0)["rpo"]["producer_exposure_ms"] == (
+            DEFAULT_REPLICATE_INTERVAL_MS)
+
+    def test_a_node_with_no_central_reports_none_rather_than_zero(self, tmp_path):
+        # Zero would read as "nothing can be lost", which is the opposite of
+        # what an edge node with nowhere to replicate to means.
+        assert build_edge(full_env(tmp_path), now_ms=T0).health(T0)["rpo"] is None

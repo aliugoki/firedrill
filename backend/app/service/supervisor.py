@@ -36,6 +36,21 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 
+#: How often the edge flushes to central. Named because it is also the producer
+#: half of the recovery point objective -- events made inside this window exist
+#: only in memory -- and the health report has to quote the same number the
+#: supervisor actually uses, not a copy of it that drifts.
+DEFAULT_REPLICATE_INTERVAL_MS = 15_000
+
+
+class ReplicationBlocked(RuntimeError):
+    """Replication cannot proceed and waiting will not change that.
+
+    Its own class so the supervisor's `last_error` names the one failure on
+    this node that no amount of retrying resolves.
+    """
+
+
 @dataclass
 class Job:
     """One piece of background work and its schedule."""
@@ -195,7 +210,7 @@ def build_supervisor(
     retention_check: Callable[[int], object] | None = None,
     tick_interval_ms: int = 1_000,
     consume_interval_ms: int = 250,
-    replicate_interval_ms: int = 15_000,
+    replicate_interval_ms: int = DEFAULT_REPLICATE_INTERVAL_MS,
     sync_interval_ms: int = 300_000,
     retention_interval_ms: int = 3_600_000,
 ) -> Supervisor:
@@ -229,8 +244,27 @@ def build_supervisor(
                            run=consume))
 
     if replicator is not None:
+        def replicate(now_ms: int) -> int:
+            """Flush to central, and fail loudly when flushing cannot work.
+
+            `Replicator.flush` returns zero when the credential has been
+            refused, deliberately: it stops the pointless retrying that would
+            hide a problem waiting had no chance of fixing. But zero is also
+            what a quiet drill returns, so this job succeeded every fifteen
+            seconds forever and the supervisor reported it healthy while
+            nothing had reached central since the node booted.
+
+            Raising instead puts the reason in `last_error`, marks the job
+            unhealthy, and backs the interval off -- all three of which are the
+            right response to a failure only a human can clear.
+            """
+            if replicator.is_blocked:
+                raise ReplicationBlocked(replicator.blocked_reason
+                                         or "central refused the credential")
+            return replicator.flush(now_ms)
+
         supervisor.add(Job(name="replicate", interval_ms=replicate_interval_ms,
-                           run=lambda now_ms: replicator.flush(now_ms)))
+                           run=replicate))
 
     if sync_runner is not None:
         supervisor.add(Job(name="sync", interval_ms=sync_interval_ms,
