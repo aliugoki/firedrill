@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from app.calibration.dataset import CalibrationSet, LabelledObservation, Split
+from app.core.fusion import DEFAULT_ASSOCIATION_WEIGHTS
 from app.core.identity_fsm import IdentityConfig, RejectionReason, gate
 from app.core.identity_fsm import FaceObservation
 
@@ -123,11 +124,21 @@ def evaluate(
 
 
 def _as_observation(item: LabelledObservation) -> FaceObservation:
+    """The observation the production fold would have built from this row.
+
+    The weight on `track_confidence` is the part that matters and was missing.
+    `Ingestor._face_observed` scales confidence by how the face was attached to
+    the body before gating it, so a harness that gates the raw value is
+    choosing thresholds for a pipeline that does not exist. The two have to
+    agree or the numbers the sweep produces do not describe the running system.
+    """
     return FaceObservation(
         ts_ms=0, candidate_id=item.proposed_identity, score=item.score,
         margin=item.margin, quality=item.quality,
         pose_deviation_deg=item.pose_deviation_deg,
-        track_confidence=item.track_confidence,
+        track_confidence=(item.track_confidence
+                          * DEFAULT_ASSOCIATION_WEIGHTS[item.association]),
+        camera_id=item.camera_id,
         association_is_strong=item.association_is_strong)
 
 

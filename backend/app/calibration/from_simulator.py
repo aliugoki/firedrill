@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from app.calibration.dataset import CalibrationSet, LabelledObservation, Source
 from app.core.events import EventType
-from app.core.fusion import AssociationKind, association_from
+from app.core.fusion import association_from
 from app.simulator.engine import DrillPlan, ObservedStream, observe
 
 
@@ -63,8 +63,7 @@ def harvest(plan: DrillPlan, stream: ObservedStream | None = None) -> Calibratio
             # source did not say how the face was attached to the body is not
             # a strong association; treating it as one calibrates the gate
             # against evidence that never existed.
-            association_is_strong=(
-                association_from(payload) is AssociationKind.SHARED_TRACK),
+            association=association_from(payload),
             camera_id=payload.get("camera_id"),
             source=Source.SIMULATOR,
         ))

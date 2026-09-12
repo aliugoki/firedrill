@@ -23,6 +23,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from enum import Enum
 
+from app.core.fusion import AssociationKind
+
 
 #: The person key shared by everyone who is not in the gallery.
 UNKNOWN_KEY = "__unknown__"
@@ -55,9 +57,23 @@ class LabelledObservation:
     quality: float = 1.0
     pose_deviation_deg: float = 0.0
     track_confidence: float = 1.0
-    association_is_strong: bool = True
+    association: AssociationKind = AssociationKind.NONE
+    """How the face was attached to a body, when the source recorded it.
+
+    A boolean was here, defaulting to True, so a row that did not say was
+    calibrated as a shared track -- the strongest kind -- and the thresholds
+    chosen were tuned against evidence that never existed. A boolean also has
+    no way to say "the source did not record this", which is the honest state
+    of most recorded material: `NONE` is that state, and it is deliberately the
+    default rather than a middle value.
+    """
     camera_id: str | None = None
     source: Source = Source.SIMULATOR
+
+    @property
+    def association_is_strong(self) -> bool:
+        """Kept for readers. Only one of the four strengths is strong."""
+        return self.association is AssociationKind.SHARED_TRACK
 
     @property
     def person_key(self) -> str:

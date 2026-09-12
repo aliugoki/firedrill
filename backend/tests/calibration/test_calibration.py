@@ -18,15 +18,36 @@ from app.calibration.dataset import (
     split,
 )
 from app.calibration.report import MAX_DRIFT, certify
-from app.calibration.sweep import NoAcceptableOperatingPoint, Sweep, evaluate
-from app.core.identity_fsm import PROVISIONAL_CONFIG, IdentityConfig
+from app.core.fusion import AssociationKind
+from app.calibration.sweep import (
+    NoAcceptableOperatingPoint,
+    Sweep,
+    _as_observation,
+    evaluate,
+)
+from app.core.identity_fsm import (
+    PROVISIONAL_CONFIG,
+    IdentityConfig,
+    RejectionReason,
+    gate,
+)
 
 
 def obs(i: int, *, true=None, proposed=None, score=0.8, margin=0.3,
-        source=Source.RECORDED_DRILL, camera="cam-1", **kw) -> LabelledObservation:
+        source=Source.RECORDED_DRILL, camera="cam-1",
+        association=AssociationKind.SHARED_TRACK, **kw) -> LabelledObservation:
+    """One labelled row, from a pipeline that said how it associated the face.
+
+    Stated rather than defaulted. `LabelledObservation` defaults to `NONE` --
+    the source did not record it -- because a row that does not say has not
+    established a shared track, and calibrating as though it had chooses
+    thresholds against evidence that never existed. Every row here is a good
+    one on purpose; the weak-association cases say so.
+    """
     return LabelledObservation(
         observation_id=f"obs-{i}", true_identity=true, proposed_identity=proposed,
-        score=score, margin=margin, camera_id=camera, source=source, **kw)
+        score=score, margin=margin, camera_id=camera, source=source,
+        association=association, **kw)
 
 
 def good_set(*, people=40, per_person=6, unknowns=60,
@@ -380,3 +401,83 @@ class TestAnAnswerOnTheEdgeOfTheSearch:
         assert any("outside the range searched" in c for c in report.caveats)
         assert not any("outside the range searched" in r
                        for r in report.refusals)
+
+
+class TestTheHarnessGatesLikeTheFoldDoes:
+    """A sweep that admits observations the running system would reject is
+    choosing thresholds for a pipeline that does not exist.
+
+    `Ingestor._face_observed` scales `track_confidence` by how the face was
+    attached to the body before gating it. `_as_observation` passed the raw
+    value, so the two disagreed the moment the fold started applying the
+    weight, and the numbers a sweep produced stopped describing the system.
+    """
+
+    def payload(self, association="SHARED_TRACK"):
+        return {"candidate_id": "EMP-001", "score": 0.8, "margin": 0.3,
+                "quality": 0.9, "pose_deviation_deg": 5.0,
+                "track_confidence": 0.9, "association": association,
+                "camera_id": "cam-1"}
+
+    def from_the_fold(self, payload):
+        """What the ingestor builds, reached through the ingestor itself."""
+        from app.core.events import Event, EventType, SourceKind
+        from app.ingest.ingestor import Ingestor
+
+        built = {}
+        node = Ingestor()
+        original = node.state.identity.observe
+
+        def spy(person_id, observation):
+            built["observation"] = observation
+            return original(person_id, observation)
+
+        node.state.identity.observe = spy
+        node.feed(Event(tenant_id="t", site_id="s", drill_id="d",
+                        source="cam-1", source_kind=SourceKind.CAMERA, seq=1,
+                        type=EventType.FACE_OBSERVED, ts_ms=0, subject="gp-1",
+                        payload=payload))
+        return built["observation"]
+
+    def from_the_harness(self, payload):
+        from app.calibration.from_simulator import association_from
+
+        return _as_observation(LabelledObservation(
+            observation_id="o-1", true_identity="EMP-001",
+            proposed_identity=payload["candidate_id"],
+            score=payload["score"], margin=payload["margin"],
+            quality=payload["quality"],
+            pose_deviation_deg=payload["pose_deviation_deg"],
+            track_confidence=payload["track_confidence"],
+            association=association_from(payload),
+            camera_id=payload["camera_id"]))
+
+    @pytest.mark.parametrize(
+        "association", ["SHARED_TRACK", "SPATIAL_IOU", "TEMPORAL_ONLY"])
+    def test_both_build_the_same_observation(self, association):
+        payload = self.payload(association)
+        folded = self.from_the_fold(payload)
+        swept = self.from_the_harness(payload)
+
+        for field in ("score", "margin", "quality", "pose_deviation_deg",
+                      "track_confidence", "camera_id",
+                      "association_is_strong"):
+            assert getattr(folded, field) == getattr(swept, field), field
+
+    def test_a_weak_association_is_rejected_by_both(self):
+        payload = self.payload("SPATIAL_IOU")
+        assert gate(self.from_the_fold(payload),
+                    PROVISIONAL_CONFIG) is not RejectionReason.ACCEPTED
+        assert gate(self.from_the_harness(payload),
+                    PROVISIONAL_CONFIG) is not RejectionReason.ACCEPTED
+
+    def test_a_row_that_does_not_say_is_not_swept_as_a_shared_track(self):
+        # The default was True, so an unlabelled row calibrated as the
+        # strongest kind and the chosen thresholds were tuned against evidence
+        # that never existed.
+        row = LabelledObservation(observation_id="o-1", true_identity="EMP-001",
+                                  proposed_identity="EMP-001", score=0.9,
+                                  margin=0.4)
+        assert row.association_is_strong is False
+        assert gate(_as_observation(row),
+                    PROVISIONAL_CONFIG) is not RejectionReason.ACCEPTED
