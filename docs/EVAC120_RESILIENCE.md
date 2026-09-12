@@ -131,8 +131,24 @@ records why, and reports it separately in `/healthz`.
 
 Retrying a credential failure forever is the worse default: it fills the disk,
 never succeeds, and reports itself the whole time as a transient outage that
-somebody is presumably already handling. Nothing is lost while blocked — the
-events stay buffered — and a human clears it once the token is fixed.
+somebody is presumably already handling. Nothing is lost while blocked: the
+events stay buffered.
+
+**Clearing it means restarting the edge process**, and this used to say "a
+human clears it once the token is fixed" as though there were a button. There
+is not, and there should not be one that does less than this: the token is read
+from the environment at startup and held by the transport, so clearing the flag
+without replacing the credential retries something central has already refused.
+`Replicator.unblock` exists for a caller that holds the transport and can swap
+the credential; nothing calls it at runtime. `/healthz` carries the instruction
+beside the refusal, because an operator reading a message from central needs to
+be told what to do with it and that nothing is lost meanwhile.
+
+The blocked replicate job also **fails** rather than returning zero, so the
+supervisor reports it unhealthy and names the reason. It used to succeed every
+fifteen seconds: `flush` returns zero when blocked, and zero is also what a
+quiet drill returns, so a node that had sent central nothing since it booted
+reported its background work in good order.
 
 ### 5.3 Convergence
 

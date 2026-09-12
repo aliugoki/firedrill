@@ -215,6 +215,18 @@ nobody reviewing it afterwards could tell a correction from a mistake.
 Report exports are logged as disclosures, because that is what they are:
 personal data about people's movements leaving the building.
 
+**Reading it.** `GET /api/evac/drills/{drill_id}/audit`, gated on `AUDIT_VIEW`
+and tenant-scoped like every other drill route. Until recently there was no
+such route: nine places wrote to the log, the store persisted it, `AUDIT_VIEW`
+sat in the safety officer's role, and nothing used it — so the question this
+section opens with had an answer in the database and no way to ask for it.
+
+The response says whether the entries came from the database or from the API
+process's memory, because those differ in what they can be used to prove: an
+in-memory log holds only what that process did and is gone on a restart. A
+database that cannot be read falls back and says so rather than answering
+"nothing happened", which is the worst thing an audit log can say.
+
 ---
 
 ## 5. Threats this design takes seriously
@@ -257,7 +269,19 @@ Stated plainly rather than left to be discovered.
   retention check reports "nothing held, nothing overdue" truthfully rather
   than vacuously. The control runs hourly on the edge node regardless, so the
   first item produced is covered on the day it appears rather than on the day
-  somebody remembers. `/healthz` carries `retention_compliant`,
-  `retention_overdue`, `retention_held` and `retention_reviewed`.
+  somebody remembers. A drill purges its drill-end classes at completion rather
+  than waiting for that hour, because a device thumbnail is the shortest-lived
+  thing in the system precisely because it leaves the building in somebody's
+  hands. `/healthz` carries `retention_compliant`, `retention_overdue`,
+  `retention_held`, `retention_unremovable`, `retention_reviewed` and
+  `retention_longest_biometric_life_s`.
+- **Nothing deletes the bytes yet either.** The purge refuses to mark an item
+  removed when no remover is configured, and reports it as unremovable instead.
+  That is deliberate and it is the state the node is in today: recording a
+  deletion nobody performed would make the policy a lie that passes its own
+  verification, which is the one failure this whole control exists to prevent.
+  Whoever wires the first producer of face crops wires the remover with it, and
+  until they do the node reports non-compliant the moment a crop is tracked
+  rather than quietly keeping it.
 - **The retention durations are not reviewed.** They are marked `calibrated=False`
   and are a starting point for a data-protection review, not its conclusion.
