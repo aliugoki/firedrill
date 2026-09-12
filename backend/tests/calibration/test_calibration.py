@@ -7,9 +7,13 @@ that is a certification path that fails closed.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from app.calibration.dataset import (
+    MalformedDataset,
+    load,
     MIN_ENROLLED_PEOPLE,
     UNKNOWN_KEY,
     CalibrationSet,
@@ -481,3 +485,108 @@ class TestTheHarnessGatesLikeTheFoldDoes:
         assert row.association_is_strong is False
         assert gate(_as_observation(row),
                     PROVISIONAL_CONFIG) is not RejectionReason.ACCEPTED
+
+
+class TestGettingALabelledSetInFromOutside:
+    """`from_simulator` says the value of the harness is that "the day recorded
+    footage exists, only the labelling is new work". That was not quite true.
+
+    There was no way to get a labelled set into the harness without writing
+    Python, so labelling recorded footage was necessary and not sufficient, and
+    the Phase 2 deliverable could only be driven from a test.
+    """
+
+    def rows(self, n=3):
+        return [{"observation_id": f"o-{i}", "true_identity": "EMP-001",
+                 "proposed_identity": "EMP-001", "score": 0.8, "margin": 0.3,
+                 "source": "RECORDED_DRILL", "camera_id": "cam-1",
+                 "association": "SHARED_TRACK"}
+                for i in range(n)]
+
+    def test_rows_become_a_set(self, tmp_path):
+        path = tmp_path / "labelled.json"
+        path.write_text(json.dumps(self.rows()))
+        loaded = load(path)
+        assert len(loaded) == 3
+        assert loaded.enrolled_people == {"EMP-001"}
+
+    def test_an_unenrolled_row_keeps_its_null(self, tmp_path):
+        # The difference between measuring the dangerous error and not.
+        rows = self.rows(1)
+        rows[0]["true_identity"] = None
+        path = tmp_path / "labelled.json"
+        path.write_text(json.dumps(rows))
+        assert load(path).unknown_observations
+
+    def test_a_missing_field_is_refused_by_name(self, tmp_path):
+        rows = self.rows(1)
+        del rows[0]["true_identity"]
+        path = tmp_path / "labelled.json"
+        path.write_text(json.dumps(rows))
+        with pytest.raises(MalformedDataset, match="true_identity"):
+            load(path)
+
+    def test_a_file_that_does_not_say_where_it_came_from_is_refused(self,
+                                                                    tmp_path):
+        # `source` decides whether the result may be certified at all, so a
+        # file that does not say must not be read as recorded footage.
+        rows = self.rows(1)
+        del rows[0]["source"]
+        path = tmp_path / "labelled.json"
+        path.write_text(json.dumps(rows))
+        with pytest.raises(MalformedDataset, match="source"):
+            load(path)
+
+    def test_an_unstated_association_is_not_read_as_a_shared_track(self,
+                                                                   tmp_path):
+        rows = self.rows(1)
+        del rows[0]["association"]
+        path = tmp_path / "labelled.json"
+        path.write_text(json.dumps(rows))
+        assert load(path).observations[0].association_is_strong is False
+
+    def test_an_empty_file_is_refused_rather_than_swept(self, tmp_path):
+        # A sweep over nothing produces rates of None and a report that reads
+        # like a measurement.
+        path = tmp_path / "labelled.json"
+        path.write_text("[]")
+        with pytest.raises(MalformedDataset, match="no observations"):
+            load(path)
+
+    def test_it_is_not_valid_json(self, tmp_path):
+        path = tmp_path / "labelled.json"
+        path.write_text("{not json")
+        with pytest.raises(MalformedDataset, match="not valid JSON"):
+            load(path)
+
+
+class TestTheCalibrationEntryPoint:
+    """A deliverable with no command that produces it is a deliverable nobody
+    can hand over."""
+
+    def script(self, argv):
+        import importlib.util
+        from pathlib import Path
+
+        path = (Path(__file__).resolve().parents[2] / "scripts"
+                / "calibrate.py")
+        spec = importlib.util.spec_from_file_location("calibrate", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.main(argv)
+
+    def test_a_simulated_run_refuses_to_certify(self, capsys):
+        # The whole point of running it: a build that silently produced
+        # "calibrated" numbers from synthetic data is the failure this module
+        # is arranged to prevent. Non-zero, so it can gate a deployment.
+        assert self.script(["--people", "80"]) == 1
+        assert "entirely simulated" in capsys.readouterr().out
+
+    def test_a_dataset_it_cannot_read_is_named_and_refused(self, capsys,
+                                                           tmp_path):
+        # A dataset the harness half understood would produce a report that
+        # looks like every other report, which is worse than no report.
+        path = tmp_path / "bad.json"
+        path.write_text('[{"observation_id": "o-1"}]')
+        assert self.script(["--dataset", str(path)]) == 2
+        assert "cannot read the dataset" in capsys.readouterr().err

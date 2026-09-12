@@ -264,3 +264,92 @@ def split(
 def _fraction(salt: str, key: str) -> float:
     digest = hashlib.sha256(f"{salt}:{key}".encode()).hexdigest()
     return (int(digest[:8], 16) % 10_000) / 10_000
+
+
+class MalformedDataset(ValueError):
+    """A labelled file that cannot be trusted as labels.
+
+    Refused rather than repaired. Every field this reads decides something: a
+    missing `true_identity` is the difference between measuring the dangerous
+    error and not, and guessing a default for it would produce a number that
+    looks like a false-accept rate and is not one.
+    """
+
+
+def from_rows(rows, *, name: str, note: str = "") -> CalibrationSet:
+    """Build a set from plain dictionaries, as a labelling tool would emit them.
+
+    `from_simulator` says the value of the harness is that "the day recorded
+    footage exists, only the labelling is new work". That was not quite true:
+    there was no way to get a labelled set into the harness without writing
+    Python, so labelling it was necessary and not sufficient.
+
+    Required per row: `observation_id`, `true_identity` (null for somebody not
+    in the gallery), `proposed_identity`, `score`, `margin`, and `source`.
+    `source` is required rather than defaulted because it decides whether the
+    result may be certified at all, and a file that does not say where its
+    observations came from must not be read as recorded footage.
+    """
+    required = ("observation_id", "true_identity", "proposed_identity",
+                "score", "margin", "source")
+    out = CalibrationSet(name=name, note=note)
+
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise MalformedDataset(f"row {index} is not an object")
+        missing = [field for field in required if field not in row]
+        if missing:
+            raise MalformedDataset(
+                f"row {index} ({row.get('observation_id', 'unnamed')}) is "
+                f"missing {', '.join(missing)}")
+        try:
+            source = Source(row["source"])
+        except ValueError:
+            raise MalformedDataset(
+                f"row {index}: {row['source']!r} is not a known source; one of "
+                f"{', '.join(s.value for s in Source)}") from None
+        try:
+            association = AssociationKind(
+                row.get("association", AssociationKind.NONE.value))
+        except ValueError:
+            raise MalformedDataset(
+                f"row {index}: {row['association']!r} is not a known "
+                "association strength") from None
+
+        out.add(LabelledObservation(
+            observation_id=str(row["observation_id"]),
+            true_identity=row["true_identity"],
+            proposed_identity=row["proposed_identity"],
+            score=float(row["score"]), margin=float(row["margin"]),
+            quality=float(row.get("quality", 1.0)),
+            pose_deviation_deg=float(row.get("pose_deviation_deg", 0.0)),
+            track_confidence=float(row.get("track_confidence", 1.0)),
+            association=association,
+            camera_id=row.get("camera_id"), source=source))
+
+    if not out.observations:
+        raise MalformedDataset("the file contained no observations")
+    return out
+
+
+def load(path) -> CalibrationSet:
+    """Read a labelled set from a JSON file: either a list, or {"observations": [...]}."""
+    import json
+    from pathlib import Path
+
+    path = Path(path)
+    try:
+        payload = json.loads(path.read_text())
+    except FileNotFoundError:
+        raise MalformedDataset(f"no dataset at {path}") from None
+    except ValueError as exc:
+        raise MalformedDataset(f"{path} is not valid JSON: {exc}") from None
+
+    rows = payload.get("observations") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        raise MalformedDataset(
+            f"{path} should hold a list of observations, or an object with an "
+            '"observations" list')
+    name = (payload.get("name") if isinstance(payload, dict) else None) or path.stem
+    note = (payload.get("note") if isinstance(payload, dict) else None) or ""
+    return from_rows(rows, name=name, note=note)
