@@ -67,3 +67,47 @@ describe('the service worker precache', () => {
     }
   });
 });
+
+describe('a fix reaching a tablet that already has the shell', () => {
+  /**
+   * `cacheFirst` used to return the cached copy and stop. A service worker
+   * only reinstalls when `sw.js` itself changes, so shipping a corrected
+   * `warden.js` without touching `sw.js` left every device on the old copy
+   * indefinitely -- on the one surface a warden uses during an evacuation.
+   *
+   * Checked against the source rather than by running a worker: there is no
+   * service-worker runtime here, and what matters is structural.
+   */
+  function source() {
+    return readFileSync(join(ROOT, 'sw.js'), 'utf8');
+  }
+
+  it('the cached answer is followed by a refresh', () => {
+    const body = /async function cacheFirst\([\s\S]*?\n}/.exec(source());
+    assert.ok(body, 'sw.js must define cacheFirst');
+    assert.match(body[0], /revalidate\(request\)/);
+  });
+
+  it('the refresh is not awaited before answering', () => {
+    // A warden opening the app on a weak signal must not wait on a refresh
+    // they do not need yet.
+    const body = /async function cacheFirst\([\s\S]*?\n}/.exec(source())[0];
+    assert.ok(!/await revalidate/.test(body),
+              'the refresh must not block the cached answer');
+  });
+
+  it('a failed refresh is swallowed rather than surfaced', () => {
+    // Offline is this device's normal state and the cached copy already went
+    // back, so a rejection here is noise with nowhere useful to go.
+    const body = /function revalidate\([\s\S]*?\n}/.exec(source())[0];
+    assert.match(body, /\.catch\(/);
+  });
+
+  it('no message handler promises a warm-up it cannot do', () => {
+    // `cache.add` fetches without the app's Authorization header, so an
+    // authenticated route answers 401 and the add rejects. The zone poll
+    // caches the roster through networkFirst on its first success.
+    assert.ok(!/CACHE_ZONE'/.test(source().replace(/\/\/[^\n]*/g, '')),
+              'a live CACHE_ZONE handler cannot work for an authenticated route');
+  });
+});

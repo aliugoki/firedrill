@@ -78,7 +78,23 @@ self.addEventListener('fetch', (event) => {
 
 async function cacheFirst(request) {
   const cached = await caches.match(request);
-  if (cached) return cached;
+  if (cached) {
+    // Answer from cache immediately, and refresh in the background for the
+    // next start. Returning the cached copy and stopping there meant a fix
+    // deployed to the edge node never reached a tablet: `cacheFirst` never
+    // re-fetches, and the `install` handler only runs when `sw.js` itself
+    // changes, so shipping a corrected `warden.js` without touching this file
+    // left every device on the old copy indefinitely.
+    //
+    // Bumping `-v1` by hand would work and is the thing somebody forgets.
+    // CLAUDE.md chose no build step to avoid a bundle "that must be rebuilt,
+    // versioned and invalidated correctly or the app silently stops working
+    // offline", and a hand-maintained cache name is the same trap by another
+    // route. The cost of doing it this way is that a fix lands one start
+    // later, stated rather than discovered.
+    revalidate(request);
+    return cached;
+  }
   try {
     const response = await fetch(request);
     if (response.ok) {
@@ -93,6 +109,24 @@ async function cacheFirst(request) {
       status: 503, statusText: 'offline',
     });
   }
+}
+
+/**
+ * Fetch a shell file and replace the cached copy, ignoring every failure.
+ *
+ * Deliberately not awaited by the response: a warden opening the app with a
+ * weak signal must not wait on a refresh they do not need yet. Deliberately
+ * silent on failure too -- offline is the normal case for this device, and the
+ * cached copy already went back.
+ */
+function revalidate(request) {
+  fetch(request)
+    .then((response) => {
+      if (!response.ok) return null;
+      return caches.open(SHELL_CACHE)
+        .then((cache) => cache.put(request, response.clone()));
+    })
+    .catch(() => { /* offline: the cached copy is the answer */ });
 }
 
 async function networkFirst(request) {
@@ -123,11 +157,9 @@ async function networkFirst(request) {
   }
 }
 
-/** Let the page tell the worker a drill has started, so it warms the cache. */
-self.addEventListener('message', (event) => {
-  if (event.data?.type === 'CACHE_ZONE' && event.data.url) {
-    event.waitUntil(
-      caches.open(DATA_CACHE).then((cache) => cache.add(event.data.url)),
-    );
-  }
-});
+// There was a `CACHE_ZONE` message handler here, for the page to tell the
+// worker to warm the zone roster at drill start. No page ever sent it, and it
+// could not have worked: `cache.add` fetches without the app's Authorization
+// header, so an authenticated route answers 401, `add` rejects, and the
+// `waitUntil` fails. The five-second zone poll caches the roster through
+// `networkFirst` on its first success, which is what the handler was for.
