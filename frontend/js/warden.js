@@ -21,7 +21,7 @@ import { Api, ApiError, Freshness } from './api.js';
 import { createTranslator, isRtl } from './i18n.js';
 import {
   composer, escapeHtml, filterRoster, headcountVerdict, healthLine,
-  orderForWarden, rowNotes, syncStatus,
+  orderForWarden, rowNotes, syncProblems, syncStatus,
 } from './render.js';
 import { OfflineQueue, reconcileSync } from './queue.js';
 
@@ -52,6 +52,10 @@ let lastHeadcount = null;
 //: Which composer is open, if any: 'ESCALATE', 'NOTE', or null.
 let composing = null;
 let refusals = [];
+//: Actions the server answered for neither way. Normally empty: the next sync
+//: sends them again. Worth showing because a queue that never empties means
+//: something is wrong that nobody else is going to notice.
+let unanswered = [];
 //: Set once the device proves it cannot write to IndexedDB. Never cleared: a
 //: tablet that failed to store one confirmation has no business being trusted
 //: with the next, and a banner that flickers off is a banner a warden stops
@@ -143,6 +147,7 @@ async function sync() {
     const outcome = reconcileSync(pending, response);
     await queue.acknowledge(outcome.acknowledged);
     refusals = outcome.refusalMessages;
+    unanswered = outcome.unanswered;
     await refreshZone();
   } catch (error) {
     // Stays queued. Nothing is dropped and nothing is retried out of order.
@@ -215,6 +220,15 @@ async function paint() {
   syncEl.className = `warden-status ${status.tone}`;
   syncEl.textContent = status.text +
     (refusals.length ? ` · ${refusals.length} refused` : '');
+
+  // The reasons, not the count of them. The sync route says a device with one
+  // action refused "must be able to tell which, or a warden's screen shows
+  // work that never landed", and the screen showed the number.
+  document.getElementById('sync-problems').innerHTML =
+    syncProblems({ refusals, unanswered }, t).map(
+      (problem) => `<div class="warden-status ${escapeHtml(
+        problem.tone === 'red' ? 'blind' : 'offline')}">${
+        escapeHtml(problem.text)}</div>`).join('');
 
   const health = healthLine(zone?.system_health, t);
   const healthEl = document.getElementById('system-health');

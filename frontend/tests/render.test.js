@@ -18,6 +18,7 @@ import {
   needsAHuman,
   lostSightBecause,
   rowNotes,
+  syncProblems,
 } from '../js/render.js';
 
 const t = createTranslator('en');
@@ -669,5 +670,43 @@ describe('a warden device that cannot save the work', () => {
                 `${lang} has no cannot_save string`);
     }
     assert.match(STRINGS.en['warden.cannot_save'], /radio/);
+  });
+});
+
+describe('what a warden reads after a sync', () => {
+  // The sync route says a device "that syncs forty actions and has one refused
+  // must be able to tell which, or a warden's screen shows work that never
+  // landed". The server said which, the queue turned it into sentences, and
+  // the screen printed "· 1 refused" and dropped them.
+  const t = (key) => key;
+
+  it('shows each refusal in full', () => {
+    const lines = syncProblems({
+      refusals: ['seq 3: not assigned to assembly-south'],
+    }, t);
+    assert.deepEqual(lines.map((l) => l.text),
+                     ['seq 3: not assigned to assembly-south']);
+    assert.equal(lines[0].tone, 'red');
+  });
+
+  it('keeps a refusal and an unanswered action apart', () => {
+    // A refusal is final and needs the warden to act. An unanswered action is
+    // still queued and goes again on the next sync. One number for both would
+    // make the first look survivable.
+    const lines = syncProblems({
+      refusals: ['seq 3: no'], unanswered: [{ device_seq: 4 }],
+    }, t);
+    assert.deepEqual(lines.map((l) => l.tone), ['red', 'yellow']);
+  });
+
+  it('says nothing when the sync was clean', () => {
+    assert.deepEqual(syncProblems({}, t), []);
+  });
+
+  it('counts the unanswered rather than listing them', () => {
+    // They are transient by construction, so which ones matters less than that
+    // there are any.
+    const lines = syncProblems({ unanswered: [{}, {}, {}] }, t);
+    assert.match(lines[0].text, /^3 /);
   });
 });

@@ -447,3 +447,28 @@ export function lostSightBecause(row, t) {
 export function rowNotes(row, t) {
   return [needsAHuman(row, t), lostSightBecause(row, t)].filter(Boolean);
 }
+
+/**
+ * What a warden needs to read after a sync, rather than a count of it.
+ *
+ * The sync route says a device "that syncs forty actions and has one refused
+ * must be able to tell which, or a warden's screen shows work that never
+ * landed". The server said which, `reconcileSync` turned it into sentences,
+ * and the screen printed "· 1 refused" and dropped them.
+ *
+ * The two kinds are not the same and must not read as one number. A refusal is
+ * final: that action is not in the system and will not be, and the warden has
+ * to do something about it. An unanswered action is still queued and goes
+ * again on the next sync, so it is worth showing only because a queue that
+ * never empties means something is wrong that nobody else will notice.
+ */
+export function syncProblems({ refusals = [], unanswered = [] }, t) {
+  const lines = refusals.map((text) => ({ tone: 'red', text }));
+  if (unanswered.length) {
+    lines.push({
+      tone: 'yellow',
+      text: `${unanswered.length} ${t('warden.no_answer')}`,
+    });
+  }
+  return lines;
+}
