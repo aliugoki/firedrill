@@ -881,3 +881,53 @@ class TestARosterWithHolesInIt:
             device_id="tablet-3", zone_id="unassigned", ts_ms=T0 + 60_000))
         assert drill.warden.is_every_zone_clean(
             drill.roster.by_assembly_zone()) is False
+
+
+class TestTheWorkedExampleInTheDocsIsTheRealOutput:
+    """`EVAC120_VALIDATION.md` quotes a report and says of the script that
+    produced it: "which is the script that produced exactly this".
+
+    It had stopped being exactly that. Three sections added to the report this
+    month -- the roster's gaps, the identities the system could not settle, and
+    the events lost for good -- were missing from the quoted block, so a reader
+    comparing the document to a real run would find the document short.
+
+    `worked_example.py` opens by saying a measured number nobody can reproduce
+    is a claim. This is what keeps that sentence true: the document is checked
+    against the script rather than against whoever last remembered to update
+    it. The script takes about a second.
+    """
+
+    def rendered(self) -> str:
+        import importlib.util
+        import io
+        from contextlib import redirect_stdout
+        from pathlib import Path
+
+        path = (Path(__file__).resolve().parents[2] / "scripts"
+                / "worked_example.py")
+        spec = importlib.util.spec_from_file_location("worked_example", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            module.main()
+        return out.getvalue().rstrip("\n")
+
+    def quoted(self) -> str:
+        from pathlib import Path
+
+        doc = (Path(__file__).resolve().parents[3] / "docs"
+               / "EVAC120_VALIDATION.md").read_text()
+        start = doc.index("produced exactly this:")
+        opened = doc.index("```", start) + 4
+        return doc[opened:doc.index("\n```", opened)]
+
+    def test_the_document_quotes_what_the_script_prints(self):
+        assert self.quoted() == self.rendered()
+
+    def test_the_scan_found_a_report_rather_than_an_empty_block(self):
+        # A parse that matched nothing would make the check above vacuous.
+        quoted = self.quoted()
+        assert "EVAC-120 drill report" in quoted
+        assert len(quoted.splitlines()) > 40

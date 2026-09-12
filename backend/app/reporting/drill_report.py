@@ -389,9 +389,17 @@ def build_report(
     # person on purpose: a disputed track is exactly one the system cannot
     # attach to a person, and calling it by a name would be the adjudication
     # the invariant forbids.
+    # Seconds into the drill, not an epoch millisecond. Every other time in
+    # this report is relative and formatted; "first at 1788000003017" is not a
+    # time a safety officer can place against anything else on the page.
+    def _into_the_drill(ts_ms: int) -> str:
+        if drill.started_ms is None:
+            return "before the drill started"
+        return f"at {(ts_ms - drill.started_ms) / 1000:.1f}s"
+
     disputes = tuple(
         f"track {d.subject}: claimed as {' and '.join(d.identities)}, "
-        f"first at {d.first_seen_ms}"
+        f"first {_into_the_drill(d.first_seen_ms)}"
         for d in drill.ingestor.state.ledger.all_disputes())
 
     # A store that dropped events makes this report unverifiable, and until now

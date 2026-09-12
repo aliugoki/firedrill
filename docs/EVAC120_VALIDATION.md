@@ -198,8 +198,26 @@ Accountability against the manual roll-call
   needing verification    19
   unknown people          0
 
+  Roster fields nobody had filled in:
+    no department         12
+    no gallery entry      13
+    no home floor         12
+
   FALSE ACCOUNTED         0   (system said safe, no warden confirmed)
   false unaccounted       19   (warden confirmed, system could not)
+
+  Identities the system could not settle:
+    - track gp-emp:EMP-0078: claimed as EMP-0078 and EMP-0092, first at 3.0s
+    - track gp-emp:EMP-0175: claimed as EMP-0091 and EMP-0175, first at 7.0s
+    - track gp-emp:EMP-0152: claimed as EMP-0035 and EMP-0152, first at 32.7s
+    - track gp-emp:EMP-0092: claimed as EMP-0078 and EMP-0092, first at 48.8s
+    - track gp-emp:EMP-0112: claimed as EMP-0112 and EMP-0192, first at 69.3s
+    - track gp-emp:EMP-0075#1: claimed as EMP-0017 and EMP-0075, first at 163.1s
+    - track gp-emp:EMP-0000#2: claimed as EMP-0000 and EMP-0005, first at 211.2s
+    - track gp-emp:EMP-0031#1: claimed as EMP-0031 and EMP-0184, first at 253.9s
+    - track gp-emp:EMP-0156#3: claimed as EMP-0008 and EMP-0156, first at 478.6s
+    Reported, not resolved. Invariant 3 forbids the software picking a winner;
+    a human decides, and the record shows what they were deciding between.
 
 Evacuation times
   P50 68.9s   P90 116.8s   P95 143.0s   P99 317.4s
@@ -222,6 +240,7 @@ System health
   outages                 1
   blind for               20% of the drill
   longest blind period    120.0s
+  events lost for good    0
   The system was blind for 20% of this drill across 1 outage(s), the longest 120 s. Treat gaps in a person's history as unobserved rather than as absence.
 
 NOTE: no threshold in this system has been validated against a calibration set.
@@ -232,6 +251,8 @@ INCONCLUSIVE — this drill cannot judge the system: only 82% of people were tra
 
   PASS  NO_FALSE_ACCOUNTED  [0]
         nobody was marked accounted whom a warden did not confirm
+  PASS  RECORD_COMPLETE  [0 dropped]
+        every event this drill produced reached the database
   PASS  SWEEPS_COMPLETED  [2/2]
         every zone was swept
   PASS  HEADCOUNTS_TAKEN  [2/2]
@@ -254,6 +275,14 @@ Worth reading carefully. Nobody was falsely accounted, every zone was swept and
 counted, and the counts agreed — the system did well by the measures that matter
 most. And the drill still cannot validate it, because a camera was down for two
 minutes and 18% of people produced no timing at all.
+
+The nine unsettled identities are the other half of that reading, and they are
+not a failure. Sixteen distinct employees are named across them, against 19
+people the board sent for manual verification: the lookalike injection put two
+plausible names on one track, the system declined to choose, and a human was
+asked instead. That is invariant 3 working. What would be a failure is the same
+nine resolved silently by vote, which is what the vendored identity manager
+does and the reason it was not reused.
 
 That is the intended behaviour. A drill that says INCONCLUSIVE is telling you to
 fix the coverage and run it again, not to celebrate the zero.
