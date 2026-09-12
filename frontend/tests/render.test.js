@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { Freshness, ApiError } from '../js/api.js';
+import { Api, Freshness, ApiError } from '../js/api.js';
 import { createTranslator, missingKeys, STRINGS, isRtl } from '../js/i18n.js';
 import {
   filterRoster, headcountVerdict, healthLine, orderForWarden, staleness,
@@ -708,5 +708,48 @@ describe('what a warden reads after a sync', () => {
     // there are any.
     const lines = syncProblems({ unanswered: [{}, {}, {}] }, t);
     assert.match(lines[0].text, /^3 /);
+  });
+});
+
+describe('the default fetch, which no test had ever used', () => {
+  /**
+   * `fetchImpl` defaulted to `globalThis.fetch` itself, stored on the instance
+   * and then called as `this._fetch(...)`. That is a method call, so a browser
+   * sees a receiver that is an `Api` and answers "Failed to execute 'fetch' on
+   * 'Window': Illegal invocation". `request` catches it and throws "the server
+   * could not be reached", so every request from both front ends failed and
+   * both screens said the server was down while it answered 200 to curl.
+   *
+   * Every other test injects a plain function here, which has no receiver
+   * requirement, so the suite passed while the product did not work at all.
+   * Node is lenient about the receiver, so this asserts the receiver directly
+   * rather than waiting for a throw that only happens in a browser.
+   */
+  it('is never called with the Api instance as its receiver', async () => {
+    const original = globalThis.fetch;
+    const receivers = [];
+    globalThis.fetch = function (url) {
+      receivers.push(this);
+      return Promise.resolve({
+        ok: true, status: 200, headers: { get: () => null },
+        json: () => Promise.resolve({ ok: true }),
+      });
+    };
+    try {
+      const api = new Api().withIdentity({ userId: 'c1', permissions: [] });
+      await api.request('/api/evac/drills');
+      assert.equal(receivers.length, 1);
+      assert.ok(receivers[0] === globalThis || receivers[0] === undefined,
+                `fetch was called on ${receivers[0]?.constructor?.name}`);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  it('survives being passed through withIdentity', () => {
+    // The identity wrapper builds a second Api from the first one's handle, so
+    // a correct default that the wrapper unwraps would be no fix at all.
+    const api = new Api().withIdentity({ userId: 'c1', permissions: [] });
+    assert.notEqual(api._fetch, globalThis.fetch);
   });
 });

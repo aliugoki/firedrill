@@ -23,7 +23,25 @@ export class ApiError extends Error {
 }
 
 export class Api {
-  constructor({ baseUrl = '', headers = {}, fetchImpl = globalThis.fetch } = {}) {
+  /**
+   * `fetchImpl` defaults to a wrapper, never to `globalThis.fetch` itself.
+   *
+   * The bare reference was stored on the instance and then called as
+   * `this._fetch(...)`, which is a method call: the browser sees a receiver
+   * that is an `Api` and answers "Failed to execute 'fetch' on 'Window':
+   * Illegal invocation". `request` catches that and throws "the server could
+   * not be reached", so **every request from both front ends failed** and both
+   * screens said the server was down while it was answering 200 to curl.
+   *
+   * Nothing caught it because every test injects a plain function here, which
+   * has no receiver requirement. The tests exercised the code and skipped the
+   * one line that only behaves differently in a browser.
+   */
+  constructor({
+    baseUrl = '',
+    headers = {},
+    fetchImpl = (...args) => globalThis.fetch(...args),
+  } = {}) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.headers = headers;
     this._fetch = fetchImpl;
