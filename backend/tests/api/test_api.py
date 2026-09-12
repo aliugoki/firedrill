@@ -816,3 +816,66 @@ class TestAWardenTabletThatGoesQuiet:
         silence = drill.warden.silence_for_zone(
             "assembly-north", T0 + 900_000)
         assert silence == 900_000
+
+
+class TestTheExplainDrawerNamesTheDisagreement:
+    """`is_disputed` was a boolean, and a boolean is not a report.
+
+    Invariant 3 says a conflict is reported and never adjudicated. The drawer
+    could say the system cannot settle this person's identity without saying
+    between whom, which leaves an operator to work it out from thirty lines of
+    observations. Blindness had the same problem from the other direction: it
+    was inside `context`, indistinguishable from an ordinary sighting, and it
+    is the answer to the question a warden actually asks.
+    """
+
+    def _running(self, client) -> str:
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        return drill_id
+
+    def _explain(self, client, drill_id, person="emp:EMP-000"):
+        return client.get(
+            f"/api/evac/drills/{drill_id}/people/{person}/explain",
+            headers=OPERATOR).json()
+
+    def test_a_disputed_person_carries_the_competing_claims(self, client):
+        from app.core.ledger import EvidenceKind, Stance
+
+        drill_id = self._running(client)
+        ledger = client.app.state.registry.get(drill_id).ingestor.state.ledger
+        for identity in ("EMP-000", "EMP-001"):
+            for i in range(3):
+                ledger.record(subject="emp:EMP-000",
+                              kind=EvidenceKind.IDENTITY_CONFIRMED,
+                              ts_ms=T0 + i * 100, stance=Stance.SUPPORTS,
+                              identity=identity, source="cam-9",
+                              summary=f"claimed {identity}")
+
+        body = self._explain(client, drill_id)
+        assert body["is_disputed"] is True
+        assert body["disputes"]
+        assert set(body["disputes"][0]["identities"]) == {"EMP-000", "EMP-001"}
+
+    def test_blindness_is_lifted_out_of_the_context_pile(self, client):
+        from app.core.ledger import EvidenceKind, Stance
+
+        drill_id = self._running(client)
+        ledger = client.app.state.registry.get(drill_id).ingestor.state.ledger
+        ledger.record(subject="emp:EMP-000", kind=EvidenceKind.CAMERA_DEGRADED,
+                      ts_ms=T0, stance=Stance.CONTEXT, source="cam-9",
+                      summary="cam-9 offline")
+        ledger.record(subject="emp:EMP-000", kind=EvidenceKind.ZONE_SIGHTING,
+                      ts_ms=T0 + 100, stance=Stance.CONTEXT, source="cam-9",
+                      summary="seen on floor 2")
+
+        body = self._explain(client, drill_id)
+        assert [e["summary"] for e in body["blindness"]] == ["cam-9 offline"]
+        # Still in context too: this is a second view of the same evidence,
+        # not a move, and the narrative must stay complete.
+        assert any(e["summary"] == "cam-9 offline" for e in body["context"])
+
+    def test_an_ordinary_person_carries_neither(self, client):
+        body = self._explain(client, self._running(client))
+        assert body["disputes"] == []
+        assert body["blindness"] == []

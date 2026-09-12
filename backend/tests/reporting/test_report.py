@@ -707,3 +707,53 @@ class TestThePeopleWhoWereOnNobodysList:
         report = build_report(drill_with(people=2), now_ms=T0 + 120_000)
         assert report.unknown_by_zone == {}
         assert "unknown people          0" in "\n".join(report.render())
+
+
+class TestTheIdentitiesTheSystemCouldNotSettle:
+    """Invariant 3's only outcome, and no document mentioned it.
+
+    `EvidenceLedger.all_disputes` gives every identity the drill could not
+    decide, and nothing called it. The report said how many people needed
+    verification and never what the system could not decide about them, so a
+    safety officer reading it afterwards had no way to know two tracks had each
+    claimed the same person all drill.
+    """
+
+    def disputed(self, drill, gid="gp-7"):
+        from app.core.ledger import EvidenceKind, Stance
+
+        for identity, kind in (("EMP-000", EvidenceKind.IDENTITY_CONFIRMED),
+                               ("EMP-001", EvidenceKind.IDENTITY_CONFIRMED)):
+            for i in range(3):
+                drill.ingestor.state.ledger.record(
+                    subject=gid, kind=kind, ts_ms=T0 + i * 100,
+                    stance=Stance.SUPPORTS, identity=identity, source="cam-9",
+                    summary=f"claimed {identity}")
+        return drill
+
+    def test_the_dispute_reaches_the_report(self):
+        report = build_report(self.disputed(drill_with(people=2)),
+                              now_ms=T0 + 120_000)
+        assert len(report.identity_disputes) == 1
+        assert "EMP-000" in report.identity_disputes[0]
+        assert "EMP-001" in report.identity_disputes[0]
+
+    def test_it_is_named_by_track_rather_than_by_person(self):
+        # A disputed track is exactly one the system cannot attach to a person.
+        # Calling it by a name would be the adjudication invariant 3 forbids.
+        report = build_report(self.disputed(drill_with(people=2)),
+                              now_ms=T0 + 120_000)
+        assert report.identity_disputes[0].startswith("track gp-7")
+
+    def test_the_report_says_it_is_reported_and_not_resolved(self):
+        text = "\n".join(build_report(self.disputed(drill_with(people=2)),
+                                      now_ms=T0 + 120_000).render())
+        assert "Identities the system could not settle" in text
+        assert "Reported, not resolved" in text
+
+    def test_a_drill_with_no_disputes_says_nothing(self):
+        # A section that appears on every drill saying "none" would be noise;
+        # this one is a list of exceptions and stays absent when there are none.
+        report = build_report(drill_with(people=2), now_ms=T0 + 120_000)
+        assert report.identity_disputes == ()
+        assert "could not settle" not in "\n".join(report.render())

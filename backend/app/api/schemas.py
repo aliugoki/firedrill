@@ -130,6 +130,15 @@ class EvidenceOut(BaseModel):
     is_human: bool = False
 
 
+class DisputeOut(BaseModel):
+    """Two identities claimed for one track, reported and never adjudicated."""
+
+    subject: str
+    identities: list[str]
+    first_seen_ms: int
+    evidence: list[EvidenceOut]
+
+
 class ExplanationOut(BaseModel):
     subject: str
     decision: str | None
@@ -140,6 +149,15 @@ class ExplanationOut(BaseModel):
     supporting: list[EvidenceOut]
     contradicting: list[EvidenceOut]
     context: list[EvidenceOut]
+    disputes: list[DisputeOut] = []
+    """Who the competing claims are for. `is_disputed` said that there were
+    some and never which, so the drawer could say the system cannot settle this
+    person's identity without saying between whom -- and invariant 3's whole
+    point is that a conflict is reported rather than resolved."""
+    blindness: list[EvidenceOut] = []
+    """Everything here that means "we could not see". Already inside `context`
+    and indistinguishable there from an ordinary observation. It is the answer
+    to the question a warden actually asks about somebody unaccounted for."""
 
 
 class WardenActionIn(BaseModel):

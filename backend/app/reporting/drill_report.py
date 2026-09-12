@@ -100,6 +100,11 @@ class DrillReport:
     blind_fraction: float = 0.0
     longest_blind_s: float = 0.0
     health_caveat: str | None = None
+    identity_disputes: tuple = ()
+    """Every identity the drill could not settle, in words. Invariant 3 says a
+    conflict is reported and never adjudicated; reporting it is what this is,
+    and the report said only how many people needed verification, never what
+    the system could not decide about them."""
     events_dropped: int = 0
     """Events that never reached the database and are not coming back. Zero on
     every drill so far, and the report says so out loud rather than omitting the
@@ -157,6 +162,16 @@ class DrillReport:
             f"  false unaccounted       {len(self.false_unaccounted)}   "
             "(warden confirmed, system could not)",
         ]
+
+        if self.identity_disputes:
+            lines.append("")
+            lines.append("  Identities the system could not settle:")
+            for line in self.identity_disputes:
+                lines.append(f"    - {line}")
+            lines.append("    Reported, not resolved. Invariant 3 forbids the "
+                         "software picking a winner;")
+            lines.append("    a human decides, and the record shows what they "
+                         "were deciding between.")
 
         if self.false_accounted:
             lines.append("")
@@ -315,6 +330,16 @@ def build_report(
 
     overrides = len(audit.overrides(drill.drill_id)) if audit else 0
 
+    # `all_disputes` existed and nothing called it, so the one outcome
+    # invariant 3 produces reached no document. Named by track rather than by
+    # person on purpose: a disputed track is exactly one the system cannot
+    # attach to a person, and calling it by a name would be the adjudication
+    # the invariant forbids.
+    disputes = tuple(
+        f"track {d.subject}: claimed as {' and '.join(d.identities)}, "
+        f"first at {d.first_seen_ms}"
+        for d in drill.ingestor.state.ledger.all_disputes())
+
     # A store that dropped events makes this report unverifiable, and until now
     # the number lived only in `StoreStats`. A drill with no store at all has
     # dropped nothing -- it never promised to keep anything -- and says so
@@ -378,6 +403,7 @@ def build_report(
         blind_fraction=board.health.blind_fraction,
         longest_blind_s=board.health.longest_blind_ms / 1000,
         health_caveat=board.health.caveat(),
+        identity_disputes=disputes,
         events_dropped=dropped,
         validation=validation,
         thresholds_calibrated=drill.identity_config.calibrated,

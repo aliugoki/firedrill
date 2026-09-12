@@ -352,3 +352,29 @@ export function wardenContact(panel, t, { silenceMs = WARDEN_SILENCE_MS } = {}) 
   const seconds = Math.round(silent / 1000);
   return { tone: 'silent', text: `${t('warden.silent_for')} ${seconds}s` };
 }
+
+/**
+ * The two things the explain drawer showed a reader only by implication.
+ *
+ * `is_disputed` was a boolean: the drawer could say the system cannot settle
+ * this person's identity without saying between whom, and naming the competing
+ * claims is the whole of what invariant 3 asks for. A conflict is reported and
+ * never adjudicated, and reporting it means saying what it is.
+ *
+ * Blindness arrived inside `context`, indistinguishable from an ordinary
+ * observation. "The camera covering their floor was down for two minutes" is
+ * the answer to the question a warden actually asks about somebody unaccounted
+ * for, and it was one line among thirty.
+ */
+export function explainSummary(explanation, t) {
+  if (!explanation) return { disputes: [], blindness: [] };
+  const disputes = (explanation.disputes || []).map((dispute) => ({
+    tone: 'yellow',
+    text: `${t('explain.claimed_as')} ${(dispute.identities || []).join(' / ')}`,
+  }));
+  const blindness = (explanation.blindness || []).map((item) => ({
+    tone: 'orange',
+    text: item.summary,
+  }));
+  return { disputes, blindness };
+}

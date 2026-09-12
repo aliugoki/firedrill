@@ -14,6 +14,7 @@ import {
   drillControl,
   composer,
   wardenContact,
+  explainSummary,
 } from '../js/render.js';
 
 const t = createTranslator('en');
@@ -523,5 +524,40 @@ describe('a warden device that has gone quiet', () => {
                                { silenceMs: 10_000 }).tone, 'silent');
     assert.equal(wardenContact({ warden_silent_ms: 20_000 }, t,
                                { silenceMs: 60_000 }), null);
+  });
+});
+
+describe('what the explain drawer was only implying', () => {
+  const t = (key) => key;
+
+  it('names the competing claims rather than saying disputed', () => {
+    // Invariant 3: a conflict is reported and never adjudicated, and reporting
+    // it means saying what it is. The drawer had a boolean.
+    const { disputes } = explainSummary({
+      is_disputed: true,
+      disputes: [{ subject: 'gp-7', identities: ['EMP-001', 'EMP-002'] }],
+    }, t);
+    assert.equal(disputes.length, 1);
+    assert.match(disputes[0].text, /EMP-001 \/ EMP-002/);
+  });
+
+  it('lifts blindness out of the ordinary observations', () => {
+    // "The camera covering their floor was down" is the answer to the question
+    // a warden asks, and it arrived as one line among thirty.
+    const { blindness } = explainSummary({
+      blindness: [{ summary: 'cam-4 offline for 2 minutes' }],
+      context: [{ summary: 'cam-4 offline for 2 minutes' }],
+    }, t);
+    assert.deepEqual(blindness.map((b) => b.text),
+                     ['cam-4 offline for 2 minutes']);
+  });
+
+  it('says nothing about a person with neither', () => {
+    const summary = explainSummary({ narrative: ['seen at 10:42'] }, t);
+    assert.deepEqual(summary, { disputes: [], blindness: [] });
+  });
+
+  it('survives an explanation that never arrived', () => {
+    assert.deepEqual(explainSummary(null, t), { disputes: [], blindness: [] });
   });
 });

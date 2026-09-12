@@ -117,6 +117,11 @@ main { padding: 16px; max-width: 1600px; margin: 0 auto; }
 /* A warden's tablet that has gone quiet is not a muted footnote: the zone
    looks unswept either way, and only this says which kind of unswept. */
 .row .reason.silent   { color: var(--orange); font-weight: 600; }
+/* The same emphasis inside the explain drawer, where a disagreement the system
+   cannot settle must not read as one more line of narration. */
+.drawer .reason { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.drawer .reason.yellow { color: var(--yellow); }
+.drawer .reason.orange { color: var(--orange); }
 .row .reason.unheard  { color: var(--orange); font-weight: 600; }
 
 .chip {

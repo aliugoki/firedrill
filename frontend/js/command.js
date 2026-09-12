@@ -13,7 +13,7 @@ import { Api, Freshness } from './api.js';
 import { createTranslator, isRtl, formatDuration } from './i18n.js';
 import {
   drillControl, escapeHtml, exitPressure, healthLine, orderForWarden,
-  staleness, tiles, timingLine, verdict, wardenContact,
+  explainSummary, staleness, tiles, timingLine, verdict, wardenContact,
 } from './render.js';
 
 const params = new URLSearchParams(location.search);
@@ -294,7 +294,15 @@ async function openDrawer(personRef) {
   const body = host.querySelector('pre');
   try {
     const explanation = await api.explain(drillId, personRef);
-    if (body.isConnected) body.textContent = explanation.narrative.join('\n');
+    if (!body.isConnected) return;
+    // Above the narrative, not inside it. A reader scanning thirty lines of
+    // observations should not have to find the disagreement themselves.
+    const { disputes, blindness } = explainSummary(explanation, t);
+    const banners = [...disputes, ...blindness].map(
+      (item) => `<div class="reason ${escapeHtml(item.tone)}">${
+        escapeHtml(item.text)}</div>`).join('');
+    if (banners) body.insertAdjacentHTML('beforebegin', banners);
+    body.textContent = explanation.narrative.join('\n');
   } catch (error) {
     if (body.isConnected) body.textContent = `could not load: ${error.message}`;
   }

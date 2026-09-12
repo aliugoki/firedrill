@@ -346,7 +346,13 @@ def create_app(registry: DrillRegistry | None = None,
             narrative=explanation.narrate(),
             supporting=[_evidence(e) for e in explanation.supporting],
             contradicting=[_evidence(e) for e in explanation.contradicting],
-            context=[_evidence(e) for e in explanation.context])
+            context=[_evidence(e) for e in explanation.context],
+            disputes=[schemas.DisputeOut(
+                subject=d.subject, identities=list(d.identities),
+                first_seen_ms=d.first_seen_ms,
+                evidence=[_evidence(e) for e in d.evidence])
+                for d in explanation.disputes],
+            blindness=[_evidence(e) for e in explanation.blindness])
 
     @app.get("/api/evac/drills/{drill_id}/report",
              response_model=schemas.DrillReportOut, tags=["board"])
