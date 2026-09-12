@@ -5,9 +5,14 @@ and reporting, and the accountability path must work with zero Internet. So
 replication is one-directional, asynchronous, and never on the critical path:
 nothing an edge node decides waits for central to acknowledge it.
 
-Durability comes from the vendored DeepStream outbox, a SQLite WAL store with
-`synchronous=FULL`. That setting fsyncs on commit, which is slower and is the
-point: an event that reached the outbox survives the power going out.
+Durability comes from a SQLite WAL store with `synchronous=FULL`. That setting
+fsyncs on commit, which is slower and is the point: an event that reached the
+outbox survives the power going out.
+
+The design is the vendored DeepStream outbox's; the code is not. This said
+durability "comes from the vendored DeepStream outbox" and nothing here imports
+it, which would send anyone chasing a buffering bug to a file that is not in
+the path. See `docs/EVAC120_PROVENANCE.md`.
 
 **Recovery point objective.** For anything committed to the outbox, RPO is zero
 — it survives process death and power loss and is replayed on restart. The only
@@ -102,12 +107,16 @@ def _widen_uniqueness(conn: sqlite3.Connection) -> None:
 
 @dataclass
 class Outbox:
-    """Durable local buffer. A thin, testable wrapper over the vendored store.
+    """Durable local buffer, built to the vendored store's design and not on it.
 
     The vendored module reads its directory from a module-level global at import
-    time, which is a trap documented in docs/EVAC120_PROVENANCE.md. This owns
-    its own connection instead so several drills, or several tests, cannot
-    collide in one process.
+    time, which is a trap documented in docs/EVAC120_PROVENANCE.md, so this owns
+    its own connection and its own schema: several drills, or several tests,
+    cannot collide in one process. What carried over is the WAL journal and
+    `synchronous=FULL`, which are the reason the buffer is worth having.
+
+    It used to call itself "a thin wrapper over the vendored store", which it
+    has never been.
     """
 
     path: Path

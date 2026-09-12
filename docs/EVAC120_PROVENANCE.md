@@ -26,7 +26,7 @@ Source revisions at copy time, 2026-09-10:
 
 | Vendored as | Origin | Loc | Why |
 |---|---|---|---|
-| `visiontrack/zones_math.py` | `backend/app/modules/floor_plans/zones_math.py` | 120 | Ray-cast point-in-polygon and area-weighted centroid. Every zone decision rests on it. |
+| `visiontrack/zones_math.py` | `backend/app/modules/floor_plans/zones_math.py` | 120 | Ray-cast point-in-polygon and area-weighted centroid. |
 | `visiontrack/zone_resolve.py` | `backend/app/modules/analytics/zone_resolve.py` | 183 | Projects a bounding box to a floor point through the camera homography, then resolves which zones contain it. |
 | `visiontrack/occupancy.py` | `backend/app/modules/analytics/occupancy.py` | 143 | Per-zone head counts, keeping known and unknown people separate. |
 | `visiontrack/dwell.py` | `backend/app/modules/analytics/dwell.py` | 331 | Interval union and per-zone durations. The union is what stops a person being double-counted across two cameras. |
@@ -54,7 +54,7 @@ code rather than against the Phase 0 intent:
 
 | Vendored | Used by | Status |
 |---|---|---|
-| `zones_math.py` | `app/sync/geometry.py`, and every polygon test | **In use** |
+| `zones_math.py` | `app/simulator/site.py`, and every polygon test | **In use** |
 | `dwell.py` | `app/ingest/bottlenecks.py`, for the interval union | **In use** |
 | `zone_resolve.py` | nothing yet | Waiting on the DeepStream probe, which needs it to project a bounding box to a floor point |
 | `occupancy.py` | nothing | The bottleneck panel counts from the event stream instead, which cannot disagree with the board |
@@ -64,6 +64,22 @@ code rather than against the Phase 0 intent:
 Two of six are used, one is waiting on blocked work, and three are not. That is
 worth stating plainly rather than leaving the Phase 0 rationale standing as
 though it still described the code.
+
+**No vendored geometry is in the production path.** `zones_math` resolves
+points against polygons for the simulator's site model; the running system
+never does that arithmetic, because the DeepStream pipeline decides the zone
+and puts `zone_id` in the event payload. The Phase 0 line that "every zone
+decision rests on it" described a design where EVAC-120 projected bounding
+boxes itself, which is the work `zone_resolve.py` is still waiting for.
+
+This table is now derived from the code by
+`TestTheUsageReviewIsCheckedRatherThanTrusted` in
+`backend/tests/test_vendor_integrity.py`, which fails when a module is credited
+to a file that does not import it, or is marked in use when nothing imports it
+at all. The first version of this review said `zones_math` was used by
+`app/sync/geometry.py`, which mentions the vendored coordinate convention in a
+comment and imports nothing. A review that is only true on the day it is
+written is the Phase 0 rationale again with a later date on it.
 
 `heatmap.py` and `rule_state.py` should be removed when someone is confident
 nothing will want them. They are kept for now because the DeepStream work is
@@ -85,11 +101,27 @@ exactly what they were brought in to do.
 | Vendored as | Origin | Loc | Why |
 |---|---|---|---|
 | `deepstream/recognition.py` | `utils/recognition.py` | 192 | `Gallery` matmul with score and margin gates, and `TrackIdentityManager` per-track voting with sticky commit and TTL eviction. The starting point for `app/core/identity_fsm.py`. |
-| `deepstream/outbox.py` | `utils/outbox.py` | 96 | SQLite WAL store-and-forward with `synchronous=FULL`, so buffered events survive power loss. Edge-to-central replication in Phase 3. |
+| `deepstream/outbox.py` | `utils/outbox.py` | 96 | SQLite WAL store-and-forward with `synchronous=FULL`, so buffered events survive power loss. Read as a design, **not imported**: see below. |
 
 ### Changes on copy
 
 None. Both files are byte-identical below the provenance header.
+
+### What is actually used
+
+Neither. `recognition.py` was the starting point for `app/core/identity_fsm.py`
+and the limits recorded at the bottom of this file are why that is a rewrite
+rather than a wrapper.
+
+`outbox.py` is the one worth being explicit about, because the code that
+replaced it said otherwise. `app/ingest/replication.py` described its `Outbox`
+as "a thin, testable wrapper over the vendored store" and claimed durability
+came from it. It does not import it. The vendored module reads its directory
+from a module-level global at import time -- defect 2 below -- so `replication`
+owns its own connection and its own `CREATE TABLE`, and what it took from the
+vendored file is the WAL and `synchronous=FULL` design rather than the code.
+The difference matters: a reader chasing a buffering bug upstream would be
+looking at a file that is not in the path.
 
 ### Deferred to Phase 2
 

@@ -20,12 +20,13 @@ Phase 1 lands, in dependency order:
     timing.py             P50/P90/P95/P99 per person, zone, floor, building
     roster.py             expected set from FaceTrack plus visitor sign-in
 
-`identity_fsm.py` extends the vendored `TrackIdentityManager`
-(`app/vendor/deepstream/recognition.py`), which today has only two identity
-outcomes: committed or nothing. That two-state model is the gap EVAC-120 closes.
-It is also keyed on a camera-local tracker object id; EVAC-120 keys identity on
-the **global person id**, so the vendored class becomes an input to the FSM
-rather than the FSM itself.
+`identity_fsm.py` was written from the vendored `TrackIdentityManager`
+(`app/vendor/deepstream/recognition.py`) and imports nothing from it. That class
+has two identity outcomes, committed or nothing, and the two-state model is the
+gap EVAC-120 closes. It is also keyed on a camera-local tracker object id;
+EVAC-120 keys identity on the **global person id**. Extending it was the Phase 0
+plan and is not what happened: the voting and sticky-commit ideas carried over,
+the code did not, and the vendored copy is not in the running path.
 
 The nine invariants. Every module here, and every test, is written to them:
 
