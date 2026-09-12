@@ -235,6 +235,20 @@ class Refusal(BaseModel):
 class WardenSyncOut(BaseModel):
     accepted: int
     duplicates: int
+    settled: list[int] = []
+    """The device sequence numbers this server is now holding: everything it
+    accepted, plus the duplicates it already had.
+
+    The device deletes what it believes landed, and it had to infer that from
+    "everything I sent that was not refused". That reads an unrecognised
+    response as total success -- a proxy that rewrote the body, a captive
+    portal at the assembly point answering 200, a field renamed in a later
+    version -- and deletes a warden's whole queue. `queue.js` says "remove only
+    what the server confirmed"; a filter over everything sent is the same
+    clear-on-success wearing a filter.
+
+    Duplicates are in here on purpose. The server already has them, so the
+    device keeping them would resend forever."""
     refusals: list[Refusal] = []
     """Which actions were refused, keyed by the device's own sequence number.
 

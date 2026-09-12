@@ -499,6 +499,9 @@ def create_app(registry: DrillRegistry | None = None,
         """
         drill = drill_or_404(drill_id, caller)
         accepted = duplicates = 0
+        # What this server ends up holding, by the device's own sequence
+        # number, so the device deletes exactly that and nothing else.
+        settled: list[int] = []
         refusals: list[schemas.Refusal] = []
 
         def refuse(item, reason: str) -> None:
@@ -530,10 +533,12 @@ def create_app(registry: DrillRegistry | None = None,
             queue.heard_from(now_ms(), item.zone_id)
             if item.device_seq < queue.next_seq:
                 duplicates += 1
+                settled.append(item.device_seq)
                 continue
             queue.next_seq = item.device_seq
             drill.record_warden_action(action)
             accepted += 1
+            settled.append(item.device_seq)
 
             # Finishing a sweep and escalating are single consequential acts a
             # review asks about by name. Confirmations are not logged one by
@@ -563,7 +568,8 @@ def create_app(registry: DrillRegistry | None = None,
                 refused=[r.reason for r in refusals])
 
         return schemas.WardenSyncOut(
-            accepted=accepted, duplicates=duplicates, refusals=refusals,
+            accepted=accepted, duplicates=duplicates, settled=sorted(settled),
+            refusals=refusals,
             rejected=[f"seq {r.device_seq}: {r.reason}" for r in refusals])
 
     @app.post("/api/evac/drills/{drill_id}/warden/headcount",

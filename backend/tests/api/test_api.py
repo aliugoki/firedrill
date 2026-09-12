@@ -971,3 +971,57 @@ class TestARosterWithHolesIsFlaggedAtCreation:
                          json={"tenant_id": "t", "site_id": "site-1",
                                "name": "Q3"}).json()
         assert body["roster_gaps"]["no_assembly_zone"] == 3
+
+
+class TestTheDeviceIsToldWhichActionsLanded:
+    """It used to be told only how many.
+
+    The device deletes what it believes landed, and with a count it could only
+    infer "everything I sent that was not refused". `queue.js` says "remove
+    only what the server confirmed"; a filter over everything sent is the same
+    clear-on-success wearing a filter, and any response the device does not
+    understand carries no refusals and reads as total success.
+    """
+
+    def _running(self, client) -> str:
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        return drill_id
+
+    def action(self, seq, subject="emp:EMP-000", zone="assembly-north",
+               kind="CONFIRM_PRESENT"):
+        return {"kind": kind, "warden_id": "warden-7", "device_id": "tablet-3",
+                "zone_id": zone, "ts_ms": T0 + seq, "device_seq": seq,
+                "subject": subject}
+
+    def sync(self, client, drill_id, actions):
+        return client.post(f"/api/evac/drills/{drill_id}/warden/sync",
+                           headers=WARDEN, json={"actions": actions}).json()
+
+    def test_the_accepted_sequences_come_back(self, client):
+        drill_id = self._running(client)
+        body = self.sync(client, drill_id,
+                         [self.action(1), self.action(2)])
+        assert body["settled"] == [1, 2]
+        assert body["accepted"] == 2
+
+    def test_a_refused_action_is_not_settled(self, client):
+        # The one a warden must keep, so the screen can say it never landed.
+        drill_id = self._running(client)
+        body = self.sync(client, drill_id, [
+            self.action(1),
+            self.action(2, zone="assembly-elsewhere"),
+        ])
+        assert body["settled"] == [1]
+        assert [r["device_seq"] for r in body["refusals"]] == [2]
+
+    def test_a_duplicate_counts_as_settled(self, client):
+        # The server already holds it, so a device that kept it would resend
+        # forever.
+        drill_id = self._running(client)
+        self.sync(client, drill_id, [self.action(1), self.action(2)])
+        body = self.sync(client, drill_id, [self.action(1), self.action(2)])
+
+        assert body["duplicates"] == 2
+        assert body["accepted"] == 0
+        assert body["settled"] == [1, 2]

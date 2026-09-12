@@ -219,3 +219,71 @@ describe('a device that cannot save at all', () => {
     await assert.rejects(() => deadStorage().depth(), /storage is denied/);
   });
 });
+
+describe('deleting only what the server says it holds', () => {
+  /**
+   * `queue.js` says "remove only what the server confirmed" and then removed
+   * everything it had sent that was not explicitly refused. That is the same
+   * clear-on-success the sentence forbids, wearing a filter: any response the
+   * device does not understand carries no refusals, so it reads as total
+   * success and empties a warden's queue.
+   */
+  const sent = [
+    { device_seq: 1, kind: 'CONFIRM_PRESENT' },
+    { device_seq: 2, kind: 'CONFIRM_PRESENT' },
+    { device_seq: 3, kind: 'NOT_HERE' },
+  ];
+
+  it('acknowledges the sequences the server settled', () => {
+    const out = reconcileSync(sent, {
+      accepted: 2, duplicates: 0, settled: [1, 3], refusals: [],
+    });
+    assert.deepEqual(out.acknowledged, [1, 3]);
+  });
+
+  it('keeps one the server did not answer for', () => {
+    // Neither settled nor refused. Deleting it would lose a confirmation on
+    // the strength of a silence.
+    const out = reconcileSync(sent, {
+      accepted: 2, duplicates: 0, settled: [1, 3], refusals: [],
+    });
+    assert.deepEqual(out.unanswered.map((r) => r.device_seq), [2]);
+  });
+
+  it('ignores a sequence that was not in this batch', () => {
+    // Acting on a number this sync did not send means acting on somebody
+    // else's answer.
+    const out = reconcileSync(sent, {
+      accepted: 1, duplicates: 0, settled: [1, 99], refusals: [],
+    });
+    assert.deepEqual(out.acknowledged, [1]);
+  });
+
+  it('counts a duplicate as settled', () => {
+    // The server already has it, so keeping it means resending forever.
+    const out = reconcileSync(sent, {
+      accepted: 0, duplicates: 3, settled: [1, 2, 3], refusals: [],
+    });
+    assert.deepEqual(out.acknowledged, [1, 2, 3]);
+  });
+
+  it('deletes nothing when the response is not recognisable', () => {
+    // A proxy that rewrote the body, or a captive portal at the assembly point
+    // answering 200. Emptying a queue on that basis is the worst outcome
+    // available, so nothing goes and the next sync tries again.
+    const out = reconcileSync(sent, { message: 'welcome to guest wifi' });
+    assert.deepEqual(out.acknowledged, []);
+    assert.equal(out.unanswered.length, 3);
+  });
+
+  it('an older server with no settled list still works', () => {
+    // The count proves this came from something that knows the contract, so
+    // "everything not refused" is the best reading available and losing a
+    // warden's work during an upgrade is the thing being avoided.
+    const out = reconcileSync(sent, {
+      accepted: 2, duplicates: 0, refusals: [{ device_seq: 3, reason: 'no' }],
+    });
+    assert.deepEqual(out.acknowledged, [1, 2]);
+    assert.deepEqual(out.refused.map((r) => r.device_seq), [3]);
+  });
+});

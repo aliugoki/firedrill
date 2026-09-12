@@ -207,14 +207,39 @@ export function reconcileSync(sent, response) {
       if (match) refusedSeqs.add(Number(match[1]));
     }
   }
-  const acknowledged = sent
-    .map((row) => row.device_seq)
-    .filter((seq) => !refusedSeqs.has(seq));
+
+  const sentSeqs = new Set(sent.map((row) => row.device_seq));
+  let acknowledged;
+
+  if (Array.isArray(response.settled)) {
+    // What the server says it is holding. Intersected with what this sync
+    // sent, because deleting a row on the strength of a number that was not in
+    // this batch would act on somebody else's answer.
+    acknowledged = response.settled.filter((seq) => sentSeqs.has(seq));
+  } else if (typeof response.accepted === 'number') {
+    // An older edge node: no per-action answer exists, so the best available
+    // reading is everything not explicitly refused. Reachable only because the
+    // count proves this came from a server that knows this contract.
+    acknowledged = sent
+      .map((row) => row.device_seq)
+      .filter((seq) => !refusedSeqs.has(seq));
+  } else {
+    // Nothing recognisable. A proxy that rewrote the body, a captive portal at
+    // the assembly point answering 200, a field renamed in a version nobody
+    // told this device about. Acknowledging on that basis empties a warden's
+    // queue on the strength of a response that may not be from the API at all,
+    // so nothing is deleted and the next sync tries again.
+    acknowledged = [];
+  }
+
   return {
     acknowledged,
+    unanswered: sent.filter((row) => !acknowledged.includes(row.device_seq)
+                                     && !refusedSeqs.has(row.device_seq)),
     refused: sent.filter((row) => refusedSeqs.has(row.device_seq)),
     refusalMessages: (response.refusals || []).map(
       (refusal) => `seq ${refusal.device_seq}: ${refusal.reason}`,
     ).concat(response.refusals ? [] : response.rejected || []),
   };
 }
+
