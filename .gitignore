@@ -34,3 +34,6 @@ dist/
 # ===== Editor / OS =====
 .DS_Store
 *.swp
+
+# Chrome's profile for the browser smoke test, created and removed per run.
+backend/tests/smoke/.chrome-profile/
