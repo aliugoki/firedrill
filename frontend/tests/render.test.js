@@ -16,6 +16,8 @@ import {
   wardenContact,
   explainSummary,
   needsAHuman,
+  lostSightBecause,
+  rowNotes,
 } from '../js/render.js';
 
 const t = createTranslator('en');
@@ -596,5 +598,46 @@ describe('the people no camera can settle', () => {
       { colour: 'GREEN', display_name: 'Bbb', needs_human_to_account: true },
     ]);
     assert.deepEqual(ordered.map((r) => r.display_name), ['Zzz', 'Aaa', 'Bbb']);
+  });
+});
+
+describe('why the system lost sight of somebody', () => {
+  // A row that says "not seen for 90 seconds" invites the reading that the
+  // person moved. Often they did not and the camera stopped working, and those
+  // call for opposite responses: one is a search, the other is a caveat.
+  // `health.py` names this the question that matters at the assembly point,
+  // and `blinded_targets_at` answered it while no screen asked.
+  const t = (key) => key;
+
+  it('names the cameras that were dark', () => {
+    const why = lostSightBecause(
+      { state: 'UNCERTAIN', blinded_by: ['cam-4', 'cam-9'] }, t);
+    assert.match(why.text, /cam-4, cam-9/);
+    assert.equal(why.tone, 'orange');
+  });
+
+  it('says nothing about somebody already accounted for', () => {
+    // It lost sight of them and then found them; the reason has stopped
+    // changing what anybody does.
+    assert.equal(lostSightBecause(
+      { state: 'ACCOUNTED', blinded_by: ['cam-4'] }, t), null);
+  });
+
+  it('says nothing when every camera was working', () => {
+    assert.equal(lostSightBecause({ state: 'UNACCOUNTED' }, t), null);
+  });
+
+  it('both notes appear under one row, worst first', () => {
+    // One renderer for both screens: a second copy of the loop is where the
+    // warden's view and the commander's view start to disagree.
+    const notes = rowNotes({
+      state: 'UNACCOUNTED', needs_human_to_account: true,
+      blinded_by: ['cam-4'],
+    }, t);
+    assert.deepEqual(notes.map((n) => n.tone), ['yellow', 'orange']);
+  });
+
+  it('an ordinary row gets no notes at all', () => {
+    assert.deepEqual(rowNotes({ state: 'UNCERTAIN' }, t), []);
   });
 });

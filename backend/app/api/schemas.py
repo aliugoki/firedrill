@@ -56,6 +56,10 @@ class PersonRowOut(BaseModel):
     last_camera_id: str | None = None
     last_seen_ms: int | None = None
     needs_human_to_account: bool = False
+    blinded_by: list[str] = []
+    """Cameras that were dark when this person was last seen, or that are
+    blinding them now. The answer to why the system lost sight of somebody, as
+    opposed to the fact that it did."""
 
 
 class HealthOut(BaseModel):

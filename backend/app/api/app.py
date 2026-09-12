@@ -754,7 +754,8 @@ def _row_out(row) -> schemas.PersonRowOut:
         blockers=list(row.decision.blockers),
         last_zone_id=row.last_zone_id, last_camera_id=row.last_camera_id,
         last_seen_ms=row.last_seen_ms,
-        needs_human_to_account=row.needs_human_to_account)
+        needs_human_to_account=row.needs_human_to_account,
+        blinded_by=list(row.blinded_by))
 
 
 def _health(board) -> schemas.HealthOut:

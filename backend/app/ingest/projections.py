@@ -225,6 +225,20 @@ class PersonRow:
     identity_state: IdentityState | None
     presence_state: PresenceState | None
     needs_human_to_account: bool
+    blinded_by: tuple[str, ...] = ()
+    """Cameras that were dark when this person was last seen, or that are
+    blinding them now.
+
+    `health.py` opens by listing the three questions intervals can answer that
+    a flag cannot, and calls this one "the one that matters at the assembly
+    point": a warden asking why someone is unaccounted deserves "the camera
+    covering their floor was down for two minutes", not "the system is
+    currently healthy". `blinded_targets_at` answered it and nothing asked.
+
+    Two sources, because they are different facts. The health log knows which
+    cameras were dark at the moment of the last sighting, including ones that
+    never recorded anything about this person. `PersonPresence.degraded_by`
+    knows which cameras are suspending their grace clock right now."""
 
     @property
     def state(self) -> AccountabilityState:
@@ -389,6 +403,7 @@ def build_board(
         presence = identity = None
         last_zone = last_camera = None
         last_seen = None
+        blinded: set[str] = set()
         for gid in resolution.claimed_by:
             candidate_presence = state.presence.get(gid)
             if (candidate_presence.last_sighting_ms or 0) >= (last_seen or 0):
@@ -398,6 +413,7 @@ def build_board(
                 known = candidate_presence.last_known
                 last_zone = known.zone_id if known else None
                 last_camera = known.camera_id if known else None
+            blinded |= set(candidate_presence.degraded_by)
 
         rows.append(PersonRow(
             person_ref=entry.person_ref, display_name=entry.display_name,
@@ -407,7 +423,10 @@ def build_board(
             last_camera_id=last_camera, last_seen_ms=last_seen,
             identity_state=identity.state if identity else None,
             presence_state=presence.state if presence else None,
-            needs_human_to_account=entry.needs_human_to_account))
+            needs_human_to_account=entry.needs_human_to_account,
+            blinded_by=tuple(sorted(
+                blinded | (state.health.blinded_targets_at(last_seen)
+                           if last_seen is not None else set())))))
 
     start = state.drill_started_ms or now_ms
     return LiveBoard(

@@ -402,3 +402,36 @@ export function explainSummary(explanation, t) {
   }));
   return { disputes, blindness };
 }
+
+/**
+ * Why the system lost sight of somebody, as opposed to the fact that it did.
+ *
+ * A row that says "not seen for 90 seconds" invites the reading that the
+ * person moved. Often the person did not move and the camera stopped working,
+ * and those call for opposite responses: one is a search, the other is a
+ * caveat on the board. `health.py` names this the question that matters at the
+ * assembly point and the answer reached no screen.
+ *
+ * Not shown for somebody already accounted for. The system lost sight of them
+ * and then found them, and the reason no longer changes what anyone does.
+ */
+export function lostSightBecause(row, t) {
+  if (!row || row.state === 'ACCOUNTED') return null;
+  const cameras = row.blinded_by || [];
+  if (!cameras.length) return null;
+  return {
+    tone: 'orange',
+    text: `${t('board.blinded_by')} ${cameras.join(', ')}`,
+  };
+}
+
+/**
+ * Every note that belongs under a person's row, in the order they matter.
+ *
+ * One function rather than one per note, because each screen renders them in
+ * the same place and a second copy of the loop is where the two screens start
+ * to disagree about what a warden sees and what a commander sees.
+ */
+export function rowNotes(row, t) {
+  return [needsAHuman(row, t), lostSightBecause(row, t)].filter(Boolean);
+}

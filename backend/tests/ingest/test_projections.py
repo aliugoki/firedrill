@@ -457,3 +457,70 @@ class TestWhoIsNotOnTheBoardAtAll:
         board = self.board_for(everyone)
         assert board.expected == 3
         assert board.excluded_from_the_count == {}
+
+
+class TestWhyTheSystemLostSightOfSomebody:
+    """`health.py` opens by naming three questions a flag cannot answer and
+    calls this one "the one that matters at the assembly point": a warden
+    asking why somebody is unaccounted deserves "the camera covering their
+    floor was down for two minutes", not "the system is currently healthy".
+
+    `blinded_targets_at` answered it and nothing asked. `PersonPresence
+    .degraded_by` -- which cameras are suspending a person's grace clock right
+    now -- was written and read only by its own bookkeeping.
+    """
+
+    def seen(self, ingestor, gid="gp-1", emp="EMP-1", start=T0 + 1_000):
+        """Observed on a floor rather than at an assembly point.
+
+        Somebody already accounted for is not who this is about: the question
+        is why the system lost sight of a person it has not settled.
+        """
+        ingestor.feed(ev(EventType.DRILL_STARTED, T0 - 1_000,
+                         kind=SourceKind.SYSTEM, source="system"))
+        for i in range(3):
+            ingestor.feed(ev(EventType.FACE_OBSERVED, start + i * 100, gid,
+                             {"candidate_id": emp, "score": 0.85,
+                              "margin": 0.4, "quality": 0.9,
+                              "camera_id": "cam-9",
+                              "association": "SHARED_TRACK"}))
+        ingestor.feed(ev(EventType.TRACK_UPDATED, start + 10_000, gid,
+                         {"zone_id": "floor-2", "zone_kind": "FLOOR",
+                          "camera_id": "cam-9"}))
+
+    def board_for(self, ingestor, now_ms=T0 + 600_000):
+        return build_board(ingestor.state,
+                           roster_of(("EMP-1", "A", "north", "Eng", True)),
+                           now_ms=now_ms)
+
+    def test_a_camera_dark_at_the_last_sighting_is_named(self, ingestor):
+        from app.ingest.health import Component
+
+        self.seen(ingestor)
+        ingestor.state.health.degrade(Component.CAMERA, "cam-9", T0, "offline")
+        assert self.board_for(ingestor).rows[0].blinded_by == ("cam-9",)
+
+    def test_a_working_camera_leaves_the_row_quiet(self, ingestor):
+        self.seen(ingestor)
+        assert self.board_for(ingestor).rows[0].blinded_by == ()
+
+    def test_an_outage_that_closed_before_the_sighting_is_not_named(self,
+                                                                    ingestor):
+        # The system could see when it last saw them, so the camera is not why
+        # it lost them and saying so would send somebody the wrong way.
+        from app.ingest.health import Component
+
+        ingestor.state.health.degrade(Component.CAMERA, "cam-9", T0 - 60_000,
+                                      "offline")
+        ingestor.state.health.recover(Component.CAMERA, "cam-9", T0 - 30_000)
+        self.seen(ingestor)
+        assert self.board_for(ingestor).rows[0].blinded_by == ()
+
+    def test_a_camera_blinding_them_now_counts_too(self, ingestor):
+        # A different fact from the one above: this camera may never have
+        # recorded anything about this person, and it is the reason their
+        # grace clock is suspended.
+        self.seen(ingestor)
+        ingestor.state.presence.mark_camera_degraded("cam-9", T0 + 30_000,
+                                                     "offline")
+        assert "cam-9" in self.board_for(ingestor).rows[0].blinded_by
