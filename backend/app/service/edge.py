@@ -59,6 +59,12 @@ class EdgeNode:
     #: a promise rather than a control, and until this ran on a schedule that
     #: is what it was: nothing outside its own tests ever called `verify`.
     retention_report: dict = field(default_factory=dict)
+    #: What deletes the bytes. None until a producer of biometric material
+    #: exists, which is blocked behind the P2.3b segfault. `purge` refuses to
+    #: mark anything removed without one rather than recording a deletion
+    #: nobody performed, so the day the first face crop is tracked the node
+    #: reports it as unremovable instead of quietly keeping it forever.
+    retention_remover: object | None = None
 
     @property
     def is_complete(self) -> bool:
@@ -135,6 +141,16 @@ class EdgeNode:
             "retention_compliant": self.retention_report.get("compliant", True),
             "retention_overdue": self.retention_report.get("overdue", 0),
             "retention_held": len(self.retention.held()),
+            # Items that were due and could not be deleted because no remover
+            # is configured. Zero today because nothing produces biometric
+            # material yet, and the number that says so the moment one does.
+            "retention_unremovable": len(
+                self.retention_report.get("unremovable", ())),
+            # The worst case a data-protection review asks about. Computed by
+            # the policy since it was written and reported nowhere.
+            "retention_longest_biometric_life_s": (
+                self.retention.policy.longest_biometric_life_ms(
+                    self.ingestor.state.elapsed_ms(now_ms)) / 1000),
             # Not a configuration gap: nothing an operator can set fixes it,
             # and a permanently-degraded node is a degraded signal that means
             # nothing. Reported as its own fact, and recorded as a known limit
@@ -168,6 +184,21 @@ class EdgeNode:
                 "outages": self.consumer.stats.outages,
             }
         return report
+
+
+def _drill_end_times(node) -> dict:
+    """When each drill this node knows about finished, for the DRILL_END rule.
+
+    Without it every `DRILL_END` item reads as belonging to a drill still in
+    progress and is never due, so the trigger the whole policy leans on --
+    "thumbnails only, purged at drill end" -- would never fire.
+    """
+    registry = getattr(node, "registry", None) if node is not None else None
+    if registry is None:
+        return {}
+    return {drill.drill_id: drill.completed_ms
+            for drill in registry.list()
+            if drill.completed_ms is not None}
 
 
 def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
@@ -327,8 +358,30 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
     node_holder: dict = {}
 
     def retention_check(when_ms: int) -> dict:
-        report = retention.verify(when_ms)
+        """Purge what is due, then check that nothing outlived its class.
+
+        Both, and in that order. The job used to verify only, which is the
+        audit of a control without the control: `purge` is what actually
+        removes the material, and running the check alone means the day a
+        producer of face crops appears the finding arrives and nothing ever
+        clears it.
+
+        Verification after the purge rather than before, so what it reports is
+        what survived a genuine attempt to remove it. Anything still overdue
+        then is a failure of the remover, not a purge that had not run yet.
+        """
         node = node_holder.get("node")
+        drill_ended = _drill_end_times(node)
+        purged = retention.purge(when_ms, audit=audit,
+                                 drill_ended_ms=drill_ended,
+                                 remover=node.retention_remover
+                                 if node is not None else None)
+        report = retention.verify(when_ms, drill_ended_ms=drill_ended)
+        report["purged"] = purged
+        # Lifted to the top level because it is the finding, not a detail of
+        # the purge: an item that was due and could not be deleted is the one
+        # state this policy exists to prevent.
+        report["unremovable"] = purged["unremovable"]
         if node is not None:
             node.retention_report = report
         return report

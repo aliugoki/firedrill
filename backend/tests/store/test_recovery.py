@@ -409,3 +409,61 @@ class TestThePhysicalCountIsEvidenceToo:
         events_store, _ = stores
         for event in events_store.replay("d1"):
             assert from_event(event) is None
+
+
+class TestADrillStopsHoldingWhatItMayNotKeep:
+    """`purge_drill` says "everything a finished drill should no longer be
+    holding" and was called by nothing, so the DRILL_END trigger never fired.
+
+    The edge node's hourly check is the backstop and cannot be the control for
+    this class. A device thumbnail is the shortest-lived thing in the system
+    precisely because it leaves the building in somebody's hands, and "within
+    the hour" is not what "purged at drill end" means.
+    """
+
+    def _drill_holding(self, stores):
+        from app.infra.retention import DataClass, Item, RetentionLedger
+
+        ledger = RetentionLedger()
+        ledger.track(Item("thumb-1", DataClass.DEVICE_THUMBNAIL, T0, "d1"))
+        ledger.track(Item("ev-1", DataClass.EVIDENCE, T0, "d1"))
+        gone = []
+
+        drill = make_drill(stores)
+        drill.retention = ledger
+        drill.retention_remover = gone.append
+        drill.start(T0)
+        return drill, ledger, gone
+
+    def test_the_thumbnail_goes_when_the_drill_is_declared_over(self, stores):
+        drill, ledger, gone = self._drill_holding(stores)
+        assert [i.item_id for i in ledger.held()] == ["thumb-1", "ev-1"]
+
+        drill.complete(T0 + 600_000)
+        assert [i.item_id for i in gone] == ["thumb-1"]
+
+    def test_the_evidence_stays(self, stores):
+        # Evidence is not biometrics. The claim outlives the material by a year
+        # because a post-incident report needs it and a face does not.
+        drill, ledger, _ = self._drill_holding(stores)
+        drill.complete(T0 + 600_000)
+        assert [i.item_id for i in ledger.held()] == ["ev-1"]
+
+    def test_a_failing_purge_does_not_stop_the_drill_ending(self, stores):
+        # A drill that has just been declared over must finish being declared
+        # over. The hourly job retries and `verify` reports what is left.
+        class Broken:
+            def purge_drill(self, *args, **kwargs):
+                raise OSError("the store is gone")
+
+        drill = make_drill(stores)
+        drill.retention = Broken()
+        drill.start(T0)
+        drill.complete(T0 + 600_000)
+        assert drill.status.value == "COMPLETE"
+
+    def test_a_drill_with_no_ledger_completes_as_before(self, stores):
+        drill = make_drill(stores)
+        drill.start(T0)
+        drill.complete(T0 + 600_000)
+        assert drill.completed_ms == T0 + 600_000

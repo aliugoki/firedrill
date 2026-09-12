@@ -638,3 +638,55 @@ class TestTheRecoveryPointObjectiveIsReported:
         # Zero would read as "nothing can be lost", which is the opposite of
         # what an edge node with nowhere to replicate to means.
         assert build_edge(full_env(tmp_path), now_ms=T0).health(T0)["rpo"] is None
+
+
+class TestTheRetentionJobPurgesRatherThanOnlyChecking:
+    """The job verified and never purged: the audit of a control, without the
+    control. `verify` is what proves the policy held; `purge` is what makes it
+    hold, and running the check alone means the day a producer of face crops
+    appears the finding arrives and nothing ever clears it."""
+
+    def node(self, remover=None):
+        node = build_edge({"EVAC_SITE_ID": "site-1"})
+        node.retention_remover = remover
+        return node
+
+    def a_crop(self, node, item_id="crop-1"):
+        from app.infra.retention import DataClass, Item
+
+        node.retention.track(Item(item_id=item_id,
+                                  data_class=DataClass.FACE_CROP,
+                                  created_ms=0, drill_id="d1"))
+
+    def test_a_due_item_is_removed_when_something_can_remove_it(self):
+        gone = []
+        node = self.node(remover=gone.append)
+        self.a_crop(node)
+        node.supervisor.job("retention").execute(10_000_000_000)
+
+        assert [i.item_id for i in gone] == ["crop-1"]
+        assert node.health(10_000_000_000)["retention_held"] == 0
+
+    def test_with_nothing_to_remove_it_the_node_says_so(self):
+        # Not "compliant". A node holding biometric material it cannot delete
+        # is the one thing this policy exists to prevent, and marking it purged
+        # would make it verify clean while keeping the crop forever.
+        node = self.node(remover=None)
+        self.a_crop(node)
+        node.supervisor.job("retention").execute(10_000_000_000)
+
+        report = node.health(10_000_000_000)
+        assert report["retention_compliant"] is False
+        assert report["retention_unremovable"] == 1
+        assert report["retention_held"] == 1
+
+    def test_a_clean_node_reports_nothing_unremovable(self):
+        node = self.node()
+        node.supervisor.job("retention").execute(1_000)
+        assert node.health(1_000)["retention_unremovable"] == 0
+
+    def test_the_worst_case_a_review_asks_about_is_reported(self):
+        # `longest_biometric_life_ms` calls itself exactly that and was
+        # computed by the policy since it was written and reported nowhere.
+        node = self.node()
+        assert node.health(1_000)["retention_longest_biometric_life_s"] >= 0

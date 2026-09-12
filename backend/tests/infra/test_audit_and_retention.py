@@ -156,6 +156,17 @@ class TestThePolicyCoversEverything:
 
 
 class TestPurging:
+    def _remover(self):
+        """What actually deletes the bytes. A real caller has one.
+
+        `purge` will not mark anything purged without it: recording a deletion
+        nobody performed makes the policy a lie that passes its own
+        verification, and that is as true of a missing remover as of a failing
+        one.
+        """
+        gone = []
+        return gone, gone.append
+
     def _ledger(self):
         ledger = RetentionLedger()
         ledger.track(Item("emb-1", DataClass.FACE_EMBEDDING, T0, "d1"))
@@ -167,28 +178,32 @@ class TestPurging:
 
     def test_embeddings_and_crops_go_immediately(self, log):
         ledger = self._ledger()
-        result = ledger.purge(T0, audit=log)
+        _, remove = self._remover()
+        result = ledger.purge(T0, audit=log, remover=remove)
         assert result["removed"].get("FACE_EMBEDDING") == 1
         assert result["removed"].get("FACE_CROP") == 1
 
     def test_device_thumbnails_go_when_the_drill_ends(self, log):
         ledger = self._ledger()
-        ledger.purge(T0 + 1000, audit=log)  # drill still running
+        _, remove = self._remover()
+        ledger.purge(T0 + 1000, audit=log, remover=remove)  # drill running
         assert any(i.item_id == "thumb-1" for i in ledger.held())
-        ledger.purge_drill("d1", T0 + 600_000, audit=log)
+        ledger.purge_drill("d1", T0 + 600_000, audit=log, remover=remove)
         assert not any(i.item_id == "thumb-1" for i in ledger.held())
 
     def test_evidence_survives_the_drill_by_a_year(self, log):
         ledger = self._ledger()
-        ledger.purge_drill("d1", T0 + 600_000, audit=log)
+        _, remove = self._remover()
+        ledger.purge_drill("d1", T0 + 600_000, audit=log, remover=remove)
         assert any(i.item_id == "ev-1" for i in ledger.held())
-        ledger.purge(T0 + 400 * DAY, audit=log)
+        ledger.purge(T0 + 400 * DAY, audit=log, remover=remove)
         assert not any(i.item_id == "ev-1" for i in ledger.held())
 
     def test_a_purge_writes_an_audit_entry(self, log):
         # A policy that cannot be verified is a promise rather than a control.
         ledger = self._ledger()
-        ledger.purge(T0, actor_id="retention-job", audit=log)
+        _, remove = self._remover()
+        ledger.purge(T0, actor_id="retention-job", audit=log, remover=remove)
         entries = [e for e in log.entries if e.action is AuditAction.RETENTION_PURGE]
         assert len(entries) == 1
         assert entries[0].context["removed"]["FACE_CROP"] == 1
@@ -219,8 +234,9 @@ class TestPurging:
 
     def test_nothing_is_purged_twice(self, log):
         ledger = self._ledger()
-        ledger.purge(T0, audit=log)
-        assert ledger.purge(T0, audit=log)["total"] == 0
+        _, remove = self._remover()
+        ledger.purge(T0, audit=log, remover=remove)
+        assert ledger.purge(T0, audit=log, remover=remove)["total"] == 0
 
 
 class TestVerification:
@@ -249,7 +265,7 @@ class TestVerification:
     def test_purged_items_stop_being_overdue(self):
         ledger = RetentionLedger()
         ledger.track(Item("crop-1", DataClass.FACE_CROP, T0, "d1"))
-        ledger.purge(T0)
+        ledger.purge(T0, remover=lambda item: None)
         assert ledger.verify(T0 + 1000)["compliant"] is True
 
 
@@ -285,3 +301,45 @@ class TestEveryActionEitherHappensOrIsDeclaredUnbuilt:
 
     def test_most_of_the_vocabulary_is_in_use(self):
         assert len(self.recorded_somewhere()) >= 10
+
+
+class TestARemoverIsNotOptional:
+    """A purge with nothing to delete the bytes recorded a deletion anyway.
+
+    The module's own reasoning about a *failing* remover -- "recording a
+    deletion that did not happen would make the policy a lie that passes its
+    own verification" -- is exactly as true of a missing one, and the code
+    skipped the call and marked the item purged. A caller that had not wired a
+    remover would hold every face crop forever and verify clean.
+    """
+
+    def _due(self):
+        ledger = RetentionLedger()
+        ledger.track(Item("crop-1", DataClass.FACE_CROP, T0, "d1"))
+        return ledger
+
+    def test_nothing_is_marked_purged_without_one(self):
+        ledger = self._due()
+        result = ledger.purge(T0 + 1_000)
+        assert result["total"] == 0
+        assert result["unremovable"] == ["crop-1"]
+        assert [i.item_id for i in ledger.held()] == ["crop-1"]
+
+    def test_and_it_stays_overdue_so_the_node_keeps_saying_so(self):
+        ledger = self._due()
+        ledger.purge(T0 + 1_000)
+        assert ledger.verify(T0 + 1_000)["compliant"] is False
+
+    def test_the_audit_entry_names_the_reason(self, log):
+        # "Nothing happened" and "nothing could happen" need different people.
+        ledger = self._due()
+        ledger.purge(T0 + 1_000, audit=log)
+        assert any("no remover configured" in e.summary for e in log.entries)
+
+    def test_with_a_remover_it_goes(self):
+        ledger = self._due()
+        gone = []
+        result = ledger.purge(T0 + 1_000, remover=gone.append)
+        assert result["total"] == 1
+        assert [i.item_id for i in gone] == ["crop-1"]
+        assert ledger.held() == []

@@ -247,29 +247,43 @@ class RetentionLedger:
         cannot. An item whose removal failed is **not** marked purged: recording
         a deletion that did not happen would make the policy a lie that passes
         its own verification.
+
+        **No remover at all is the same lie.** This used to skip the call and
+        mark the item purged anyway, so a caller that had not wired one would
+        record every biometric item as deleted, pass its own verification, and
+        hold the material forever. Those items are now reported as unremovable
+        and left exactly as they are, which keeps them overdue and keeps the
+        node saying so.
         """
         removed: dict[str, int] = {}
         failed: list[str] = []
+        unremovable: list[str] = []
 
         for item in self.due(now_ms, drill_ended_ms):
+            if remover is None:
+                unremovable.append(item.item_id)
+                continue
             try:
-                if remover is not None:
-                    remover(item)
+                remover(item)
             except Exception:
                 failed.append(item.item_id)
                 continue
             item.purged_ms = now_ms
             removed[item.data_class.value] = removed.get(item.data_class.value, 0) + 1
 
-        if audit is not None and (removed or failed):
+        if audit is not None and (removed or failed or unremovable):
             audit.record(
                 action=AuditAction.RETENTION_PURGE, actor_id=actor_id,
                 ts_ms=now_ms,
                 summary=(f"purged {sum(removed.values())} item(s)"
-                         + (f", {len(failed)} failed" if failed else "")),
-                removed=removed, failed=len(failed))
+                         + (f", {len(failed)} failed" if failed else "")
+                         + (f", {len(unremovable)} had no remover configured"
+                            if unremovable else "")),
+                removed=removed, failed=len(failed),
+                unremovable=len(unremovable))
 
         return {"removed": removed, "failed": failed,
+                "unremovable": unremovable,
                 "total": sum(removed.values())}
 
     def purge_drill(self, drill_id: str, ended_ms: int, **kwargs) -> dict:

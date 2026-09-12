@@ -90,6 +90,12 @@ class Drill:
     #: off the camera stream, so the consumer never sees them and nothing else
     #: would put them on the wire.
     replicator: object | None = None
+    #: What this drill is holding that it must not keep, and what deletes it.
+    #: `purge_drill` says "everything a finished drill should no longer be
+    #: holding" and was called by nothing, so the DRILL_END trigger -- the one
+    #: the brief names, "thumbnails only, purged at drill end" -- never fired.
+    retention: object | None = None
+    retention_remover: object | None = None
 
     ingestor: Ingestor = field(init=False)
     warden: WardenState = field(init=False)
@@ -130,7 +136,29 @@ class Drill:
         event = self._system_event(EventType.DRILL_COMPLETED, now_ms)
         self.feed([event])
         self._persist()
+        self._purge_what_the_drill_may_not_keep(now_ms)
         return event
+
+    def _purge_what_the_drill_may_not_keep(self, now_ms: int) -> dict | None:
+        """Delete the drill-end retention classes, now rather than on a timer.
+
+        The edge node's hourly check is the backstop and cannot be the control
+        for this class. A device thumbnail is the shortest-lived thing in the
+        system precisely because it leaves the building in somebody's hands,
+        and "within the hour" is not what "purged at drill end" means.
+
+        Never raises. A drill that has just been declared over must finish
+        being declared over; a purge that failed is reported by `verify` and
+        retried by the hourly job, and an exception here would leave the drill
+        half-completed instead.
+        """
+        if self.retention is None:
+            return None
+        try:
+            return self.retention.purge_drill(
+                self.drill_id, now_ms, remover=self.retention_remover)
+        except Exception:
+            return None
 
     @property
     def is_running(self) -> bool:
