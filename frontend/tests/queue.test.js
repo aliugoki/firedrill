@@ -186,3 +186,36 @@ describe('reconcileSync', () => {
     assert.deepEqual(outcome.acknowledged, [1, 2, 3]);
   });
 });
+
+describe('a device that cannot save at all', () => {
+  // A tablet in private browsing, one with site data blocked, one out of
+  // quota. `queue.js` rejects rather than hangs precisely so the screen can
+  // say so: "a warden tapping confirm and getting no response at all is worse
+  // than one who is told it failed, because the first looks like the app is
+  // thinking and they move on."
+  function deadStorage() {
+    return new OfflineQueue('tablet-3', {
+      indexedDB: {
+        open() {
+          const request = {};
+          queueMicrotask(() => request.onerror
+            && request.onerror({ target: request }));
+          request.error = new Error('access to storage is denied');
+          return request;
+        },
+      },
+      isOnline: () => true,
+    });
+  }
+
+  it('rejects rather than never settling', async () => {
+    await assert.rejects(() => deadStorage().enqueue({ kind: 'CONFIRM_PRESENT' }),
+                         /storage is denied/);
+  });
+
+  it('rejects reads too, so the screen cannot show a stale zero', async () => {
+    // `depth()` returning 0 on a broken store would read as "nothing pending",
+    // which is the most reassuring thing it could possibly say.
+    await assert.rejects(() => deadStorage().depth(), /storage is denied/);
+  });
+});

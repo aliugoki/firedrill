@@ -52,6 +52,11 @@ let lastHeadcount = null;
 //: Which composer is open, if any: 'ESCALATE', 'NOTE', or null.
 let composing = null;
 let refusals = [];
+//: Set once the device proves it cannot write to IndexedDB. Never cleared: a
+//: tablet that failed to store one confirmation has no business being trusted
+//: with the next, and a banner that flickers off is a banner a warden stops
+//: reading.
+let storageFailed = false;
 
 // --- language ---------------------------------------------------------------
 
@@ -97,15 +102,41 @@ document.getElementById('lang').addEventListener('click', () => {
  * trust evidence in the system disappearing without trace.
  */
 async function act(kind, extra = {}) {
-  await queue.enqueue({
-    kind, warden_id: wardenId, zone_id: zoneId, ts_ms: Date.now(), ...extra,
-  });
+  try {
+    await queue.enqueue({
+      kind, warden_id: wardenId, zone_id: zoneId, ts_ms: Date.now(), ...extra,
+    });
+  } catch (error) {
+    // The rejection used to go nowhere. `queue.js` rejects rather than hangs
+    // precisely so this could be shown, and dropping it produced the silence
+    // the queue was arranged to avoid: a warden taps confirm, the screen does
+    // not move, and they assume the app is thinking.
+    //
+    // The action is not sent either. `device_seq` comes from the store, and an
+    // action sent with a number this device did not record would break the
+    // server's gap detection for it -- after which "an action was genuinely
+    // lost" stops being distinguishable from "one was late", which is the
+    // whole reason the sequence is assigned on the device.
+    storageFailed = true;
+    await paint();
+    return;
+  }
   await paint();
   sync();
 }
 
 async function sync() {
-  const pending = await queue.pending();
+  let pending;
+  try {
+    pending = await queue.pending();
+  } catch (error) {
+    // Runs on a ten-second timer and on every `online` event, so an
+    // unguarded read against a dead store produced an unhandled rejection
+    // six times a minute and no visible change at all.
+    storageFailed = true;
+    await paint();
+    return;
+  }
   if (!pending.length || !navigator.onLine) { await paint(); return; }
   try {
     const response = await api.wardenSync(drillId, pending.map(toWire));
@@ -161,11 +192,24 @@ async function paint() {
   paintTabs();
   const zone = zoneFreshness.value;
 
+  // Read defensively: a queue that cannot be opened is exactly the state this
+  // is trying to render, and reaching into it again here would reject and
+  // leave the screen showing the last good picture forever.
+  let depth = 0;
+  let staleness = null;
+  try {
+    depth = await queue.depth();
+    staleness = await queue.stalenessMs();
+  } catch (error) {
+    storageFailed = true;
+  }
+
   const status = syncStatus({
     fromCache: zoneFreshness.fromCache,
     online: navigator.onLine,
-    pending: await queue.depth(),
-    stalenessMs: await queue.stalenessMs(),
+    pending: depth,
+    stalenessMs: staleness,
+    storageFailed,
   }, t);
   const syncEl = document.getElementById('sync');
   syncEl.className = `warden-status ${status.tone}`;

@@ -641,3 +641,33 @@ describe('why the system lost sight of somebody', () => {
     assert.deepEqual(rowNotes({ state: 'UNCERTAIN' }, t), []);
   });
 });
+
+describe('a warden device that cannot save the work', () => {
+  const t = (key) => key;
+
+  it('outranks everything else the strip can say', () => {
+    // Offline with forty pending is a warden who will sync later. A device
+    // that cannot write is a warden whose work does not exist, and the two
+    // must not share a tone.
+    const status = syncStatus({
+      storageFailed: true, online: false, pending: 40, fromCache: true,
+    }, t);
+    assert.equal(status.tone, 'blind');
+    assert.equal(status.text, 'warden.cannot_save');
+  });
+
+  it('an ordinary offline device still reads as offline', () => {
+    const status = syncStatus({ online: false, pending: 2 }, t);
+    assert.equal(status.tone, 'offline');
+  });
+
+  it('the message tells them what to do instead', () => {
+    // A banner that says something is wrong and not what to do about it is a
+    // banner a warden reads once.
+    for (const lang of ['en', 'ar']) {
+      assert.ok(STRINGS[lang]['warden.cannot_save'],
+                `${lang} has no cannot_save string`);
+    }
+    assert.match(STRINGS.en['warden.cannot_save'], /radio/);
+  });
+});

@@ -335,7 +335,19 @@ export function exitPressure(bottlenecks, t) {
 }
 
 /** What the sync indicator says. */
-export function syncStatus({ online, pending, stalenessMs, fromCache }, t) {
+export function syncStatus({ online, pending, stalenessMs, fromCache,
+                             storageFailed = false }, t) {
+  if (storageFailed) {
+    // First, and in the blind tone, because it outranks everything else this
+    // strip can say. A warden whose device cannot write to IndexedDB -- a
+    // tablet in private browsing, one with site data blocked, one out of quota
+    // -- taps confirm and nothing happens. `queue.js` says of that exact
+    // shape: a warden getting no response at all is worse than one told it
+    // failed, because the first looks like the app is thinking and they move
+    // on. The queue was built to reject rather than hang and the screen
+    // dropped the rejection, which produced the silence anyway.
+    return { tone: 'blind', text: t('warden.cannot_save') };
+  }
   if (fromCache) {
     // Distinct from being offline: the device may have signal and still be
     // reading a roster the service worker remembered, which is the case a
