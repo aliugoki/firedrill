@@ -29,6 +29,11 @@
 
     <section id="screen-zone">
       <div class="tiles" id="zone-tiles"></div>
+      <!-- The question above the field rather than inside it. As a
+           placeholder it was set in a 36px numeral face and ran off the end of
+           the input, so a warden saw "How many people can you c" and a box
+           that looked broken. -->
+      <label class="field-label" id="headcount-label" for="headcount"></label>
       <div class="headcount-entry">
         <input id="headcount" type="number" inputmode="numeric" min="0"
                placeholder="0">

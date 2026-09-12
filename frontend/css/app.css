@@ -9,209 +9,607 @@
  *
  * Dark by default because these screens live in a control room and on a tablet
  * held outdoors at night, and both are worse with a white background.
+ *
+ * No build step, so everything below is hand-written and the tokens at the top
+ * are the only place a value is decided. If a colour, radius or space appears
+ * as a literal further down, that is a mistake rather than a shortcut.
  */
 
 :root {
-  --bg: #0f1720;
-  --panel: #17212b;
-  --panel-2: #1e2a36;
-  --line: #2b3947;
-  --text: #e8eef4;
-  --muted: #93a4b4;
+  /* --- surfaces ---------------------------------------------------------
+   * Four layers rather than two. A dashboard that is one flat colour makes a
+   * reader work out the grouping from borders alone, and borders are the
+   * first thing that disappears on a dimmed control-room screen.
+   */
+  --bg: #0a0f16;
+  --surface: #121a24;
+  --surface-2: #18222e;
+  --surface-3: #1f2b39;
+  --line: #26333f;
+  --line-soft: #1c2733;
 
-  --green: #2ea86a;
-  --yellow: #d8a52a;
-  --orange: #d97430;
-  --red: #d8443c;
+  --text: #eef4fa;
+  --muted: #9db0c2;
+  --dim: #6d8296;
 
-  --green-bg: #12301f;
-  --yellow-bg: #322a10;
-  --orange-bg: #331f11;
+  /* --- the four states --------------------------------------------------
+   * Each carries a foreground, a wash for chips and a border, so a state is
+   * legible as text, as a pill and as an edge without anything being redefined
+   * at the point of use.
+   */
+  --green: #35c98a;
+  --yellow: #e8b93c;
+  --orange: #f08a3c;
+  --red: #f05c54;
+
+  --green-bg: #0e2a1f;
+  --yellow-bg: #2d2410;
+  --orange-bg: #33200f;
   --red-bg: #331414;
+
+  --green-edge: #1d6b4c;
+  --yellow-edge: #7a6320;
+  --orange-edge: #874923;
+  --red-edge: #8a2f2c;
+
+  --accent: #4c9aff;
+
+  /* --- type ------------------------------------------------------------- */
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+          Arial, "Noto Sans Arabic", sans-serif;
+  --size-micro: 11px;
+  --size-meta: 12.5px;
+  --size-body: 14.5px;
+  --size-lead: 16px;
+  --size-title: 19px;
+  --size-display: 32px;
+  --size-verdict: 28px;
+
+  /* --- rhythm ----------------------------------------------------------- */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+
+  --radius: 10px;
+  --radius-sm: 7px;
+  --radius-pill: 999px;
+
+  --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px -12px rgb(0 0 0 / 60%);
+  --shadow-lift: 0 2px 4px rgb(0 0 0 / 40%), 0 16px 32px -16px rgb(0 0 0 / 70%);
 
   --tap: 56px; /* a gloved hand, outdoors, in a hurry */
 }
 
 * { box-sizing: border-box; }
 
+html { -webkit-text-size-adjust: 100%; }
+
 body {
   margin: 0;
-  background: var(--bg);
+  background:
+    radial-gradient(1200px 600px at 50% -300px, #16202c 0%, transparent 70%),
+    var(--bg);
+  background-attachment: fixed;
   color: var(--text);
-  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  -webkit-text-size-adjust: 100%;
+  font: var(--size-body)/1.55 var(--font);
+  font-feature-settings: "tnum" 1;  /* counts line up column to column */
 }
 
 [dir="rtl"] { direction: rtl; }
 
+/* Every interactive thing gets the same ring. A control room is used with a
+ * keyboard when the mouse is busy, and an invisible focus is a screen nobody
+ * can drive without looking at their hands. */
+:where(button, input, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :where(button, .row, .tile) { transition: background-color .12s ease,
+                                            border-color .12s ease,
+                                            transform .12s ease,
+                                            box-shadow .12s ease; }
+}
+
+/* --- chrome ---------------------------------------------------------------- */
+
 .safety-notice {
-  background: var(--panel-2);
-  border-bottom: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 12px;
-  padding: 6px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--dim);
+  font-size: var(--size-micro);
+  letter-spacing: .3px;
+  padding: var(--s2) var(--s5);
+  text-align: center;
 }
 
 header.bar {
-  display: flex; align-items: center; gap: 16px;
-  padding: 12px 16px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s3) var(--s5);
   border-bottom: 1px solid var(--line);
-  background: var(--panel);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(10px);
 }
-header.bar h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: .3px; }
+header.bar h1 {
+  font-size: var(--size-title);
+  margin: 0;
+  font-weight: 700;
+  letter-spacing: -.2px;
+}
 header.bar .spacer { flex: 1; }
+header.bar #drill-name { color: var(--muted); font-weight: 600; }
+header.bar #elapsed {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+header.bar #health { font-size: var(--size-meta); }
 
-main { padding: 16px; max-width: 1600px; margin: 0 auto; }
+main { padding: var(--s5); max-width: 1680px; margin: 0 auto; }
 
-/* --- the headline verdict ------------------------------------------------ */
+/* --- the headline verdict -------------------------------------------------- */
 
 .verdict {
-  border-radius: 10px; padding: 16px 20px; margin-bottom: 16px;
+  position: relative;
+  border-radius: var(--radius);
+  padding: var(--s5) var(--s5) var(--s5) var(--s6);
+  margin-bottom: var(--s5);
   border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  overflow: hidden;
 }
-.verdict.clear { background: var(--green-bg); border-color: var(--green); }
-.verdict.not-clear { background: var(--red-bg); border-color: var(--red); }
-.verdict h2 { margin: 0 0 6px; font-size: 26px; letter-spacing: .5px; }
-.verdict ul { margin: 8px 0 0; padding-inline-start: 20px; color: var(--muted); }
-.verdict li { margin: 2px 0; }
+/* A rail rather than a tinted panel. The verdict is the first thing read and
+ * the last thing doubted, so it stays legible rather than becoming a colour. */
+.verdict::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 5px;
+}
+.verdict.clear { background: linear-gradient(90deg, var(--green-bg), var(--surface) 60%); }
+.verdict.clear::before { background: var(--green); }
+.verdict.not-clear { background: linear-gradient(90deg, var(--red-bg), var(--surface) 60%); }
+.verdict.not-clear::before { background: var(--red); }
+.verdict h2 {
+  margin: 0 0 var(--s2);
+  font-size: var(--size-verdict);
+  letter-spacing: -.4px;
+  line-height: 1.15;
+}
+.verdict.clear h2 { color: var(--green); }
+.verdict.not-clear h2 { color: var(--red); }
+.verdict ul { margin: var(--s3) 0 0; padding-inline-start: var(--s4); color: var(--muted); }
+.verdict li { margin: var(--s1) 0; }
 
-/* --- counts --------------------------------------------------------------- */
+/* --- counts ---------------------------------------------------------------- */
 
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--s3);
+  margin-bottom: var(--s5);
+}
 .tile {
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: 10px; padding: 14px 16px;
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--s4);
+  overflow: hidden;
+  box-shadow: var(--shadow);
 }
-.tile .n { font-size: 30px; font-weight: 650; font-variant-numeric: tabular-nums; }
-.tile .k { color: var(--muted); font-size: 13px; margin-top: 2px; }
-.tile.green .n { color: var(--green); }
+/* A hairline of the state's colour along the top edge, so the eye can find the
+ * red tile in a row of seven without reading any of them. */
+.tile::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  height: 3px;
+  background: var(--line);
+}
+.tile .n {
+  font-size: var(--size-display);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -1px;
+  font-variant-numeric: tabular-nums;
+}
+.tile .k {
+  color: var(--muted);
+  font-size: var(--size-micro);
+  margin-top: var(--s1);
+  text-transform: uppercase;
+  letter-spacing: .7px;
+  font-weight: 600;
+}
+.tile.green .n  { color: var(--green); }
+.tile.green::after  { background: var(--green); }
 .tile.yellow .n { color: var(--yellow); }
+.tile.yellow::after { background: var(--yellow); }
 .tile.orange .n { color: var(--orange); }
-.tile.red .n { color: var(--red); }
+.tile.orange::after { background: var(--orange); }
+.tile.red .n    { color: var(--red); }
+.tile.red::after    { background: var(--red); }
+/* The one number that means somebody may still be inside. */
+.tile.red {
+  border-color: var(--red-edge);
+  background: linear-gradient(180deg, var(--red-bg), var(--surface) 70%);
+}
 
-/* --- panels --------------------------------------------------------------- */
+/* --- panels ---------------------------------------------------------------- */
 
-.grid { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-top: 16px; }
-@media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.9fr) minmax(340px, 1fr);
+  gap: var(--s4);
+  align-items: start;
+}
+@media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
 
 .panel {
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: 10px; overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow);
 }
 .panel > h3 {
-  margin: 0; padding: 12px 16px; font-size: 14px; font-weight: 600;
-  border-bottom: 1px solid var(--line); color: var(--muted);
-  text-transform: uppercase; letter-spacing: .6px;
+  margin: 0;
+  padding: var(--s3) var(--s4);
+  font-size: var(--size-micro);
+  font-weight: 700;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  background: var(--surface-2);
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
-.panel .body { padding: 12px 16px; }
+.panel .body { padding: var(--s4); }
 
+/* The list a commander scans. Capped and scrolled inside its own panel: two
+ * hundred people is four screens of page, and a page that long puts the counts
+ * and the assembly panel off the top of a control-room monitor. */
+#priority { max-height: min(68vh, 820px); overflow-y: auto; overscroll-behavior: contain; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--surface-3);
+  border-radius: var(--radius-pill);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: #2c3b4c; background-clip: content-box; }
+
+/* --- a person, an exit, a zone --------------------------------------------- */
+
+/* Dense on purpose. A commander scanning thirty-four unaccounted people reads
+ * down a column of names, and every pixel of leading is one fewer name on the
+ * screen. The four lines a row can carry are packed to roughly the height of
+ * two. */
 .row {
-  display: flex; align-items: center; gap: 12px;
-  padding: 10px 16px; border-bottom: 1px solid var(--line);
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  padding: var(--s2) var(--s4) var(--s2) calc(var(--s4) + 3px);
+  border-bottom: 1px solid var(--line-soft);
+  line-height: 1.4;
 }
 .row:last-child { border-bottom: 0; }
+.row:hover { background: var(--surface-2); }
 .row .who { flex: 1; min-width: 0; }
-.row .name { font-weight: 600; }
-.row .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
-.row .reason { color: var(--muted); font-size: 12px; margin-top: 3px; }
-/* A warden's tablet that has gone quiet is not a muted footnote: the zone
-   looks unswept either way, and only this says which kind of unswept. */
-.row .reason.silent   { color: var(--orange); font-weight: 600; }
-/* The same emphasis inside the explain drawer, where a disagreement the system
-   cannot settle must not read as one more line of narration. */
-.drawer .reason { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
-.drawer .reason.yellow { color: var(--yellow); }
-.drawer .reason.orange { color: var(--orange); }
-.row .reason.unheard  { color: var(--orange); font-weight: 600; }
+.row .name { font-weight: 650; letter-spacing: -.1px; }
+.row .meta { color: var(--muted); font-size: var(--size-meta); }
+.row .reason { color: var(--dim); font-size: var(--size-meta); }
+
+/* The rail takes its colour from the row's own chip, so a state added to the
+ * board colours the rail without a second place to remember. */
+.row::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 3px;
+  background: transparent;
+}
+.row:has(.chip.GREEN)::before  { background: var(--green); }
+.row:has(.chip.YELLOW)::before { background: var(--yellow); }
+.row:has(.chip.ORANGE)::before { background: var(--orange); }
+.row:has(.chip.RED)::before    { background: var(--red); }
+/* Unaccounted keeps a wash as well, kept short: thirty of these in a column is
+ * a red panel, and a panel that is all one colour has stopped signalling. */
+.row:has(.chip.RED) {
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--red-bg) 70%, transparent), transparent 22%);
+}
+
+/* A warden's tablet gets no rails: the chip is already the first thing on the
+ * line and a 400px screen cannot spare the horizontal space. */
+body.warden .row::before { display: none; }
+
+/* Notes under a name are findings, not prose. */
+.row .reason.silent,
+.row .reason.unheard,
+.row .reason.orange { color: var(--orange); font-weight: 600; }
+.row .reason.yellow { color: var(--yellow); font-weight: 600; }
+.row .reason.red    { color: var(--red);    font-weight: 600; }
 
 .chip {
-  border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600;
-  white-space: nowrap; border: 1px solid transparent;
+  flex: none;
+  align-self: flex-start;
+  margin-top: 1px;
+  border-radius: var(--radius-pill);
+  padding: 2px 9px;
+  font-size: var(--size-micro);
+  font-weight: 700;
+  letter-spacing: .4px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  text-transform: uppercase;
 }
-.chip.GREEN  { background: var(--green-bg);  color: var(--green);  border-color: var(--green); }
-.chip.YELLOW { background: var(--yellow-bg); color: var(--yellow); border-color: var(--yellow); }
-.chip.ORANGE { background: var(--orange-bg); color: var(--orange); border-color: var(--orange); }
-.chip.RED    { background: var(--red-bg);    color: var(--red);    border-color: var(--red); }
+/* A chip with no state is the drill's own status, which is information and not
+ * a judgement, so it takes the neutral surface rather than one of the four. */
+.chip { background: var(--surface-3); color: var(--muted); border-color: var(--line); }
+.chip.GREEN  { background: var(--green-bg);  color: var(--green);  border-color: var(--green-edge); }
+.chip.YELLOW { background: var(--yellow-bg); color: var(--yellow); border-color: var(--yellow-edge); }
+.chip.ORANGE { background: var(--orange-bg); color: var(--orange); border-color: var(--orange-edge); }
+.chip.RED    { background: var(--red-bg);    color: var(--red);    border-color: var(--red-edge); }
 
 .health.ok       { color: var(--green); }
 .health.degraded { color: var(--yellow); }
-.health.blind    { color: var(--red); }
-.caveat { color: var(--yellow); font-size: 13px; margin-top: 6px; }
+.health.blind    { color: var(--red); font-weight: 700; }
+
+.caveat { color: var(--yellow); font-size: var(--size-meta); margin-top: var(--s2); }
+.advice { color: var(--muted); font-size: var(--size-meta); margin-top: var(--s2); }
+.empty { color: var(--dim); padding: var(--s6) var(--s4); text-align: center; }
 
 .stale {
-  background: var(--yellow-bg); color: var(--yellow);
-  border: 1px solid var(--yellow); border-radius: 6px;
-  padding: 6px 10px; font-size: 13px; margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  background: var(--yellow-bg);
+  color: var(--yellow);
+  border: 1px solid var(--yellow-edge);
+  border-radius: var(--radius-sm);
+  padding: var(--s2) var(--s3);
+  font-size: var(--size-meta);
+  margin-bottom: var(--s3);
 }
 
-/* --- buttons -------------------------------------------------------------- */
+/* --- buttons --------------------------------------------------------------- */
 
 button {
-  font: inherit; border-radius: 8px; border: 1px solid var(--line);
-  background: var(--panel-2); color: var(--text);
-  padding: 9px 14px; cursor: pointer; min-height: 40px;
+  font: 600 var(--size-body)/1 var(--font);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 10px 14px;
+  cursor: pointer;
+  min-height: 38px;
 }
-button:hover { border-color: var(--muted); }
-button[disabled] { opacity: .45; cursor: not-allowed; }
-button.primary { background: var(--green); border-color: var(--green); color: #07130c; font-weight: 650; }
-button.danger  { background: var(--red);   border-color: var(--red);   color: #170707; font-weight: 650; }
+button:hover { background: var(--surface-3); border-color: var(--dim); }
+button:active { transform: translateY(1px); }
+button[disabled] { opacity: .4; cursor: not-allowed; }
+button.primary {
+  background: var(--green);
+  border-color: var(--green);
+  color: #05160e;
+  font-weight: 700;
+}
+button.primary:hover { background: #45d89a; border-color: #45d89a; }
+button.danger {
+  background: var(--red);
+  border-color: var(--red);
+  color: #1a0606;
+  font-weight: 700;
+}
+button.danger:hover { background: #f4746d; border-color: #f4746d; }
 
-/* --- explain drawer ------------------------------------------------------- */
+/* The explain affordance on a person's row. Quiet until wanted. */
+.row > button {
+  flex: none;
+  min-height: 30px;
+  padding: 4px 10px;
+  color: var(--dim);
+  background: transparent;
+  border-color: var(--line);
+}
+.row > button:hover { color: var(--text); background: var(--surface-3); }
+
+/* --- explain drawer -------------------------------------------------------- */
 
 .drawer {
-  position: fixed; inset-block: 0; inset-inline-end: 0; width: min(560px, 100%);
-  background: var(--panel); border-inline-start: 1px solid var(--line);
-  padding: 16px; overflow-y: auto; z-index: 30;
+  position: fixed;
+  inset-block: 0;
+  inset-inline-end: 0;
+  width: min(620px, 100%);
+  background: var(--surface);
+  border-inline-start: 1px solid var(--line);
+  padding: var(--s5);
+  overflow-y: auto;
+  z-index: 30;
+  box-shadow: var(--shadow-lift);
 }
-.drawer h3 { margin-top: 0; }
+.drawer h3 { margin: 0 0 var(--s4); font-size: var(--size-lead); }
 .drawer pre {
-  white-space: pre-wrap; word-break: break-word;
-  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: var(--muted); background: var(--bg);
-  border: 1px solid var(--line); border-radius: 8px; padding: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 12.5px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--s4);
 }
-.scrim { position: fixed; inset: 0; background: #0009; z-index: 20; }
+.drawer .reason { font-size: var(--size-body); margin-bottom: var(--s2); }
+.drawer .reason.yellow { color: var(--yellow); font-weight: 600; }
+.drawer .reason.orange { color: var(--orange); font-weight: 600; }
+.scrim { position: fixed; inset: 0; background: rgb(4 8 12 / 62%); z-index: 20; }
 
-/* --- warden: touch first -------------------------------------------------- */
+/* --- warden: touch first ---------------------------------------------------- */
 
-body.warden { font-size: 17px; }
-body.warden main { padding: 12px; max-width: 720px; }
+body.warden { font-size: 16px; }
+body.warden main { padding: var(--s3); max-width: 760px; }
+body.warden header.bar { padding: var(--s3) var(--s4); }
+body.warden .safety-notice { padding: var(--s2) var(--s3); text-align: start; }
+body.warden .tiles { grid-template-columns: repeat(3, 1fr); gap: var(--s2); }
+body.warden .tile { padding: var(--s3); }
+body.warden .tile .n { font-size: 28px; }
 
 .warden-status {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 12px; border-radius: 8px; margin-bottom: 12px;
-  font-weight: 600;
-}
-.warden-status.online  { background: var(--green-bg);  color: var(--green); }
-.warden-status.offline { background: var(--yellow-bg); color: var(--yellow); }
-.warden-status.blind   { background: var(--red-bg);    color: var(--red); }
-
-.headcount-entry { display: flex; gap: 10px; align-items: stretch; margin: 12px 0; }
-.headcount-entry input {
-  flex: 1; font-size: 34px; text-align: center; font-variant-numeric: tabular-nums;
-  background: var(--bg); color: var(--text);
-  border: 1px solid var(--line); border-radius: 10px; min-height: var(--tap);
-}
-.headcount-entry button { min-width: 120px; min-height: var(--tap); font-size: 17px; }
-
-.person-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
-.person-actions button { min-height: var(--tap); flex: 1 1 140px; font-size: 16px; }
-
-.tabs { display: flex; gap: 6px; margin-bottom: 12px; overflow-x: auto; }
-.tabs button { min-height: var(--tap); white-space: nowrap; }
-.tabs button[aria-selected="true"] { background: var(--panel); border-color: var(--muted); }
-
-.mismatch {
-  border-radius: 8px; padding: 12px; margin: 12px 0; font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s3) var(--s4);
+  border-radius: var(--radius);
+  margin-bottom: var(--s3);
+  font-weight: 700;
   border: 1px solid transparent;
 }
-.mismatch.NONE       { background: var(--green-bg);  color: var(--green);  border-color: var(--green); }
-.mismatch.INVESTIGATE{ background: var(--yellow-bg); color: var(--yellow); border-color: var(--yellow); }
-.mismatch.ESCALATE   { background: var(--red-bg);    color: var(--red);    border-color: var(--red); }
-.mismatch .advice { font-weight: 400; margin-top: 6px; }
+.warden-status::before {
+  content: "";
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.warden-status.online  { background: var(--green-bg);  color: var(--green);  border-color: var(--green-edge); }
+.warden-status.offline { background: var(--yellow-bg); color: var(--yellow); border-color: var(--yellow-edge); }
+.warden-status.blind   { background: var(--red-bg);    color: var(--red);    border-color: var(--red-edge); }
 
-.search { width: 100%; min-height: var(--tap); font-size: 17px; padding: 0 14px;
-  background: var(--bg); color: var(--text);
-  border: 1px solid var(--line); border-radius: 10px; margin-bottom: 12px; }
+#sync-problems .warden-status { font-size: var(--size-meta); font-weight: 600; }
 
-.empty { color: var(--muted); padding: 20px; text-align: center; }
+/* A segmented control rather than three loose buttons: they are one choice. */
+.tabs {
+  display: flex;
+  gap: var(--s1);
+  margin-bottom: var(--s3);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--s1);
+  overflow-x: auto;
+}
+.tabs button {
+  flex: 1;
+  min-height: 48px;
+  white-space: nowrap;
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+.tabs button:hover { background: var(--surface-2); color: var(--text); }
+.tabs button[aria-selected="true"] {
+  background: var(--surface-3);
+  color: var(--text);
+  border-color: var(--line);
+}
+
+.field-label {
+  display: block;
+  color: var(--muted);
+  font-size: var(--size-meta);
+  font-weight: 600;
+  margin: var(--s4) 0 var(--s2);
+}
+
+.headcount-entry { display: flex; gap: var(--s2); align-items: stretch; margin: var(--s3) 0; }
+.headcount-entry input {
+  flex: 1;
+  font: 700 36px/1 var(--font);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  min-height: var(--tap);
+}
+.headcount-entry input::placeholder { color: var(--dim); font-weight: 600; }
+.headcount-entry button { min-width: 132px; min-height: var(--tap); font-size: var(--size-lead); }
+
+.person-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: var(--s2);
+  margin-top: var(--s3);
+}
+.person-actions button { min-height: var(--tap); font-size: var(--size-body); }
+/* Two by two on the roster rather than four across. Four actions in a row on a
+ * tablet gives each of them a quarter of the width and a name that wraps; two
+ * by two gives a gloved hand a target it can hit without looking. */
+body.warden #roster .person-actions { grid-template-columns: repeat(2, 1fr); }
+
+/* A card per person, with the state above the name rather than beside it.
+ * Beside it, every name started at a different x depending on how long the
+ * chip was, and a warden scans this list by running down the names. */
+body.warden #roster .row {
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  margin-bottom: var(--s2);
+  padding: var(--s3) var(--s3) var(--s3) calc(var(--s3) + 3px);
+  overflow: hidden;
+}
+body.warden #roster .row:hover { background: var(--surface); }
+body.warden #roster .row::before { display: block; }
+.person-head .who { margin-top: var(--s2); }
+.person-head .name { font-size: var(--size-lead); }
+
+.search {
+  width: 100%;
+  font: var(--size-lead)/1 var(--font);
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0 var(--s4);
+  min-height: var(--tap);
+  margin-bottom: var(--s3);
+}
+.search::placeholder { color: var(--dim); }
+
+textarea {
+  font: var(--size-body)/1.5 var(--font);
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--s3);
+}
+
+.mismatch {
+  border-radius: var(--radius);
+  padding: var(--s4);
+  margin: var(--s3) 0;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+.mismatch.NONE        { background: var(--green-bg);  color: var(--green);  border-color: var(--green-edge); }
+.mismatch.INVESTIGATE { background: var(--yellow-bg); color: var(--yellow); border-color: var(--yellow-edge); }
+.mismatch.ESCALATE    { background: var(--red-bg);    color: var(--red);    border-color: var(--red-edge); }
+
+/* The three full-width actions under the count. Sized for a gloved hand and
+ * spaced so the wrong one is hard to hit. */
+#sweep, #escalate, #note { border-radius: var(--radius); font-size: var(--size-lead); }
+#escalate { border-color: var(--orange-edge); color: var(--orange); }
+#escalate:hover { background: var(--orange-bg); border-color: var(--orange); }

@@ -143,8 +143,14 @@ class TestTheCommandCentre:
     def test_the_counts_are_the_drill(self, page):
         # 212 expected is this fixture's roster. A board showing zeroes renders
         # identically to one that never loaded.
-        assert "212" in page["text"]["tiles"]
-        assert "Expected" in page["text"]["tiles"]
+        #
+        # Case-insensitive because `innerText` reflects `text-transform`, so a
+        # label the stylesheet renders in capitals comes back in capitals. A
+        # content test that fails when a label is restyled is testing the
+        # stylesheet.
+        tiles = page["text"]["tiles"].lower()
+        assert "212" in tiles
+        assert "expected" in tiles
 
     def test_the_verdict_names_what_is_blocking(self, page):
         text = page["text"]["verdict"]
@@ -152,9 +158,9 @@ class TestTheCommandCentre:
         assert "not accounted for" in text
 
     def test_people_are_listed_worst_first(self, page):
-        priority = page["text"]["priority"]
-        assert "Unaccounted for" in priority
-        assert priority.index("Unaccounted for") < priority.index("Uncertain")
+        priority = page["text"]["priority"].lower()
+        assert "unaccounted for" in priority
+        assert priority.index("unaccounted for") < priority.index("uncertain")
 
     def test_the_assembly_panel_shows_both_zones(self, page):
         zones = page["text"]["zones"]
@@ -181,8 +187,8 @@ class TestTheWardenScreen:
         assert page["errors"] == []
 
     def test_the_zone_counts_arrived(self, page):
-        tiles = page["text"]["tiles"]
-        assert "Expected" in tiles and "Confirmed" in tiles
+        tiles = page["text"]["tiles"].lower()
+        assert "expected" in tiles and "confirmed" in tiles
 
     def test_the_device_is_not_reporting_a_failure(self, page):
         # The banner from the storage-failure gate. It must not be on a device

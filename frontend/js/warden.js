@@ -72,7 +72,10 @@ function applyLanguage() {
   document.getElementById('zone-title').textContent = `${t('warden.my_zone')} · ${zoneId}`;
   document.getElementById('lang').textContent = lang === 'en' ? 'العربية' : 'English';
   document.getElementById('submit-count').textContent = t('warden.headcount_submit');
-  document.getElementById('headcount').placeholder = t('warden.headcount_prompt');
+  // The prompt is a label now. In the field it was rendered in the numeral
+  // face at 36px and ran off the end of the input.
+  document.getElementById('headcount-label').textContent =
+    t('warden.headcount_prompt');
   document.getElementById('sweep').textContent = t('warden.sweep');
   document.getElementById('escalate').textContent = t('warden.escalate');
   document.getElementById('note').textContent = t('warden.note');
@@ -277,7 +280,7 @@ function paintRoster(zone) {
 
   host.innerHTML = rows.map((row) => `
     <div class="row" style="display:block">
-      <div style="display:flex;align-items:center;gap:10px">
+      <div class="person-head">
         <span class="chip ${escapeHtml(row.colour)}">${escapeHtml(t('state.' + row.state, row.state))}</span>
         <div class="who">
           <div class="name">${escapeHtml(row.display_name)}</div>
