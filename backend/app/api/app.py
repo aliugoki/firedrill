@@ -405,22 +405,28 @@ def create_app(registry: DrillRegistry | None = None,
     @app.get("/api/evac/drills/{drill_id}/zones",
              response_model=list[schemas.ZonePanelOut], tags=["board"])
     def get_zones(drill_id: str, caller: Caller = Depends(requires(EVAC_READ))):
-        return [schemas.ZonePanelOut(**p) for p in drill_or_404(drill_id, caller).zone_panels()]
+        return [schemas.ZonePanelOut(**p)
+                for p in drill_or_404(drill_id, caller).zone_panels(now_ms())]
 
     # --- warden ---------------------------------------------------------------
 
     @app.get("/api/evac/drills/{drill_id}/warden/{zone_id}",
              response_model=schemas.WardenZoneOut, tags=["warden"])
-    def warden_zone(drill_id: str, zone_id: str,
+    def warden_zone(drill_id: str, zone_id: str, device_id: str | None = None,
                     caller: Caller = Depends(requires(EVAC_WARDEN))):
         drill = drill_or_404(drill_id, caller)
         if not caller.covers(zone_id):
             raise HTTPException(status.HTTP_403_FORBIDDEN,
                                 f"you are not assigned to {zone_id}")
         at = now_ms()
+        if device_id:
+            # The heartbeat. A warden with nothing new to report does not post
+            # a sync, so without counting this five-second refresh as contact
+            # the server cannot tell a quiet warden from a departed one.
+            drill.warden.heard_from(device_id, caller.user_id, at, zone_id)
         board = drill.board(at)
         rows = board.by_assembly_zone().get(zone_id, ())
-        panels = {p["zone_id"]: p for p in drill.zone_panels()}
+        panels = {p["zone_id"]: p for p in drill.zone_panels(at)}
         panel = panels.get(zone_id) or drill.warden.sweep(zone_id).summary(set())
         return schemas.WardenZoneOut(
             drill_id=drill_id, zone_id=zone_id, warden_id=caller.user_id,
@@ -468,6 +474,7 @@ def create_app(registry: DrillRegistry | None = None,
                 continue
 
             queue = drill.warden.device(item.device_id, item.warden_id)
+            queue.heard_from(now_ms(), item.zone_id)
             if item.device_seq < queue.next_seq:
                 duplicates += 1
                 continue

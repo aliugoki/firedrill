@@ -131,7 +131,7 @@ function toWire(row) {
 
 async function refreshZone() {
   try {
-    zoneFreshness.succeed(await api.wardenZone(drillId, zoneId));
+    zoneFreshness.succeed(await api.wardenZone(drillId, zoneId, deviceId));
   } catch (error) {
     zoneFreshness.fail(error);
   }

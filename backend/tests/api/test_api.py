@@ -744,3 +744,75 @@ class TestTheBlindBannerIsSpentOnBlindness:
         drill.ingestor.state.health.degrade(
             Component.CAMERA, "cam-1", drill.started_ms, "offline")
         assert self._board_health(client, drill_id)["blind"] is True
+
+
+class TestAWardenTabletThatGoesQuiet:
+    """A zone whose warden has walked out of range looks swept-in-progress.
+
+    `WardenState.stale_devices` said the command centre needs this before it
+    trusts a zone as settled, and nothing called it. It could not have helped:
+    it reads the device's own pending queue, and on the server actions arrive
+    already synced, so it reports nothing whatever happens.
+
+    What the server can observe is when it last heard from a tablet. It was not
+    recording that either. A warden with nothing new to report does not post a
+    sync, so the PWA's five-second zone refresh is the heartbeat that separates
+    a quiet warden from a departed one -- and it did not carry a device id.
+    """
+
+    def _running(self, client) -> str:
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        return drill_id
+
+    def _panels(self, client, drill_id):
+        return {p["zone_id"]: p for p in client.get(
+            f"/api/evac/drills/{drill_id}/zones", headers=OPERATOR).json()}
+
+    def test_a_zone_nobody_has_connected_to_says_so(self, client):
+        drill_id = self._running(client)
+        panel = self._panels(client, drill_id)["assembly-north"]
+        assert panel["warden_silent_ms"] is None
+
+    def test_a_zone_refresh_counts_as_contact(self, client):
+        drill_id = self._running(client)
+        client.get(f"/api/evac/drills/{drill_id}/warden/assembly-north"
+                   "?device_id=tablet-3", headers=WARDEN)
+
+        panel = self._panels(client, drill_id)["assembly-north"]
+        assert panel["warden_silent_ms"] is not None
+        assert panel["warden_silent_ms"] < 5_000
+
+    def test_a_refresh_without_a_device_is_not_contact(self, client):
+        # An operator reading a warden's zone from the command centre is not
+        # evidence that the tablet is still there.
+        drill_id = self._running(client)
+        client.get(f"/api/evac/drills/{drill_id}/warden/assembly-north",
+                   headers=WARDEN)
+        assert self._panels(client, drill_id)["assembly-north"][
+            "warden_silent_ms"] is None
+
+    def test_a_sync_counts_as_contact_too(self, client):
+        drill_id = self._running(client)
+        client.post(f"/api/evac/drills/{drill_id}/warden/sync", headers=WARDEN,
+                    json={"actions": [{
+                        "kind": "CONFIRM_PRESENT", "warden_id": "warden-7",
+                        "device_id": "tablet-3", "zone_id": "assembly-north",
+                        "ts_ms": T0, "device_seq": 1,
+                        "subject": "emp:EMP-000"}]})
+        assert self._panels(client, drill_id)["assembly-north"][
+            "warden_silent_ms"] is not None
+
+    def test_the_quietest_device_covering_a_zone_is_the_one_reported(self,
+                                                                     client):
+        # Two tablets on one zone and one has gone away: that is the fact worth
+        # surfacing, and taking the most recent would hide it.
+        drill_id = self._running(client)
+        drill = client.app.state.registry.get(drill_id)
+        drill.warden.heard_from("tablet-3", "warden-7", T0, "assembly-north")
+        drill.warden.heard_from("tablet-4", "warden-9", T0 + 600_000,
+                                "assembly-north")
+
+        silence = drill.warden.silence_for_zone(
+            "assembly-north", T0 + 900_000)
+        assert silence == 900_000

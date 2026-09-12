@@ -171,9 +171,10 @@ class WardenState:
     def stale_devices(self, now_ms: int, *, threshold_ms: int = 120_000) -> list:
         """Devices holding unsynced work for longer than they should.
 
-        A warden whose tablet has been offline for four minutes is working from
-        a roster that may have moved, and the command centre needs to know that
-        before it trusts their zone as settled.
+        The device's own view of its queue. Nothing on the server populates
+        `pending` -- actions arrive already synced -- so this reports nothing
+        there, and `silent_devices` is the question the command centre can
+        actually answer.
         """
         return [
             {"device_id": queue.device_id, "warden_id": queue.warden_id,
@@ -182,12 +183,52 @@ class WardenState:
             if (queue.staleness_ms(now_ms) or 0) >= threshold_ms
         ]
 
-    def zone_panels(self, expected_by_zone: dict) -> list:
+    def silent_devices(self, now_ms: int) -> list:
+        """Every device that has spoken to this drill, and how long ago.
+
+        No threshold here on purpose. How long a warden's tablet may be quiet
+        before somebody walks over to it is an operational decision a site
+        makes, not a number this can derive, and reporting the duration lets
+        the screen decide while the record keeps the fact.
+
+        A zone with a silent warden and a zone with a warden still walking it
+        look identical on the board: neither is swept. During an evacuation one
+        means wait and the other means send somebody.
+        """
+        return sorted(
+            ({"device_id": queue.device_id, "warden_id": queue.warden_id,
+              "zone_id": queue.last_zone_id,
+              "silent_ms": queue.silence_ms(now_ms)}
+             for queue in self.devices.values()
+             if queue.last_contact_ms is not None),
+            key=lambda row: -row["silent_ms"])
+
+    def heard_from(self, device_id: str, warden_id: str, now_ms: int,
+                   zone_id: str | None = None) -> None:
+        self.device(device_id, warden_id).heard_from(now_ms, zone_id)
+
+    def silence_for_zone(self, zone_id: str, now_ms: int) -> int | None:
+        """The quietest device covering a zone, or None if none has spoken.
+
+        The quietest rather than the most recent: if two devices cover a zone
+        and one has gone away, that is the fact worth surfacing.
+        """
+        silences = [queue.silence_ms(now_ms)
+                    for queue in self.devices.values()
+                    if queue.last_zone_id == zone_id
+                    and queue.last_contact_ms is not None]
+        return max(silences) if silences else None
+
+    def zone_panels(self, expected_by_zone: dict,
+                    now_ms: int | None = None) -> list:
         """One summary per zone, for the command centre's assembly panel."""
         panels = []
         for zone_id, expected in sorted(expected_by_zone.items()):
             sweep = self.sweeps.get(zone_id) or SweepState(zone_id=zone_id)
-            panels.append(sweep.summary({e.person_ref for e in expected}))
+            panel = sweep.summary({e.person_ref for e in expected})
+            panel["warden_silent_ms"] = (
+                None if now_ms is None else self.silence_for_zone(zone_id, now_ms))
+            panels.append(panel)
         return panels
 
     def is_every_zone_clean(self, expected_by_zone: dict) -> bool:

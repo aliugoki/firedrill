@@ -289,8 +289,8 @@ class Drill:
         return self.ingestor.state.bottlenecks.measure(
             now_ms, started_ms=self.started_ms)
 
-    def zone_panels(self) -> list:
-        return self.warden.zone_panels(self.roster.by_assembly_zone())
+    def zone_panels(self, now_ms: int | None = None) -> list:
+        return self.warden.zone_panels(self.roster.by_assembly_zone(), now_ms)
 
     def timing(self, now_ms: int) -> DrillTiming:
         resolutions = resolve_identities(self.ingestor.state, self.roster)

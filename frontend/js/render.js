@@ -327,3 +327,28 @@ export function syncStatus({ online, pending, stalenessMs, fromCache }, t) {
   }
   return { tone: 'online', text: t('warden.synced') };
 }
+
+/**
+ * What a zone panel says about its warden's tablet.
+ *
+ * Three states, and the middle one is why this exists. A zone with a warden
+ * still walking it and a zone whose warden has gone out of range look
+ * identical on the board -- neither is swept -- and during an evacuation one
+ * means wait and the other means send somebody.
+ *
+ * The threshold is here rather than on the server because how long a tablet
+ * may be quiet before somebody walks over to it is an operational decision a
+ * site makes, not a number derived from anything. The server reports the
+ * duration and keeps the fact; this decides when to say it out loud.
+ */
+export const WARDEN_SILENCE_MS = 90_000;
+
+export function wardenContact(panel, t, { silenceMs = WARDEN_SILENCE_MS } = {}) {
+  const silent = panel ? panel.warden_silent_ms : null;
+  if (silent === null || silent === undefined) {
+    return { tone: 'unheard', text: t('warden.never_connected') };
+  }
+  if (silent < silenceMs) return null;
+  const seconds = Math.round(silent / 1000);
+  return { tone: 'silent', text: `${t('warden.silent_for')} ${seconds}s` };
+}

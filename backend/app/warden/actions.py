@@ -282,6 +282,33 @@ class DeviceQueue:
     next_seq: int = 1
     pending: list[WardenAction] = field(default_factory=list)
     synced: list[WardenAction] = field(default_factory=list)
+    #: When the server last heard from this device, and about which zone.
+    #:
+    #: The server knew neither. `pending` and `staleness_ms` describe the
+    #: device's own queue and are always empty on the server side, where
+    #: actions arrive already synced -- so `WardenState.stale_devices`, whose
+    #: docstring says the command centre needs this before it trusts a zone as
+    #: settled, could only ever return nothing.
+    last_contact_ms: int | None = None
+    last_zone_id: str | None = None
+
+    def heard_from(self, now_ms: int, zone_id: str | None = None) -> None:
+        """Note contact. Any request from the device counts, not only a sync.
+
+        A warden with nothing new to report is not a warden who has gone away,
+        and the PWA only posts a sync when it has something queued. Its
+        five-second zone refresh is the heartbeat that separates the two.
+        """
+        if self.last_contact_ms is None or now_ms > self.last_contact_ms:
+            self.last_contact_ms = now_ms
+        if zone_id:
+            self.last_zone_id = zone_id
+
+    def silence_ms(self, now_ms: int) -> int | None:
+        """How long since the device was last heard from. None if never."""
+        if self.last_contact_ms is None:
+            return None
+        return max(0, now_ms - self.last_contact_ms)
 
     def record(self, action: WardenAction, *, online: bool) -> WardenAction:
         """Take an action. Queued locally when offline, kept either way."""

@@ -272,6 +272,10 @@ class ZonePanelOut(BaseModel):
     severity: str | None
     is_clean: bool
     blocking: list[str]
+    warden_silent_ms: int | None = None
+    """How long since this zone's warden device was last heard from. None
+    means it has never spoken, which reads on the screen as a zone with no
+    warden rather than a warden who has gone quiet."""
 
 
 class WardenZoneOut(BaseModel):

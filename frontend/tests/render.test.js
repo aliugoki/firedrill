@@ -13,6 +13,7 @@ import {
   exitPressure,
   drillControl,
   composer,
+  wardenContact,
 } from '../js/render.js';
 
 const t = createTranslator('en');
@@ -483,5 +484,44 @@ describe('what a warden types an escalation into', () => {
 
   it('carries the kind through so the caller does not re-derive it', () => {
     assert.equal(composer('NOTE', 'x', t).kind, 'NOTE');
+  });
+});
+
+describe('a warden device that has gone quiet', () => {
+  // A zone with a warden still walking it and a zone whose warden has walked
+  // out of range look identical on the board: neither is swept. During an
+  // evacuation one means wait and the other means send somebody.
+  const t = (key) => key;
+
+  it('says nothing while the tablet is talking', () => {
+    assert.equal(wardenContact({ warden_silent_ms: 4_000 }, t), null);
+  });
+
+  it('speaks up once the silence is long enough', () => {
+    const contact = wardenContact({ warden_silent_ms: 300_000 }, t);
+    assert.equal(contact.tone, 'silent');
+    assert.match(contact.text, /300s/);
+  });
+
+  it('distinguishes never connected from gone quiet', () => {
+    // A zone whose warden never arrived is a different problem from one whose
+    // warden arrived and stopped answering, and the same blank panel serves
+    // for both unless this says which.
+    const never = wardenContact({ warden_silent_ms: null }, t);
+    assert.equal(never.tone, 'unheard');
+    assert.notEqual(never.text, wardenContact({ warden_silent_ms: 300_000 }, t).text);
+  });
+
+  it('treats a missing panel as never connected rather than fine', () => {
+    assert.equal(wardenContact(undefined, t).tone, 'unheard');
+  });
+
+  it('takes the threshold from the caller', () => {
+    // How long a tablet may be quiet before somebody walks over to it is a
+    // site's decision, not a number derived from anything.
+    assert.equal(wardenContact({ warden_silent_ms: 20_000 }, t,
+                               { silenceMs: 10_000 }).tone, 'silent');
+    assert.equal(wardenContact({ warden_silent_ms: 20_000 }, t,
+                               { silenceMs: 60_000 }), null);
   });
 });

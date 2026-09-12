@@ -13,7 +13,7 @@ import { Api, Freshness } from './api.js';
 import { createTranslator, isRtl, formatDuration } from './i18n.js';
 import {
   drillControl, escapeHtml, exitPressure, healthLine, orderForWarden,
-  staleness, tiles, timingLine, verdict,
+  staleness, tiles, timingLine, verdict, wardenContact,
 } from './render.js';
 
 const params = new URLSearchParams(location.search);
@@ -243,6 +243,13 @@ function paintZones() {
           escapeHtml(t('warden.outstanding'))}</div>
         ${(panel.blocking || []).map(
           (reason) => `<div class="reason">${escapeHtml(reason)}</div>`).join('')}
+        ${(() => {
+          const contact = wardenContact(panel, t);
+          return contact
+            ? `<div class="reason ${escapeHtml(contact.tone)}">${
+                escapeHtml(contact.text)}</div>`
+            : '';
+        })()}
       </div>
     </div>`).join('');
 }

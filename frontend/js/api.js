@@ -93,7 +93,18 @@ export class Api {
   explain(id, ref) {
     return this.request(`/api/evac/drills/${id}/people/${encodeURIComponent(ref)}/explain`);
   }
-  wardenZone(id, zone) { return this.request(`/api/evac/drills/${id}/warden/${zone}`); }
+  /**
+   * A zone's roster and panel, and the device's heartbeat.
+   *
+   * The device id is not decoration. A warden with nothing new to report does
+   * not post a sync, so this five-second refresh is the only thing that tells
+   * the command centre the tablet is still there. Without it a zone whose
+   * warden has walked out of range looks exactly like one still being swept.
+   */
+  wardenZone(id, zone, deviceId) {
+    const query = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : '';
+    return this.request(`/api/evac/drills/${id}/warden/${zone}${query}`);
+  }
   wardenSync(id, actions) {
     return this.request(`/api/evac/drills/${id}/warden/sync`, {
       method: 'POST', body: { actions },

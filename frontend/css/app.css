@@ -114,6 +114,10 @@ main { padding: 16px; max-width: 1600px; margin: 0 auto; }
 .row .name { font-weight: 600; }
 .row .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
 .row .reason { color: var(--muted); font-size: 12px; margin-top: 3px; }
+/* A warden's tablet that has gone quiet is not a muted footnote: the zone
+   looks unswept either way, and only this says which kind of unswept. */
+.row .reason.silent   { color: var(--orange); font-weight: 600; }
+.row .reason.unheard  { color: var(--orange); font-weight: 600; }
 
 .chip {
   border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600;
