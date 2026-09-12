@@ -18,13 +18,29 @@
 export function verdict(board, t) {
   if (!board) {
     return { clear: false, headline: t('board.not_all_clear'),
-             reasons: ['no data has been received yet'] };
+             reasons: [t('board.no_data_yet')] };
   }
   return {
     clear: Boolean(board.all_clear),
     headline: board.all_clear ? t('board.all_clear') : t('board.not_all_clear'),
-    reasons: board.blocking_all_clear || [],
+    // Worded here from the codes. `blocking_all_clear` is the server's own
+    // English and stays as the fallback for an edge node that sends no codes.
+    reasons: blockingReasons(board, t),
   };
+}
+
+/**
+ * Every refusal the board carries, worded, with the server's prose as a
+ * fallback per entry rather than for the whole list -- a code added in a
+ * version this device has not been updated to must not take the other
+ * refusals down with it.
+ */
+export function blockingReasons(board, t) {
+  const sentences = board?.blocking_all_clear || [];
+  const coded = board?.blockers;
+  if (!Array.isArray(coded) || !coded.length) return sentences;
+  return coded.map((blocker, index) => describeBlocker(
+    { ...blocker, text: sentences[index] }, t));
 }
 
 /** The count tiles, in the order an operator reads them. */
@@ -276,7 +292,7 @@ export function drillControl(drill, t, { armed = false } = {}) {
     return { status, action: null, blocking: [] };
   }
 
-  const blocking = drill.all_clear ? [] : (drill.blocking_all_clear || []);
+  const blocking = drill.all_clear ? [] : blockingReasons(drill, t);
   return {
     status,
     action: {
@@ -518,4 +534,44 @@ export function describeReason(row, t) {
     parts.push(`· ${detail.identities.join(' / ')}`);
   }
   return parts.join(' ');
+}
+
+/**
+ * A refusal to show ALL CLEAR, worded in the language being read.
+ *
+ * The same arrangement as `describeReason` and for the same reason: this list
+ * is what a commander reads before deciding whether to keep two hundred people
+ * standing outside, and it was English prose on a screen used in Arabic.
+ *
+ * Zone-scoped refusals lead with the zone, because the command centre shows
+ * every zone at once and "the sweep is still in progress" without one is a
+ * sentence nobody can act on.
+ */
+export function describeBlocker(blocker, t) {
+  if (!blocker) return '';
+  if (typeof blocker === 'string') return blocker;   // an older edge node
+  const { code, detail = {} } = blocker;
+  const words = t(`blocker.${code}`);
+  if (words === `blocker.${code}`) return blocker.text || '';
+
+  const zone = detail.zone_id ? `${detail.zone_id}: ` : '';
+  switch (code) {
+    case 'PEOPLE_UNACCOUNTED':
+      return `${detail.outstanding} ${t('blocker.of')} ${detail.expected} `
+        + `${t('blocker.people')} ${words}`;
+    case 'OPEN_OUTAGES':
+      return `${detail.count} ${words}`;
+    case 'UNASSIGNED_PEOPLE':
+      return `${detail.count} ${t('blocker.people')} ${words}`;
+    case 'ZONE_UNCONFIRMED':
+      return `${zone}${detail.count} ${t('blocker.people')} ${words}`;
+    case 'SWEEP_ESCALATED':
+      return `${zone}${words}: ${detail.reason ?? ''}`;
+    case 'HEADCOUNT_MISMATCH':
+      // The numbers rather than the server's sentence about them: the sentence
+      // is English and the numbers are not.
+      return `${zone}${words} (${detail.physical} / ${detail.system})`;
+    default:
+      return `${zone}${words}`;
+  }
 }

@@ -167,7 +167,7 @@ function paintDrillControl(board) {
   const host = document.getElementById('stale-banner');
   if (blocking.length) {
     host.innerHTML += `<div class="stale">${escapeHtml(t('drill.still_outstanding'))}: `
-      + blocking.map(escape).join('; ') + '</div>';
+      + blocking.map(escapeHtml).join('; ') + '</div>';
   }
 }
 

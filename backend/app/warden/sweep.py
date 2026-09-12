@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+from app.core.blockers import Blocker, BlockerCode, describe_all
 from app.warden.headcount import Headcount, ZoneHeadcounts
 
 
@@ -145,28 +146,51 @@ class SweepState:
         return True
 
     def blocking_clean(self, expected: set) -> list[str]:
-        """Why this zone is not clean. Never empty when it is not."""
-        reasons: list[str] = []
+        """Why this zone is not clean, in words. Never empty when it is not."""
+        return describe_all(self.blockers(expected))
+
+    def blockers(self, expected: set) -> list[Blocker]:
+        """The same refusals as codes, for a screen to word in its own language.
+
+        One source for both: two methods computing the same list in two shapes
+        is the drift this codebase keeps finding, so the sentences above are
+        derived from these rather than written twice.
+
+        The zone id travels in every one of them. These are read on a command
+        centre that shows every zone at once, where "the sweep is still in
+        progress" without a zone is a sentence nobody can act on.
+        """
+        out: list[Blocker] = []
         if self.status is SweepStatus.NOT_STARTED:
-            reasons.append("the sweep has not been started")
+            out.append(Blocker(BlockerCode.SWEEP_NOT_STARTED,
+                               {"zone_id": self.zone_id}))
         elif self.status is SweepStatus.IN_PROGRESS:
-            reasons.append("the sweep is still in progress")
+            out.append(Blocker(BlockerCode.SWEEP_IN_PROGRESS,
+                               {"zone_id": self.zone_id}))
         elif self.status is SweepStatus.ESCALATED:
-            reasons.append(
-                f"escalated: {self.escalation_reason or 'no reason recorded'}")
+            out.append(Blocker(BlockerCode.SWEEP_ESCALATED, {
+                "zone_id": self.zone_id,
+                "reason": self.escalation_reason or "no reason recorded"}))
 
         outstanding = self.outstanding(expected)
         if outstanding:
-            reasons.append(
-                f"{len(outstanding)} person(s) in this zone have not been "
-                "confirmed or reported")
+            out.append(Blocker(BlockerCode.ZONE_UNCONFIRMED, {
+                "zone_id": self.zone_id, "count": len(outstanding)}))
 
         latest = self.headcounts.latest
         if latest is None:
-            reasons.append("no physical headcount has been recorded")
+            out.append(Blocker(BlockerCode.NO_HEADCOUNT,
+                               {"zone_id": self.zone_id}))
         elif latest.is_mismatch:
-            reasons.append(latest.summary())
-        return reasons
+            # The mismatch's own sentence, which names the two numbers and who
+            # counted. Carried as a value rather than rebuilt here, because the
+            # wording of a disagreement is the headcount's business.
+            out.append(Blocker(BlockerCode.HEADCOUNT_MISMATCH, {
+                "zone_id": self.zone_id, "summary": latest.summary(),
+                "physical": latest.physical_count,
+                "system": latest.system_count,
+                "difference": latest.difference}))
+        return out
 
     def summary(self, expected: set) -> dict:
         """What the warden's own screen shows, and the zone panel mirrors."""

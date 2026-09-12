@@ -796,6 +796,8 @@ def _board_out(drill: Drill, at: int) -> schemas.BoardOut:
         excluded_from_the_count=board.excluded_from_the_count,
         all_clear=drill.all_clear(at),
         blocking_all_clear=drill.blocking_all_clear(at),
+        blockers=[schemas.BlockerOut(code=b.code.value, detail=dict(b.detail))
+                  for b in drill.blockers(at)],
         roster_trustworthy=board.roster_trustworthy,
         health=_health(board),
         rows=[_row_out(r) for r in board.rows])

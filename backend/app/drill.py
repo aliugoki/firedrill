@@ -26,6 +26,7 @@ from app.core.accountability_fsm import (
     PROVISIONAL_CONFIG as ACC_CONFIG,
     AccountabilityConfig,
 )
+from app.core.blockers import Blocker, BlockerCode, describe_all
 from app.core.events import Event, EventType, SourceKind
 from app.core.identity_fsm import PROVISIONAL_CONFIG as ID_CONFIG, IdentityConfig
 from app.core.ledger import Explanation
@@ -369,11 +370,15 @@ class Drill:
 
     def blocking_all_clear(self, now_ms: int) -> list[str]:
         """Every reason the drill cannot be signed off. Never empty when it cannot."""
-        reasons = list(self.board(now_ms).blocking_all_clear())
-        reasons.extend(self.warden.blocking_clean(self.roster.by_assembly_zone()))
+        return describe_all(self.blockers(now_ms))
+
+    def blockers(self, now_ms: int) -> list:
+        """The same refusals as codes, for a screen to word in its own language."""
+        out = list(self.board(now_ms).blockers())
+        out.extend(self.warden.blockers(self.roster.by_assembly_zone()))
         if self.status is DrillStatus.DRAFT:
-            reasons.insert(0, "the drill has not been started")
-        return reasons
+            out.insert(0, Blocker(BlockerCode.DRILL_NOT_STARTED))
+        return out
 
     def _persist(self) -> bool:
         """Record the drill row. A failure degrades rather than stops."""

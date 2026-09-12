@@ -240,3 +240,43 @@ class TestSweepProgress:
         assert summary["severity"] == Severity.ESCALATE.value
         assert summary["is_clean"] is False
         assert summary["blocking"]
+
+class TestTheRefusalsCarryCodes:
+    """`blocking_clean` is English prose and the screen is read in Arabic.
+
+    The codes and the sentences come from one list rather than two: two methods
+    computing the same refusals in two shapes is the drift this codebase keeps
+    finding, so the sentences are derived from the codes.
+    """
+
+    def zone(self) -> SweepState:
+        return SweepState(zone_id="assembly-north")
+
+    def test_the_sentence_is_derived_from_the_code(self):
+        sweep = self.zone()
+        expected = {"emp:EMP-1"}
+        assert (sweep.blocking_clean(expected)
+                == [b.describe() for b in sweep.blockers(expected)])
+
+    def test_every_refusal_names_its_zone(self):
+        # A command centre shows every zone at once, and "the sweep is still in
+        # progress" without a zone is a sentence nobody can act on.
+        sweep = self.zone()
+        for blocker in sweep.blockers({"emp:EMP-1"}):
+            assert blocker.detail.get("zone_id") == "assembly-north", blocker
+
+    def test_a_disagreement_carries_the_numbers_not_only_the_sentence(self):
+        from app.warden.headcount import Headcount
+
+        sweep = self.zone()
+        sweep.confirm("emp:EMP-1", "warden-7", T0)
+        sweep.complete("warden-7", T0 + 1_000)
+        sweep.record_headcount(Headcount(
+            zone_id="assembly-north", warden_id="warden-7",
+            device_id="tablet-3", ts_ms=T0, physical_count=3, system_count=5))
+
+        mismatch = [b for b in sweep.blockers({"emp:EMP-1"})
+                    if b.code.value == "HEADCOUNT_MISMATCH"]
+        assert len(mismatch) == 1
+        assert mismatch[0].detail["physical"] == 3
+        assert mismatch[0].detail["system"] == 5

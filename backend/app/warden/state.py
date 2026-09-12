@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from app.core.accountability_fsm import WardenEvidence
+from app.core.blockers import Blocker, BlockerCode, describe_all
 from app.core.roster import UNASSIGNED
 from app.warden.actions import ActionKind, DeviceQueue, WardenAction
 from app.warden.headcount import Headcount, Severity
@@ -297,24 +298,26 @@ class WardenState:
         return True
 
     def blocking_clean(self, expected_by_zone: dict) -> list:
-        reasons = []
+        return describe_all(self.blockers(expected_by_zone))
+
+    def blockers(self, expected_by_zone: dict) -> list:
+        """Why no zone is clean, as codes a screen can word for itself."""
+        out: list[Blocker] = []
         if not expected_by_zone:
-            return ["no zones have any expected people"]
+            return [Blocker(BlockerCode.NO_ZONES)]
         for zone_id, expected in sorted(expected_by_zone.items()):
             if zone_id == UNASSIGNED:
                 # Not a place, and no warden is assigned to it. This used to
                 # read "unassigned: no warden has started a sweep", which looks
                 # like an ordinary unswept zone rather than a roster with holes
                 # in it -- and the fix for the two is completely different.
-                reasons.append(
-                    f"{len(expected)} person(s) have no assembly zone on the "
-                    "roster, so no warden's list includes them and nobody can "
-                    "sweep for them")
+                out.append(Blocker(BlockerCode.UNASSIGNED_PEOPLE,
+                                   {"count": len(expected)}))
                 continue
             sweep = self.sweeps.get(zone_id)
             if sweep is None:
-                reasons.append(f"{zone_id}: no warden has started a sweep")
+                out.append(Blocker(BlockerCode.NO_SWEEP_STARTED,
+                                   {"zone_id": zone_id}))
                 continue
-            for reason in sweep.blocking_clean({e.person_ref for e in expected}):
-                reasons.append(f"{zone_id}: {reason}")
-        return reasons
+            out.extend(sweep.blockers({e.person_ref for e in expected}))
+        return out

@@ -146,6 +146,11 @@ class TestEveryReasonCodeIsWordedInBothLanguages:
 
         return {code.value for code in ReasonCode}
 
+    def blocker_codes(self) -> set:
+        from app.core.blockers import BlockerCode
+
+        return {code.value for code in BlockerCode}
+
     def tables(self) -> dict:
         """The two string tables, parsed out of `i18n.js`.
 
@@ -160,8 +165,8 @@ class TestEveryReasonCodeIsWordedInBothLanguages:
         for language in ("en", "ar"):
             start = source.index(f"  {language}: {{")
             end = source.index("\n  },", start)
-            tables[language] = set(
-                re.findall(r"'(reason\.[A-Za-z_]+)'", source[start:end]))
+            tables[language] = set(re.findall(
+                r"'((?:reason|blocker)\.[A-Za-z_]+)'", source[start:end]))
         return tables
 
     def test_the_scan_found_both_tables(self):
@@ -174,7 +179,7 @@ class TestEveryReasonCodeIsWordedInBothLanguages:
 
     def test_every_code_the_server_can_send_has_words(self):
         worded = {key.split(".", 1)[1] for key in self.tables()["en"]}
-        missing = sorted(self.codes() - worded)
+        missing = sorted((self.codes() | self.blocker_codes()) - worded)
         assert missing == [], f"no wording for {missing}"
 
     def test_nothing_is_worded_for_a_code_that_cannot_arrive(self):
@@ -183,6 +188,6 @@ class TestEveryReasonCodeIsWordedInBothLanguages:
         worded = {key.split(".", 1)[1] for key in self.tables()["en"]}
         # These are the pieces a sentence is assembled from rather than codes.
         parts = {"last_seen", "on_camera", "seconds_in",
-                 "ASSEMBLY_WITH_IDENTITY_STALE"}
-        extra = sorted(worded - self.codes() - parts)
+                 "ASSEMBLY_WITH_IDENTITY_STALE", "of", "people"}
+        extra = sorted(worded - self.codes() - self.blocker_codes() - parts)
         assert extra == [], f"worded but unreachable: {extra}"

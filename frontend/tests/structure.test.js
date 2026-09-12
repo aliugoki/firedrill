@@ -127,10 +127,16 @@ describe('the escaping is the right escaping', () => {
   // name as "%u0639%u0644%u064A". It stopped injection and destroyed
   // legibility, on the screen whose job is letting a warden read names.
   for (const file of ['js/command.js', 'js/warden.js']) {
-    it(`${file} never calls the global escape`, () => {
+    it(`${file} never reaches the global escape at all`, () => {
+      // Named rather than called: this looked only for `escape(`, and
+      // `blocking.map(escape)` passes it as a reference, so the deprecated
+      // global survived in the command centre's blocking list -- percent-
+      // encoding every reason an all-clear was refused. Any bare mention of
+      // the identifier is the failure.
       const source = code(file);
-      assert.ok(!/[^A-Za-z_$.]escape\(/.test(source),
-        `${file} calls a bare escape(), which percent-encodes`);
+      const bare = [...source.matchAll(/(^|[^A-Za-z0-9_$.])escape\b(?!Html)/g)];
+      assert.deepEqual(bare.map((m) => m.index), [],
+        `${file} names the global escape, which percent-encodes`);
     });
 
     it(`${file} imports the one that escapes HTML`, () => {

@@ -20,6 +20,8 @@ import {
   rowNotes,
   syncProblems,
   describeReason,
+  describeBlocker,
+  blockingReasons,
 } from '../js/render.js';
 
 const t = createTranslator('en');
@@ -831,5 +833,72 @@ describe('the reason under a name, in the language being read', () => {
     }, t);
     assert.match(text, /240/);
     assert.ok(!/last seen/.test(text), text);
+  });
+});
+
+describe('why the board is refusing an all-clear', () => {
+  // This list is what a commander reads before deciding whether to keep two
+  // hundred people standing outside, and it was English prose on a screen used
+  // in Arabic.
+  const t = createTranslator('en');
+  const ar = createTranslator('ar');
+
+  it('words a count of people', () => {
+    const text = describeBlocker(
+      { code: 'PEOPLE_UNACCOUNTED', detail: { outstanding: 34, expected: 212 } }, t);
+    assert.match(text, /34/);
+    assert.match(text, /212/);
+    assert.match(text, /not accounted for/);
+  });
+
+  it('leads a zone-scoped refusal with the zone', () => {
+    // The command centre shows every zone at once, so "the sweep is still in
+    // progress" without a zone is a sentence nobody can act on.
+    const text = describeBlocker(
+      { code: 'SWEEP_IN_PROGRESS', detail: { zone_id: 'assembly-north' } }, t);
+    assert.ok(text.startsWith('assembly-north:'), text);
+  });
+
+  it('gives a headcount disagreement the two numbers', () => {
+    // The server's sentence about them is English; the numbers are not.
+    const text = describeBlocker({
+      code: 'HEADCOUNT_MISMATCH',
+      detail: { zone_id: 'north', physical: 38, system: 40, difference: 2 },
+    }, ar);
+    assert.match(text, /38/);
+    assert.match(text, /40/);
+    assert.ok(!/disagrees/.test(text), text);
+  });
+
+  it('falls back per entry rather than for the whole list', () => {
+    // A code added in a version this device has not been updated to must not
+    // take the other refusals down with it.
+    const worded = blockingReasons({
+      blocking_all_clear: ['3 of 5 people not accounted for',
+                           'something new the server knows about'],
+      blockers: [
+        { code: 'PEOPLE_UNACCOUNTED', detail: { outstanding: 3, expected: 5 } },
+        { code: 'INVENTED_LATER', detail: {} },
+      ],
+    }, t);
+    assert.match(worded[0], /3 of 5/);
+    assert.equal(worded[1], 'something new the server knows about');
+  });
+
+  it('uses the server sentences when there are no codes at all', () => {
+    const worded = blockingReasons(
+      { blocking_all_clear: ['the drill has not been started'] }, t);
+    assert.deepEqual(worded, ['the drill has not been started']);
+  });
+
+  it('the verdict carries the worded list', () => {
+    const v = verdict({
+      all_clear: false,
+      blocking_all_clear: ['1 of 2 people not accounted for'],
+      blockers: [{ code: 'PEOPLE_UNACCOUNTED',
+                   detail: { outstanding: 1, expected: 2 } }],
+    }, ar);
+    assert.ok(!/not accounted for/.test(v.reasons[0]), v.reasons[0]);
+    assert.match(v.reasons[0], /1/);
   });
 });

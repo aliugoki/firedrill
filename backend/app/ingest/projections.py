@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from app.core.blockers import Blocker, BlockerCode, describe_all
 from app.core.accountability_fsm import (
     PROVISIONAL_CONFIG as ACC_CONFIG,
     AccountabilityConfig,
@@ -327,17 +328,29 @@ class LiveBoard:
 
     def blocking_all_clear(self) -> list[str]:
         """Why the board is not showing all clear. Never empty when it is not."""
-        reasons: list[str] = []
+        return describe_all(self.blockers())
+
+    def blockers(self) -> list[Blocker]:
+        """The same refusals as codes, for a screen to word in its own language.
+
+        This list is what a commander reads before deciding whether to keep two
+        hundred people standing outside, and it was English prose on a screen
+        used in Arabic.
+        """
+        out: list[Blocker] = []
         if self.expected == 0:
-            reasons.append("no expected people on the roster")
+            out.append(Blocker(BlockerCode.NO_EXPECTED_PEOPLE))
         outstanding = self.expected - self.accounted
         if outstanding > 0:
-            reasons.append(f"{outstanding} of {self.expected} people not accounted for")
+            out.append(Blocker(BlockerCode.PEOPLE_UNACCOUNTED,
+                               {"outstanding": outstanding,
+                                "expected": self.expected}))
         if self.health.open_outages:
-            reasons.append(f"{self.health.open_outages} outage(s) still open")
+            out.append(Blocker(BlockerCode.OPEN_OUTAGES,
+                               {"count": self.health.open_outages}))
         if not self.roster_trustworthy:
-            reasons.append("the roster could not be verified against its source")
-        return reasons
+            out.append(Blocker(BlockerCode.ROSTER_UNVERIFIED))
+        return out
 
     # -- panels ----------------------------------------------------------------
 

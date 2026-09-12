@@ -100,9 +100,22 @@ class BoardOut(BaseModel):
 
     all_clear: bool
     blocking_all_clear: list[str]
+    """English prose, and the fallback for a client that does not know the
+    codes below."""
+    blockers: list[BlockerOut] = []
+    """The same refusals, as codes a screen words in the language being read.
+    This list is what a commander reads before deciding whether to keep two
+    hundred people standing outside."""
     roster_trustworthy: bool
     health: HealthOut
     rows: list[PersonRowOut]
+
+
+class BlockerOut(BaseModel):
+    """One reason an all-clear is being refused."""
+
+    code: str
+    detail: dict = {}
 
 
 class PercentilesOut(BaseModel):

@@ -28,6 +28,7 @@ export const STRINGS = {
     'board.unaccounted': 'Unaccounted for',
     'board.unknown': 'Unknown people',
     'board.needs_human': 'No camera can settle this — find them',
+    'board.no_data_yet': 'no data has been received yet',
     // Why a person is in the state they are in. The server sends a code and
     // the values; the wording is here, because this line is read in Arabic on
     // a tablet at an assembly point and it is what tells a warden what to do.
@@ -50,6 +51,25 @@ export const STRINGS = {
     'reason.last_seen': 'last seen in',
     'reason.on_camera': 'on',
     'reason.seconds_in': 's into the drill',
+    // Why the board is refusing an all-clear. The commander reads this list
+    // before deciding whether to keep two hundred people standing outside.
+    'blocker.DRILL_NOT_STARTED': 'The drill has not been started',
+    'blocker.NO_EXPECTED_PEOPLE': 'Nobody is expected on the roster',
+    'blocker.PEOPLE_UNACCOUNTED': 'not accounted for',
+    'blocker.OPEN_OUTAGES': 'outage(s) still open',
+    'blocker.ROSTER_UNVERIFIED': 'The roster could not be verified against its source',
+    'blocker.NO_ZONES': 'No zone has anybody expected at it',
+    'blocker.UNASSIGNED_PEOPLE': 'have no assembly zone, so nobody can sweep for them',
+    'blocker.NO_SWEEP_STARTED': 'no warden has started a sweep',
+    'blocker.SWEEP_NOT_STARTED': 'the sweep has not been started',
+    'blocker.SWEEP_IN_PROGRESS': 'the sweep is still in progress',
+    'blocker.SWEEP_ESCALATED': 'escalated',
+    'blocker.ZONE_UNCONFIRMED': 'not confirmed or reported',
+    'blocker.NO_HEADCOUNT': 'no physical headcount yet',
+    'blocker.HEADCOUNT_MISMATCH': 'the count disagrees with the system',
+    'blocker.of': 'of',
+    'blocker.people': 'people',
+
 
     'board.blinded_by': 'The system could not see here:',
     'board.evacuating': 'Still evacuating',
@@ -156,6 +176,7 @@ export const STRINGS = {
     'board.unaccounted': 'غير محسوب',
     'board.unknown': 'أشخاص غير معروفين',
     'board.needs_human': 'لا يمكن لأي كاميرا تأكيد هذا الشخص — ابحث عنه',
+    'board.no_data_yet': 'لم تصل أي بيانات بعد',
     'reason.IDENTITY_DISPUTED': 'لا يستطيع النظام تحديد هوية هذا الشخص',
     'reason.WARDEN_REJECTED_IDENTITY': 'قال المراقب إن هذا شخص آخر',
     'reason.WARDEN_CONFIRMED_AT_ASSEMBLY': 'تأكيد شخصي من',
@@ -175,6 +196,23 @@ export const STRINGS = {
     'reason.last_seen': 'آخر ظهور في',
     'reason.on_camera': 'على',
     'reason.seconds_in': 'ثانية من بدء التمرين',
+    'blocker.DRILL_NOT_STARTED': 'لم يبدأ التمرين بعد',
+    'blocker.NO_EXPECTED_PEOPLE': 'لا أحد متوقع في القائمة',
+    'blocker.PEOPLE_UNACCOUNTED': 'غير محسوبين',
+    'blocker.OPEN_OUTAGES': 'عطل ما زال قائماً',
+    'blocker.ROSTER_UNVERIFIED': 'تعذّر التحقق من القائمة مع مصدرها',
+    'blocker.NO_ZONES': 'لا توجد نقطة تجمع متوقع فيها أحد',
+    'blocker.UNASSIGNED_PEOPLE': 'بلا نقطة تجمع، فلا يستطيع أحد تفقدهم',
+    'blocker.NO_SWEEP_STARTED': 'لم يبدأ أي مراقب التفقد',
+    'blocker.SWEEP_NOT_STARTED': 'لم يبدأ التفقد',
+    'blocker.SWEEP_IN_PROGRESS': 'التفقد ما زال جارياً',
+    'blocker.SWEEP_ESCALATED': 'تم التصعيد',
+    'blocker.ZONE_UNCONFIRMED': 'لم يتم تأكيدهم أو الإبلاغ عنهم',
+    'blocker.NO_HEADCOUNT': 'لا يوجد عدّ يدوي بعد',
+    'blocker.HEADCOUNT_MISMATCH': 'العدّ يخالف النظام',
+    'blocker.of': 'من',
+    'blocker.people': 'شخصاً',
+
 
     'board.blinded_by': 'لم يتمكن النظام من الرؤية هنا:',
     'board.evacuating': 'ما زال يُخلي',
