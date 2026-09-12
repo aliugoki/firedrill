@@ -65,6 +65,10 @@ class DrillReport:
     """Where the wardens found them. A total with no location tells a safety
     officer somebody was there and nothing about where to start asking."""
     excluded_from_the_count: dict = field(default_factory=dict)
+    roster_gaps: dict = field(default_factory=dict)
+    """Locally-owned fields nobody filled in. A person with no assembly zone is
+    on no warden's list, which is a fact about the roster rather than about the
+    drill, and the drill is where it shows up."""
 
     false_accounted: tuple = ()
     false_unaccounted: tuple = ()
@@ -166,6 +170,13 @@ class DrillReport:
             lines.append(f"  {'not counted':<24}{total}")
             for reason, count in sorted(self.excluded_from_the_count.items()):
                 words = reason.lower().replace("_", " ")
+                lines.append(f"    {words:<22}{count}")
+
+        if self.roster_gaps:
+            lines.append("")
+            lines.append("  Roster fields nobody had filled in:")
+            for reason, count in sorted(self.roster_gaps.items()):
+                words = reason.replace("no_", "no ").replace("_", " ")
                 lines.append(f"    {words:<22}{count}")
 
         lines += [
@@ -418,6 +429,9 @@ def build_report(
         unknown_people=board.unknown_people,
         unknown_by_zone=warden.unknowns_by_zone(),
         excluded_from_the_count=board.excluded_from_the_count,
+        roster_gaps={reason: count
+                     for reason, count in drill.roster.coverage_gaps().items()
+                     if count},
         false_accounted=tuple(false_accounted),
         false_unaccounted=tuple(false_unaccounted),
         p50_s=timing.building.p50, p90_s=timing.building.p90,

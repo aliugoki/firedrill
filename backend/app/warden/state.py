@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from app.core.accountability_fsm import WardenEvidence
+from app.core.roster import UNASSIGNED
 from app.warden.actions import ActionKind, DeviceQueue, WardenAction
 from app.warden.headcount import Headcount, Severity
 from app.warden.sweep import SweepState
@@ -282,6 +283,12 @@ class WardenState:
         if not expected_by_zone:
             return False
         for zone_id, expected in expected_by_zone.items():
+            if zone_id == UNASSIGNED:
+                # Nobody can sweep a bucket. A warden with no zones assigned
+                # covers everything, which is a documented fail-open, and
+                # without this that warden could complete a sweep named
+                # "unassigned" and clear people no list ever included.
+                return False
             sweep = self.sweeps.get(zone_id)
             if sweep is None:
                 return False
@@ -294,6 +301,16 @@ class WardenState:
         if not expected_by_zone:
             return ["no zones have any expected people"]
         for zone_id, expected in sorted(expected_by_zone.items()):
+            if zone_id == UNASSIGNED:
+                # Not a place, and no warden is assigned to it. This used to
+                # read "unassigned: no warden has started a sweep", which looks
+                # like an ordinary unswept zone rather than a roster with holes
+                # in it -- and the fix for the two is completely different.
+                reasons.append(
+                    f"{len(expected)} person(s) have no assembly zone on the "
+                    "roster, so no warden's list includes them and nobody can "
+                    "sweep for them")
+                continue
             sweep = self.sweeps.get(zone_id)
             if sweep is None:
                 reasons.append(f"{zone_id}: no warden has started a sweep")

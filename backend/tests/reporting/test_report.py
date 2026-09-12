@@ -821,3 +821,63 @@ class TestHowTheCountsMoved:
         text = "\n".join(build_report(drill, now_ms=T0 + 120_000).render())
         assert "How the counts moved" in text
         assert "counted 0, 2" in text
+
+
+class TestARosterWithHolesInIt:
+    """`coverage_gaps` counts the fields FaceTrack does not supply, and says an
+    unassigned assembly zone means nobody owns that person during a sweep. It
+    was computed and read by nothing, so a site found out at minute four."""
+
+    def roster_without_zones(self, people=3):
+        from app.core.roster import ExpectationReason, Roster
+
+        roster = Roster()
+        for i in range(people):
+            roster.add_employee(emp_id=f"EMP-{i:03d}", display_name=f"P{i}",
+                                has_gallery_entry=True,
+                                reason=ExpectationReason.ON_SHIFT)
+        return roster.snapshot(T0)
+
+    def drill_without_zones(self):
+        drill = Drill(drill_id="d1", tenant_id="t", site_id="s", name="Q3",
+                      roster=self.roster_without_zones(), created_ms=T0,
+                      assembly_zones=ASSEMBLY)
+        drill.start(T0)
+        return drill
+
+    def test_the_report_counts_them(self):
+        report = build_report(self.drill_without_zones(), now_ms=T0 + 120_000)
+        assert report.roster_gaps["no_assembly_zone"] == 3
+        assert "no assembly zone" in "\n".join(report.render())
+
+    def test_a_complete_roster_carries_no_section(self):
+        # A dictionary of zeroes on every drill is a field a reader learns to
+        # skip, and then does not read on the drill where it matters.
+        report = build_report(drill_with(people=2), now_ms=T0 + 120_000)
+        assert report.roster_gaps == {}
+        assert "nobody had filled in" not in "\n".join(report.render())
+
+    def test_nobody_can_sweep_for_them_and_the_board_says_which(self):
+        """It used to read "unassigned: no warden has started a sweep".
+
+        That looks like an ordinary unswept zone. The fix for an unswept zone
+        is to send a warden; the fix for this is to correct the roster, and the
+        board gave a commander no way to tell which they were looking at.
+        """
+        drill = self.drill_without_zones()
+        reasons = drill.blocking_all_clear(T0 + 120_000)
+        assert any("no assembly zone on the roster" in r for r in reasons)
+        assert not any(r.startswith("unassigned:") for r in reasons)
+
+    def test_and_they_cannot_be_cleared_by_anybody(self):
+        # A warden with no zones assigned covers everything, a documented
+        # fail-open, so without a guard that warden could complete a sweep
+        # named "unassigned" and clear people no list ever included.
+        from app.warden.actions import ActionKind, WardenAction
+
+        drill = self.drill_without_zones()
+        drill.record_warden_action(WardenAction(
+            kind=ActionKind.SWEEP_COMPLETE, warden_id="warden-7",
+            device_id="tablet-3", zone_id="unassigned", ts_ms=T0 + 60_000))
+        assert drill.warden.is_every_zone_clean(
+            drill.roster.by_assembly_zone()) is False

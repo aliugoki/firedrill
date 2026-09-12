@@ -30,6 +30,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
+#: The bucket for people with no assembly zone set. Named rather than spelled
+#: out at each use: it is not a place, no warden is assigned to it, and the
+#: sweep machinery has to be able to tell it from a real zone in order to say
+#: so in words a commander can act on.
+UNASSIGNED = "unassigned"
+
 class Population(str, Enum):
     EMPLOYEE = "EMPLOYEE"
     VISITOR = "VISITOR"
@@ -192,7 +198,7 @@ class RosterSnapshot:
         """
         grouped: dict[str, list[RosterEntry]] = defaultdict(list)
         for entry in self.expected:
-            grouped[entry.assigned_assembly_zone or "unassigned"].append(entry)
+            grouped[entry.assigned_assembly_zone or UNASSIGNED].append(entry)
         return {zone: tuple(people) for zone, people in sorted(grouped.items())}
 
     def needing_human(self) -> tuple[RosterEntry, ...]:

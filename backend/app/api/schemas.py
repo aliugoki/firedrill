@@ -33,6 +33,13 @@ class DrillSummary(BaseModel):
     started_ms: int | None = None
     completed_ms: int | None = None
     expected: int
+    roster_trustworthy: bool = True
+    roster_gaps: dict = {}
+    """Locally-owned fields nobody filled in, counted at the moment a drill is
+    created -- which is the last moment an operator can do anything about them.
+    `RosterSnapshot.coverage_gaps` says an unassigned assembly zone means
+    nobody owns that person during a sweep, and it was computed and read by
+    nothing, so a site found out at minute four."""
 
 
 class PersonRowOut(BaseModel):

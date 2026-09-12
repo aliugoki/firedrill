@@ -936,3 +936,38 @@ class TestTheRecordOfWhoDidWhat:
         outsider["X-Tenant-Id"] = "tenant-elsewhere"
         assert client.get(f"/api/evac/drills/{drill_id}/audit",
                           headers=outsider).status_code == 404
+
+
+class TestARosterWithHolesIsFlaggedAtCreation:
+    """The last moment an operator can do anything about it.
+
+    `coverage_gaps` was computed by the roster and read by nobody, so a site
+    whose people have no assembly zone set discovered it when the first sweep
+    found nobody to sweep.
+    """
+
+    def test_a_complete_roster_reports_no_gaps(self, client):
+        body = client.post("/api/evac/drills", headers=OPERATOR,
+                           json={"tenant_id": "t", "site_id": "site-1",
+                                 "name": "Q3"}).json()
+        assert body["roster_gaps"] == {}
+        assert body["roster_trustworthy"] is True
+
+    def test_missing_assembly_zones_are_named_in_the_response(self):
+        from app.core.roster import ExpectationReason, Roster
+
+        def zoneless(site_id):
+            roster = Roster()
+            for i in range(3):
+                roster.add_employee(emp_id=f"EMP-{i:03d}", display_name=f"P{i}",
+                                    has_gallery_entry=True,
+                                    reason=ExpectationReason.ON_SHIFT)
+            return roster.snapshot(T0)
+
+        thin = TestClient(create_app(registry=DrillRegistry(),
+                                     roster_provider=zoneless,
+                                     assembly_zones=ASSEMBLY, auth=GATEWAY))
+        body = thin.post("/api/evac/drills", headers=OPERATOR,
+                         json={"tenant_id": "t", "site_id": "site-1",
+                               "name": "Q3"}).json()
+        assert body["roster_gaps"]["no_assembly_zone"] == 3

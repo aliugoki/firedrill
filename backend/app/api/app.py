@@ -239,7 +239,8 @@ def create_app(registry: DrillRegistry | None = None,
             ts_ms=now_ms(), drill_id=drill.drill_id,
             summary=f"created {drill.name} at {drill.site_id}",
             expected=drill.roster.expected_count,
-            roster_trustworthy=drill.roster.is_trustworthy)
+            roster_trustworthy=drill.roster.is_trustworthy,
+            roster_gaps=drill.roster.coverage_gaps())
         return _summary(drill)
 
     @app.get("/api/evac/drills", response_model=list[schemas.DrillSummary],
@@ -273,7 +274,13 @@ def create_app(registry: DrillRegistry | None = None,
             action=AuditAction.DRILL_STARTED, actor_id=caller.user_id,
             ts_ms=now_ms(), drill_id=drill_id,
             summary=f"started {drill.name}",
-            expected=drill.roster.expected_count)
+            expected=drill.roster.expected_count,
+        roster_trustworthy=drill.roster.is_trustworthy,
+        # Only the gaps that exist. A dictionary of zeroes on every drill is a
+        # field a reader learns to skip.
+        roster_gaps={reason: count
+                     for reason, count in drill.roster.coverage_gaps().items()
+                     if count})
         return _summary(drill)
 
     @app.post("/api/evac/drills/{drill_id}/complete",
@@ -728,7 +735,13 @@ def _summary(drill: Drill) -> schemas.DrillSummary:
         drill_id=drill.drill_id, name=drill.name, site_id=drill.site_id,
         status=drill.status.value, created_ms=drill.created_ms,
         started_ms=drill.started_ms, completed_ms=drill.completed_ms,
-        expected=drill.roster.expected_count)
+        expected=drill.roster.expected_count,
+        roster_trustworthy=drill.roster.is_trustworthy,
+        # Only the gaps that exist. A dictionary of zeroes on every drill is a
+        # field a reader learns to skip.
+        roster_gaps={reason: count
+                     for reason, count in drill.roster.coverage_gaps().items()
+                     if count})
 
 
 def _row_out(row) -> schemas.PersonRowOut:
