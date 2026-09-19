@@ -11,6 +11,10 @@ makes.
 > output is decision support for a human incident commander, and a floor
 > warden's physical count is the final authority.
 
+**New here?** Read [`docs/EVAC120_EXPLAINED.md`](docs/EVAC120_EXPLAINED.md).
+It explains the whole system with no engineering background assumed, including
+how it fits with FaceTrack and VisionTrack.
+
 ## What it does
 
 Answers one question, continuously, during an evacuation: **who is still in the
@@ -21,6 +25,36 @@ append-only evidence ledger. Every decision is reconstructable: asking why a
 given person was marked accounted returns the list of observations that led
 there. Nothing resolves a conflict silently; disagreement escalates to a human.
 
+## How it fits with FaceTrack and VisionTrack
+
+Three separate systems. EVAC-120 reads from the other two and writes to
+neither — the connection to VisionTrack's database is opened read-only by the
+server itself, and a test asserts it.
+
+| System | Supplies | EVAC-120 uses it for |
+|---|---|---|
+| **FaceTrack** | Roster: employee ids, names, enrolled faces, badged-in today | Who is expected. Department, home floor and assembly-zone assignment are *not* in FaceTrack and are owned here. |
+| **VisionTrack** | Floor plans and zones (read once, before a drill); live observations on a Redis stream during it | Where people are, and which zone is a floor, an exit or an assembly point. |
+
+A site that has synced its geometry once can run a drill with VisionTrack
+switched off. If FaceTrack cannot be reached, a drill runs from an exported
+roster file and the board marks the roster unverified, which is one of the four
+things that hold back an all-clear.
+
+## See it running
+
+```bash
+cd backend && ../.venv/bin/python scripts/serve_demo.py --port 8811
+```
+
+A 200-person simulated drill, five minutes in, one assembly point swept and one
+still being walked.
+
+- Command centre — <http://127.0.0.1:8811/?drill=demo>
+- Warden tablet — <http://127.0.0.1:8811/evac/warden?drill=demo&zone=assembly-north&warden=warden-1>
+
+Append `&lang=ar` for Arabic, which flips the layout right to left.
+
 ## Where things are
 
 | Path | What |
@@ -30,8 +64,9 @@ there. Nothing resolves a conflict silently; disagreement escalates to a human.
 | `backend/app/simulator/` | Synthetic drills and failure injection. |
 | `backend/app/ingest/` | Redis consumer, projections, edge-to-central replication. |
 | `backend/app/api/` | HTTP and WebSocket surface. |
-| `backend/app/infra/` | Config, database, auth, permissions. |
-| `frontend/` | Command center and the warden PWA. |
+| `backend/app/infra/` | Config, auth, permissions, audit, retention. |
+| `backend/app/calibration/` | Threshold sweep and the certification report. |
+| `frontend/` | Command centre and the warden PWA. No framework, no build step. |
 | `prototype/` | An early React mock. Design reference only. |
 
 ## Getting set up
@@ -39,15 +74,34 @@ there. Nothing resolves a conflict silently; disagreement escalates to a human.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r backend/requirements.txt
+cp .env.example .env        # then fill in; the required values have no defaults
 ```
+
+## Running the tests
+
+```bash
+cd backend && ../.venv/bin/python -m pytest      # 1465 tests, ~7 min
+cd frontend && npm test                          # 155 tests, under a second
+```
+
+The backend run includes a browser gate that starts headless Chrome and drives
+both screens against a live server. It **skips** where Chrome or Node is
+absent, which is the normal state of an edge node.
+
+## Status
+
+The accountability logic, both screens, replication, recovery, the chaos suite
+and the post-drill report are built and tested. The camera pipeline that would
+feed real observations is designed and blocked on a crash in NVIDIA's pyds
+bindings, so everything currently runs against a simulator. No threshold has
+been calibrated and no live drill has run. `docs/EVAC120_BENCHMARKS.md` and
+`docs/EVAC120_CALIBRATION.md` are empty on purpose and say why.
 
 ## Documentation
 
-Start with `docs/EVAC120.md`. It carries the phase status and links everything
-else.
-
 | Document | Contents |
 |---|---|
+| `docs/EVAC120_EXPLAINED.md` | **Start here if you are not a developer.** The whole system, and the FaceTrack/VisionTrack linkage |
 | `docs/EVAC120.md` | Assessment, phase results, deliverables checklist |
 | `docs/EVAC120_ARCHITECTURE.md` | Components, data flow, and where each invariant is enforced |
 | `docs/EVAC120_STATE_MACHINES.md` | The three machines, including the transitions that deliberately do not exist |
@@ -61,10 +115,3 @@ else.
 | `docs/EVAC120_CALIBRATION.md` | Empty on purpose: nothing is calibrated yet |
 | `docs/EVAC120_BENCHMARKS.md` | Empty on purpose: nothing is measured yet |
 | `CLAUDE.md` | Conventions and the nine invariants |
-
-## Running the tests
-
-```bash
-cd backend && ../.venv/bin/python -m pytest      # 712 backend tests
-cd frontend && npm test                          # 45 frontend tests
-```

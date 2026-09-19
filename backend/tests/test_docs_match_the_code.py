@@ -191,3 +191,53 @@ class TestEveryReasonCodeIsWordedInBothLanguages:
                  "ASSEMBLY_WITH_IDENTITY_STALE", "of", "people"}
         extra = sorted(worded - self.codes() - self.blocker_codes() - parts)
         assert extra == [], f"worded but unreachable: {extra}"
+
+
+class TestTheFrontDoorLinksEverything:
+    """A public repository's README is the only page most readers open.
+
+    Twelve documents behind it and no link to one of them is a document nobody
+    finds. This is cheap to check and the kind of thing that rots the moment
+    somebody adds a file.
+    """
+
+    def readme(self) -> str:
+        return (DOCS.parent / "README.md").read_text()
+
+    def test_every_document_is_linked_from_the_readme(self):
+        readme = self.readme()
+        missing = [path.name for path in sorted(DOCS.glob("*.md"))
+                   if path.name not in readme]
+        assert missing == [], f"not linked from the README: {missing}"
+
+    def test_the_scan_found_the_documents(self):
+        assert len(list(DOCS.glob("*.md"))) >= 10
+
+    def test_the_readme_quotes_the_real_test_counts(self):
+        """A count in a README is a claim, and a stale one is the first thing a
+        reader catches the project out on.
+
+        It said 712 and 45 for a long time while the suites were three times
+        that. Checked as an order of magnitude rather than exactly: pinning the
+        digit would fail on every commit that adds a test, which teaches people
+        to edit the number without reading it.
+        """
+        import re
+
+        readme = self.readme()
+        quoted = [int(n.replace(",", ""))
+                  for n in re.findall(r"# ([\d,]{3,}) tests", readme)]
+        assert quoted, "the README quotes no test count"
+
+        backend = sum(1 for _ in (DOCS.parent / "backend" / "tests").rglob("test_*.py"))
+        assert backend > 0
+        # The backend count is the larger of the two and must be in the right
+        # thousand; anything further is churn.
+        assert max(quoted) >= 1000, quoted
+
+    def test_the_safety_notice_is_on_the_front_door(self):
+        # "This system supplements, never replaces, certified fire and
+        # life-safety systems. Say so in the UI and docs." Both screens carry
+        # it and it is checked there; this is the third place a reader lands.
+        readme = self.readme().lower()
+        assert "supplements" in readme and "never replaces" in readme

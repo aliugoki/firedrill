@@ -995,6 +995,7 @@ Audited against the filesystem, not against memory.
 
 | Deliverable | Where | State |
 |---|---|---|
+| Plain-language system guide | `docs/EVAC120_EXPLAINED.md` | Done. The whole system with no engineering background assumed, and the FaceTrack / VisionTrack linkage a reader most often asks about |
 | Architecture assessment | §2-§3 | Done |
 | Component / data-flow diagram | `docs/EVAC120_ARCHITECTURE.md` | Done |
 | Integration plan | §2.2 | Done |
@@ -1004,7 +1005,7 @@ Audited against the filesystem, not against memory.
 | Event schema | `app/core/events.py` | Done |
 | Identity persistence algorithm | `app/core/identity_fsm.py` | Done |
 | Accountability algorithm | `app/core/accountability_fsm.py` | Done |
-| Test strategy | `backend/tests/`, 712 tests | Done |
+| Test strategy | `backend/tests/`, 1465 tests; `frontend/tests/`, 155 | Done. Includes a browser gate that drives both screens against a live server and skips where Chrome is absent |
 | DeepStream integration design | `docs/EVAC120_DEEPSTREAM.md` | Done |
 | Failure / recovery strategy | `docs/EVAC120_RESILIENCE.md` | Done |
 | Security model | `docs/EVAC120_SECURITY.md` | Done |
