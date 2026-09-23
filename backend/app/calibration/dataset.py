@@ -117,6 +117,26 @@ class CalibrationSet:
         return [o for o in self.observations if not o.is_enrolled]
 
     @property
+    def real_observations(self) -> list[LabelledObservation]:
+        """Everything that came off a camera rather than out of the simulator.
+
+        Certification is judged on these alone. A simulated score comes from a
+        model of a face matcher, and a model of a matcher agrees with itself:
+        thresholds fitted to it describe the model, not the site.
+        """
+        return [o for o in self.observations if o.source is not Source.SIMULATOR]
+
+    def real_only(self) -> "CalibrationSet":
+        return CalibrationSet(observations=list(self.real_observations),
+                              name=f"{self.name} (real footage only)")
+
+    @property
+    def simulated_fraction(self) -> float:
+        if not self.observations:
+            return 0.0
+        return 1 - (len(self.real_observations) / len(self.observations))
+
+    @property
     def cameras(self) -> set[str]:
         return {o.camera_id for o in self.observations if o.camera_id}
 
@@ -159,10 +179,20 @@ class CalibrationSet:
                 "not transfer to a different lens, angle, or lighting")
 
         sources = Counter(o.source for o in self.observations)
-        if set(sources) == {Source.SIMULATOR}:
+        simulated = sources.get(Source.SIMULATOR, 0)
+        if simulated == len(self.observations) and simulated:
             warnings.append(
                 "this set is entirely simulated. The harness is exercised, but "
                 "no threshold derived from it may be marked calibrated")
+        elif simulated:
+            # Any at all, not only all of it. Asked as "is every row
+            # simulated", a set of six thousand synthetic rows with one real
+            # one in it said nothing whatsoever -- and that one row was the
+            # only thing standing between the simulator and `calibrated=True`.
+            warnings.append(
+                f"{simulated} of {len(self.observations)} observations "
+                f"({self.simulated_fraction:.0%}) are simulated; only the real "
+                "ones can support a calibration claim")
 
         counts = Counter(o.person_key for o in self.observations)
         thin = [p for p, n in counts.items() if n < 3 and p != UNKNOWN_KEY]

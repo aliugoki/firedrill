@@ -211,19 +211,64 @@ def certify(
                 f"people, above the {MAX_DRIFT * 100:.0f}-point limit; these "
                 "thresholds are fitted to the tuning half, not measured")
 
-    sources = {o.source for o in combined.observations}
-    if require_real_footage and sources <= {Source.SIMULATOR}:
-        refusals.append(
-            "the set is entirely simulated; thresholds for a live drill must be "
-            "measured on recorded footage from the site they will run on")
+    # Judged on the real footage alone, not on whether any of it is real.
+    #
+    # This was `sources <= {Source.SIMULATOR}` -- true only when every single
+    # row came from the simulator. Relabelling **one row of 6,420** as recorded
+    # footage removed the refusal entirely and certified thresholds derived
+    # from a set that was 99.98% synthetic, with a provenance string reading
+    # "calibration on combined, 6420 observations, 146 enrolled people". One
+    # row was the whole distance between the simulator and `calibrated=True`.
+    #
+    # So the question is not "is any of this real" but "would the real part
+    # stand up on its own", which is what was meant all along.
+    real = combined.real_only()
+    if require_real_footage:
+        if not real.observations:
+            refusals.append(
+                "the set is entirely simulated; thresholds for a live drill "
+                "must be measured on recorded footage from the site they will "
+                "run on")
+        else:
+            real_readiness = real.readiness()
+            for problem in real_readiness.problems:
+                refusals.append(f"of the real footage alone, {problem}")
+            if chose_an_operating_point:
+                # The chosen pair has to hold the ceiling against real faces,
+                # not against the simulator's opinion of faces. A pair tuned on
+                # a synthetic majority can sail through the blended rate and
+                # miss badly on the handful of real rows.
+                on_real = evaluate(real, point.config)
+                rate = on_real.false_accept_rate
+                if rate is None:
+                    refusals.append(
+                        "the real footage admits no identities at these "
+                        "thresholds, so the false-accept rate is unmeasured "
+                        "on it")
+                elif rate > false_accept_ceiling:
+                    refusals.append(
+                        f"on real footage alone the false-accept rate is "
+                        f"{_pct(rate)}, above the "
+                        f"{false_accept_ceiling * 100:.2f}% ceiling")
+
+    # Only for a mixed set. When there is no real footage at all the refusal
+    # above already says so, and a third sentence saying it again is noise in a
+    # report whose whole job is to be read carefully.
+    if real.observations and combined.simulated_fraction > 0:
+        caveats.append(
+            f"{combined.simulated_fraction:.0%} of this set is simulated; the "
+            f"certification rests on the {len(real)} real observation(s)")
 
     certified = not refusals
     config = replace(
         point.config,
         calibrated=certified,
+        # Real observations, not the blended total. The old string said "6420
+        # observations" of a set with one real row in it, which is the number
+        # anybody auditing these thresholds would take at face value.
         source=(f"calibration on {combined.name}, "
-                f"{len(combined)} observations, "
-                f"{len(combined.enrolled_people)} enrolled people"
+                f"{len(real)} real observations, "
+                f"{len(real.enrolled_people)} enrolled people"
                 if certified else "uncertified calibration run"),
     )
     return CalibrationReport(

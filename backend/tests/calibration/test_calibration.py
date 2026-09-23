@@ -11,6 +11,8 @@ import json
 
 import pytest
 
+from dataclasses import replace
+
 from app.calibration.dataset import (
     MalformedDataset,
     load,
@@ -267,6 +269,71 @@ class TestCertification:
         report = certify(self._sweep(good_set(source=Source.SIMULATOR)),
                          require_real_footage=False)
         assert not any("simulated" in r for r in report.refusals)
+
+    def test_one_real_row_does_not_launder_a_simulated_set(self):
+        """The refusal asked `sources <= {SIMULATOR}` -- true only when every
+        single row was synthetic.
+
+        Relabelling one observation of 6,420 as recorded footage removed it
+        entirely and certified thresholds from a set that was 99.98%
+        simulated. One row was the whole distance between the simulator and
+        `calibrated=True`.
+        """
+        simulated = good_set(source=Source.SIMULATOR)
+        laundered = CalibrationSet(
+            observations=[replace(simulated.observations[0],
+                                  source=Source.RECORDED_DRILL)]
+            + simulated.observations[1:],
+            name="laundered")
+
+        report = certify(self._sweep(laundered))
+        assert report.certified is False
+        assert report.config.calibrated is False
+        # And it names what is actually wrong, rather than the blanket
+        # "entirely simulated", which is no longer true of this set.
+        assert any("real footage alone" in r for r in report.refusals), \
+            report.refusals
+
+    def test_a_mixed_set_is_judged_on_the_real_half_alone(self):
+        # Enough real footage to stand on its own, padded with simulated rows.
+        # The padding neither helps nor blocks; the real half decides.
+        real = good_set(source=Source.RECORDED_DRILL)
+        padded = CalibrationSet(
+            observations=real.observations
+            + good_set(source=Source.SIMULATOR).observations,
+            name="padded")
+        report = certify(self._sweep(padded))
+        assert report.certified is True, report.refusals
+        assert any("simulated" in c for c in report.caveats), report.caveats
+
+    def test_the_provenance_counts_real_observations_not_the_total(self):
+        # The old string said "6420 observations" of a set with one real row.
+        # It is the number anybody auditing these thresholds reads first.
+        real = good_set(source=Source.RECORDED_DRILL)
+        padded = CalibrationSet(
+            observations=real.observations
+            + good_set(source=Source.SIMULATOR).observations,
+            name="padded")
+        report = certify(self._sweep(padded))
+        assert f"{len(real)} real observations" in report.config.source
+        assert f"{len(padded)} real" not in report.config.source
+
+    def test_a_readiness_warning_fires_on_any_simulated_content(self):
+        # Asked as "is every row simulated", a set of thousands of synthetic
+        # rows with one real one said nothing whatsoever.
+        simulated = good_set(source=Source.SIMULATOR)
+        mixed = CalibrationSet(
+            observations=[replace(simulated.observations[0],
+                                  source=Source.RECORDED_DRILL)]
+            + simulated.observations[1:])
+        warnings = mixed.readiness().warnings
+        assert any("simulated" in w for w in warnings), warnings
+
+    def test_an_entirely_simulated_set_still_says_so_once(self):
+        # And not three times. The refusal, the readiness warning and the mix
+        # caveat were all saying it, in a report whose job is to be read.
+        report = certify(self._sweep(good_set(source=Source.SIMULATOR)))
+        assert sum("rests on the" in c for c in report.caveats) == 0
 
     def test_an_unusable_set_never_certifies(self):
         report = certify(self._sweep(good_set(unknowns=0)))

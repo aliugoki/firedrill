@@ -25,12 +25,12 @@ nothing will until a labelled set from real footage exists.
 
 ## 2. The harness is built
 
-`app/calibration/`, 35 tests. Labelled observations in, validated thresholds
+`app/calibration/`, 71 tests. Labelled observations in, validated thresholds
 out, or a refusal explaining why not. It runs today against simulator output and
-**refuses to certify it**, because a set that is entirely simulated measures a
-model of a matcher rather than a matcher.
+**refuses to certify it**, because simulated scores measure a model of a matcher
+rather than a matcher.
 
-Three properties worth knowing before it is used in anger.
+Four properties worth knowing before it is used in anger.
 
 **The split is by person, not by observation.** The same face appears in dozens
 of frames. Splitting by frame puts near-duplicates on both sides, and the
@@ -46,10 +46,25 @@ rather than warned about.
 the false-accept rate under the ceiling, that is a finding about the pipeline.
 Loosening it afterwards would be choosing the number after seeing the answer.
 
+**Certification is judged on the real footage alone, not on whether any of it
+is real.** The check used to ask whether *every* row came from the simulator,
+which is a question one row can answer. Relabelling a single observation out of
+6,420 as recorded footage removed the refusal and certified thresholds derived
+from a set that was 99.98% synthetic — and stamped them with a provenance
+string reading "6420 observations, 146 enrolled people".
+
+So the real observations now have to stand on their own: they must satisfy
+every readiness check by themselves, and the chosen threshold pair must hold
+the false-accept ceiling when measured against them alone. Simulated rows may
+pad a corpus; they cannot contribute to a claim. A mixed set carries a caveat
+saying what fraction is synthetic, and the provenance counts only the real
+observations.
+
 Certification fails closed on any of: too few observations, too few enrolled
 people, no unenrolled observations, a person leaking across both halves, a
-held-out false-accept rate above the ceiling, drift beyond two points, or a set
-that is entirely simulated.
+held-out false-accept rate above the ceiling, drift beyond two points, no real
+footage at all, real footage that fails readiness on its own, or a
+false-accept rate above the ceiling on the real footage alone.
 
 ---
 
