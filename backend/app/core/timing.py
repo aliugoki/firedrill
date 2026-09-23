@@ -45,6 +45,50 @@ class ExclusionReason(str, Enum):
     NEVER_REACHED_ASSEMBLY = "NEVER_REACHED_ASSEMBLY"
     NO_DRILL_START = "NO_DRILL_START"
     ARRIVED_BEFORE_START = "ARRIVED_BEFORE_START"
+    CLOCK_CORRECTED = "CLOCK_CORRECTED"
+    """Their arrival lands before the start because the clock moved, not
+    because they were standing at the muster point when the alarm went.
+
+    Its own reason because the alternative was a false statement about a real
+    person. A backward correction puts every later arrival in front of the
+    start, and every one of them was excluded as ARRIVED_BEFORE_START --
+    "already at the muster point" -- which is not what happened to them."""
+
+
+@dataclass(frozen=True, slots=True)
+class ClockCorrection:
+    """The node's clock was stepped during the drill, by `delta_ms`.
+
+    Plain data rather than the health log's `Degradation`: `core/` imports
+    nothing but the standard library, and a percentile has no business knowing
+    what a component is. The edge hands these in; this module only has to know
+    that time moved by something other than time passing.
+    """
+
+    at_ms: int
+    delta_ms: int
+
+    @property
+    def backwards(self) -> bool:
+        return self.delta_ms < 0
+
+    def explains(self, arrival_ms: int, started_ms: int) -> bool:
+        """Whether this correction accounts for an arrival before the start.
+
+        Only backwards can: a forward step moves arrivals further from the
+        start, never in front of it. The correction has to have happened after
+        the drill began, and the gap has to be no larger than the step -- a
+        person who arrived an hour before a drill that crossed a ten-second
+        correction was genuinely already there.
+        """
+        if not self.backwards or self.at_ms < started_ms:
+            return False
+        return (started_ms - arrival_ms) <= abs(self.delta_ms)
+
+    def describe(self) -> str:
+        direction = "backwards" if self.backwards else "forwards"
+        return (f"the system clock moved {direction} by "
+                f"{abs(self.delta_ms) // 1000}s during the drill")
 
 
 def percentile(values: list[float], p: float) -> float | None:
@@ -77,10 +121,31 @@ class PercentileSummary:
     minimum: float | None
     mean: float | None
     exclusion_reasons: dict[str, int] = field(default_factory=dict)
+    clock_corrections: tuple = ()
+    """Corrections to the node's clock during the window these numbers cover.
+
+    A duration is the difference between two wall-clock readings. If somebody
+    moved the clock between them, the difference is not a duration, and no
+    amount of sample size fixes that."""
 
     @property
     def is_reliable(self) -> bool:
-        """Whether the P95 is a distributional claim or just the slowest person."""
+        """Whether the P95 is a claim worth acting on.
+
+        Two ways for it not to be, and they are unrelated. Too few samples and
+        the 95th percentile is just the slowest person or two. A clock
+        correction and the arithmetic itself is wrong: a duration is the
+        difference between two wall-clock readings, and if somebody moved the
+        clock in between then no sample size repairs it.
+
+        Measured on a hundred-person drill that crossed a forty-minute
+        correction: forwards, P95 read 2608s against a true 208s, with full
+        coverage, nothing excluded and not one caveat. Backwards it read 94s --
+        a drill that failed its 120s target reported as passing it, because
+        sixty people fell out of the sample.
+        """
+        if self.clock_corrections:
+            return False
         return self.sample_size >= MIN_SAMPLES_FOR_P95
 
     @property
@@ -106,11 +171,30 @@ class PercentileSummary:
         first meant a drill where 92 of 100 people produced no timing printed
         "Only 8 measurements" and never mentioned the 92.
         """
-        if self.sample_size == 0:
-            return ("No measurements: nobody had both a start and an arrival.",)
-
         notes: list[str] = []
-        if not self.is_reliable:
+        # First, because it is the one that says the arithmetic is wrong rather
+        # than weak. The others qualify a number; this one withdraws it.
+        #
+        # Ahead of the empty case too, and that is not a detail: a backward
+        # correction is most destructive exactly when it has excluded
+        # everybody, and "nobody had both a start and an arrival" is a true
+        # sentence that hides why.
+        for correction in self.clock_corrections:
+            notes.append(
+                f"{correction.describe().capitalize()}. A duration is the "
+                "difference between two clock readings, so these numbers are "
+                "not measurements of anything."
+            )
+
+        if self.sample_size == 0:
+            notes.append(
+                "No measurements: nobody had both a start and an arrival.")
+            return tuple(notes)
+
+        # Asked of the sample size, not of `is_reliable`. Once a clock
+        # correction could also make that false, reusing it printed "Only 100
+        # measurements" on a drill that had a hundred of them.
+        if self.sample_size < MIN_SAMPLES_FOR_P95:
             notes.append(
                 f"Only {self.sample_size} measurements. The 95th percentile "
                 f"here is close to the slowest individual, not a distribution."
@@ -158,6 +242,7 @@ def measure(
     zone_id: str | None = None,
     floor_id: str | None = None,
     was_observed: bool = True,
+    clock_corrections: tuple = (),
 ) -> PersonTiming:
     """Build one person's timing, or record why there is none."""
     reason: ExclusionReason | None = None
@@ -170,7 +255,14 @@ def measure(
     elif assembly_arrival_ms < drill_started_ms:
         # Already standing at the muster point when the alarm went. Real, and
         # not an evacuation: timing it would flatter the distribution.
-        reason = ExclusionReason.ARRIVED_BEFORE_START
+        #
+        # Unless the clock moved under the drill, in which case it is not what
+        # happened to them at all, and saying it is puts a false statement
+        # about a real person in a post-incident report.
+        explained = any(c.explains(assembly_arrival_ms, drill_started_ms)
+                        for c in clock_corrections)
+        reason = (ExclusionReason.CLOCK_CORRECTED if explained
+                  else ExclusionReason.ARRIVED_BEFORE_START)
 
     return PersonTiming(
         person_id=person_id, started_ms=drill_started_ms,
@@ -179,7 +271,8 @@ def measure(
     )
 
 
-def summarise(timings: list[PersonTiming], label: str = "building") -> PercentileSummary:
+def summarise(timings: list[PersonTiming], label: str = "building",
+              clock_corrections: tuple = ()) -> PercentileSummary:
     """Roll a set of timings into percentiles, in seconds."""
     durations = [t.duration_s for t in timings if t.duration_s is not None]
     excluded = [t for t in timings if t.duration_s is None]
@@ -200,11 +293,12 @@ def summarise(timings: list[PersonTiming], label: str = "building") -> Percentil
         minimum=min(durations) if durations else None,
         mean=sum(durations) / len(durations) if durations else None,
         exclusion_reasons=dict(reasons),
+        clock_corrections=tuple(clock_corrections),
     )
 
 
 def summarise_by(
-    timings: list[PersonTiming], key: str
+    timings: list[PersonTiming], key: str, clock_corrections: tuple = ()
 ) -> dict[str, PercentileSummary]:
     """Break the distribution down by ``zone_id`` or ``floor_id``.
 
@@ -218,7 +312,11 @@ def summarise_by(
         group = getattr(t, key)
         if group is not None:
             grouped[group].append(t)
-    return {name: summarise(items, label=name) for name, items in sorted(grouped.items())}
+    # The corrections apply to every group: a clock is a property of the node,
+    # not of a floor. A per-floor number carrying no caveat while the building
+    # number carries one is the shape a reader trusts by mistake.
+    return {name: summarise(items, label=name, clock_corrections=clock_corrections)
+            for name, items in sorted(grouped.items())}
 
 
 @dataclass(frozen=True, slots=True)

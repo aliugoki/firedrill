@@ -118,6 +118,13 @@ class BlockerOut(BaseModel):
     detail: dict = {}
 
 
+class ClockCorrectionOut(BaseModel):
+    """The node's clock was stepped during the drill. `delta_ms` is signed."""
+
+    at_ms: int
+    delta_ms: int
+
+
 class PercentilesOut(BaseModel):
     label: str
     sample_size: int
@@ -137,8 +144,16 @@ class PercentilesOut(BaseModel):
     reached the muster point is a person. Both are excluded from the
     percentiles and only one of them is a measurement problem."""
     caveats: list[str] = []
-    """Everything that qualifies these numbers. Plural because a small sample
-    and a low coverage are different problems and a reader needs both."""
+    """Everything that qualifies these numbers, as English prose and the
+    fallback. Plural because a small sample and a low coverage are different
+    problems and a reader needs both."""
+    clock_corrections: list[ClockCorrectionOut] = []
+    """Corrections to the node's clock inside the window these numbers cover.
+
+    Carried as values rather than only in the prose above because the screen
+    has to word it: `reliable: false` alone reads on the board as "too small a
+    sample", and a clock correction is a different thing entirely -- it says
+    the arithmetic is wrong, not that it is weak."""
 
 
 class TimingOut(BaseModel):

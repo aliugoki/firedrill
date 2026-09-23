@@ -324,6 +324,13 @@ class Drill:
     def timing(self, now_ms: int) -> DrillTiming:
         resolutions = resolve_identities(self.ingestor.state, self.roster)
         arrivals = self.ingestor.state.assembly_arrival_ms
+        # Only the corrections that landed inside this drill. A node stepped an
+        # hour before anybody pressed start produced no reading these numbers
+        # are built from, and a caveat about it is noise on a report read under
+        # pressure.
+        corrections = tuple(
+            c for c in self.ingestor.state.clock_corrections
+            if self.started_ms is not None and c.at_ms >= self.started_ms)
         timings = []
         for entry in self.roster.expected:
             resolution = resolutions[entry.person_ref]
@@ -338,13 +345,16 @@ class Drill:
                 assembly_arrival_ms=arrival,
                 zone_id=entry.assigned_assembly_zone,
                 floor_id=entry.home_floor_id,
-                was_observed=resolution.is_observed))
+                was_observed=resolution.is_observed,
+                clock_corrections=corrections))
 
         settled = self._accountability_completion(now_ms)
         return DrillTiming(
-            building=summarise(timings),
-            by_floor=summarise_by(timings, "floor_id"),
-            by_zone=summarise_by(timings, "zone_id"),
+            building=summarise(timings, clock_corrections=corrections),
+            by_floor=summarise_by(timings, "floor_id",
+                                  clock_corrections=corrections),
+            by_zone=summarise_by(timings, "zone_id",
+                                 clock_corrections=corrections),
             accountability_completed_ms=settled)
 
     def _accountability_completion(self, now_ms: int) -> int | None:

@@ -33,6 +33,7 @@ from app.core.identity_fsm import (
     gate,
 )
 from app.core.ledger import EvidenceKind, EvidenceLedger, Stance
+from app.core.timing import ClockCorrection
 from app.core.presence_fsm import (
     PROVISIONAL_CONFIG as PRESENCE_CONFIG,
     PresenceConfig,
@@ -62,6 +63,11 @@ class IngestState:
     #: Wall clock from which ages mean something again, or None when they
     #: always did. Set when the clock is corrected under this node's feet.
     clock_trusted_from_ms: int | None = None
+    #: Every correction, as plain data. The health log has each one as an
+    #: interval with a cause, which is the right shape for "was the system
+    #: trustworthy at 10:42" and the wrong shape for the timing report, which
+    #: needs the signed size to know a duration is not a duration.
+    clock_corrections: list = field(default_factory=list)
     bottlenecks: BottleneckTracker = field(default_factory=BottleneckTracker)
     drill_started_ms: int | None = None
     drill_completed_ms: int | None = None
@@ -183,6 +189,8 @@ class Ingestor:
         forbid, so it is recorded rather than logged and forgotten.
         """
         self.state.clock_trusted_from_ms = step.at_ms + step.blind_for_ms
+        self.state.clock_corrections.append(
+            ClockCorrection(at_ms=step.at_ms, delta_ms=step.delta_ms))
         self.state.health.degrade(
             Component.CLOCK, "*", step.at_ms, step.describe())
 

@@ -4,6 +4,7 @@ import pytest
 
 from app.core.timing import (
     MIN_SAMPLES_FOR_P95,
+    ClockCorrection,
     DrillTiming,
     ExclusionReason,
     measure,
@@ -212,3 +213,152 @@ class TestDrillTiming:
     def test_completion_is_none_when_the_drill_never_settled(self):
         drill = self._drill([90.0 + i * 0.1 for i in range(50)])
         assert drill.accountability_completion_s is None
+
+
+class TestADrillThatCrossedAClockCorrection:
+    """A duration is the difference between two wall-clock readings. If
+    somebody moved the clock in between, it is not a duration, and no sample
+    size repairs that.
+
+    This runs on an edge node with no Internet, so its clock is whatever the
+    RTC said at boot until a network appears and NTP steps it -- possibly mid
+    drill. Before this, the report said nothing either way.
+    """
+
+    STEP = 40 * 60 * 1000
+
+    def _drill(self, step_ms, n=100):
+        """n people arriving 20s to 218s in; the clock steps 100s in."""
+        corrections = (() if step_ms == 0 else
+                       (ClockCorrection(at_ms=T0 + 100_000, delta_ms=step_ms),))
+        timings = []
+        for i in range(n):
+            arrival = T0 + 20_000 + i * 2_000
+            if arrival >= T0 + 100_000:
+                arrival += step_ms
+            timings.append(measure(
+                person_id=f"p{i}", drill_started_ms=T0,
+                assembly_arrival_ms=arrival, clock_corrections=corrections))
+        return summarise(timings, clock_corrections=corrections), corrections
+
+    def test_the_honest_drill_is_unaffected(self):
+        summary, _ = self._drill(0)
+        assert summary.p95 == 208.0
+        assert summary.is_reliable
+        assert summary.caveats() == ()
+
+    def test_a_backward_correction_used_to_turn_a_failure_into_a_pass(self):
+        """The worst shape available: the drill's true P95 is 208s against a
+        120s target, and the correction reported 94s.
+
+        Sixty people fell out of the sample because their arrival now sits in
+        front of the start, and dropping the slow tail is the exact gaming
+        vector this module's docstring exists to make visible -- arriving here
+        by accident rather than by design.
+        """
+        summary, _ = self._drill(-self.STEP)
+        assert summary.p95 == 94.0, "the arithmetic itself has not changed"
+        assert summary.p95 < 120.0 < 208.0, "it still looks like a pass"
+        # And is now refused as one.
+        assert not summary.is_reliable
+        assert DrillTiming(building=summary, by_floor={}, by_zone={},
+                           accountability_completed_ms=None).meets_target is None
+
+    def test_a_forward_correction_was_reported_with_no_caveat_at_all(self):
+        # Full coverage, nothing excluded, a hundred samples, and a P95 of
+        # 2608s against a true 208s. Everything that qualifies a number was
+        # silent because none of them was the problem.
+        summary, _ = self._drill(self.STEP)
+        assert summary.p95 == 2608.0
+        assert summary.coverage == 1.0 and summary.excluded == 0
+        assert summary.sample_size == 100
+        assert not summary.is_reliable
+        assert any("clock" in c.lower() for c in summary.caveats())
+
+    def test_the_excluded_people_are_not_accused_of_standing_there(self):
+        """ARRIVED_BEFORE_START says "already at the muster point when the
+        alarm went". Of the sixty people a backward correction excludes, that
+        is a false statement about every one of them, in a document that gets
+        filed after an incident.
+        """
+        summary, _ = self._drill(-self.STEP)
+        assert summary.exclusion_reasons == {"CLOCK_CORRECTED": 60}
+        assert ExclusionReason.ARRIVED_BEFORE_START.value \
+            not in summary.exclusion_reasons
+
+    def test_somebody_genuinely_already_there_is_still_said_to_be(self):
+        # The correction explains an arrival in front of the start only as far
+        # back as the step reaches. A person who turned up an hour before a
+        # drill that crossed a ten-second correction was genuinely already
+        # standing there, and relabelling them would hide a real exclusion.
+        correction = (ClockCorrection(at_ms=T0 + 1_000, delta_ms=-10_000),)
+        early = measure(person_id="p", drill_started_ms=T0,
+                        assembly_arrival_ms=T0 - 3_600_000,
+                        clock_corrections=correction)
+        assert early.excluded_because is ExclusionReason.ARRIVED_BEFORE_START
+
+    def test_a_forward_correction_never_explains_an_early_arrival(self):
+        # It moves arrivals further from the start, never in front of it, so
+        # anybody in front of the start was genuinely already there.
+        correction = (ClockCorrection(at_ms=T0 + 1_000, delta_ms=self.STEP),)
+        early = measure(person_id="p", drill_started_ms=T0,
+                        assembly_arrival_ms=T0 - 5_000,
+                        clock_corrections=correction)
+        assert early.excluded_because is ExclusionReason.ARRIVED_BEFORE_START
+
+    def test_the_caveat_says_the_numbers_are_wrong_not_weak(self):
+        summary, _ = self._drill(self.STEP)
+        first = summary.caveats()[0]
+        assert "clock" in first.lower()
+        assert "not measurements" in first.lower()
+        # And it does not also claim the sample was small, which it was not.
+        assert not any("Only 100 measurements" in c for c in summary.caveats())
+
+    def test_a_small_sample_still_says_so_on_its_own(self):
+        # The sample-size note is asked of the sample size, not of
+        # `is_reliable`. Reusing the latter once a clock correction could also
+        # make it false printed "Only 100 measurements" on a hundred-person
+        # drill.
+        few = summarise([timing_of(f"p{i}", 30.0) for i in range(5)])
+        assert any("Only 5 measurements" in c for c in few.caveats())
+
+    def test_every_floor_carries_the_caveat_the_building_does(self):
+        # A clock is a property of the node, not of a floor. A per-floor number
+        # with no caveat beside a building number with one is the shape a
+        # reader trusts by mistake.
+        correction = (ClockCorrection(at_ms=T0 + 1_000, delta_ms=-self.STEP),)
+        timings = [timing_of(f"p{i}", 30.0, floor_id="floor-2")
+                   for i in range(30)]
+        by_floor = summarise_by(timings, "floor_id",
+                                clock_corrections=correction)
+        assert not by_floor["floor-2"].is_reliable
+
+    def test_a_correction_that_excluded_everybody_still_says_so(self):
+        """The case a backward correction lands hardest on.
+
+        "No measurements: nobody had both a start and an arrival" is a true
+        sentence, and on its own it sends a reader looking for a camera fault.
+        The clock note has to come out ahead of the empty case, not after it.
+        """
+        correction = (ClockCorrection(at_ms=T0 + 1_000, delta_ms=-self.STEP),)
+        timings = [measure(person_id=f"p{i}", drill_started_ms=T0,
+                           assembly_arrival_ms=T0 - 60_000,
+                           clock_corrections=correction)
+                   for i in range(40)]
+        summary = summarise(timings, clock_corrections=correction)
+        assert summary.sample_size == 0
+        caveats = summary.caveats()
+        assert "clock" in caveats[0].lower(), caveats
+        assert any("No measurements" in c for c in caveats)
+
+    def test_an_empty_drill_with_a_good_clock_says_only_that(self):
+        summary = summarise([])
+        assert summary.caveats() == (
+            "No measurements: nobody had both a start and an arrival.",)
+
+    def test_a_correction_before_the_drill_is_not_this_drills_problem(self):
+        # Scoped by the caller, and asserted here because the value type is
+        # what decides it: a node stepped an hour before anybody pressed start
+        # produced none of the readings these numbers are built from.
+        before = ClockCorrection(at_ms=T0 - 3_600_000, delta_ms=-self.STEP)
+        assert not before.explains(T0 - 5_000, T0)

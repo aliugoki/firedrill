@@ -1209,3 +1209,61 @@ describe('reading the tablet in direct sun', () => {
                     themeToggle('night', t).label);
   });
 });
+
+describe('a timing panel for a drill whose clock was corrected', () => {
+  const withClock = (corrections) => timingLine({
+    building: { p50: 60, p95: 208, reliable: false, coverage: 1,
+                clock_corrections: corrections },
+    target_p95_s: 120,
+  }, t);
+
+  it('says the clock moved rather than that the sample was small', () => {
+    // `reliable: false` is set by both, and on its own the board read "too few
+    // measurements" on a hundred-person drill -- which sends a reader looking
+    // for more people when the problem is that the arithmetic is wrong.
+    const line = withClock([{ at_ms: 1, delta_ms: -2_400_000 }]);
+    assert.equal(line.caveats.length, 1);
+    assert.match(line.caveats[0], /clock/i);
+    assert.match(line.caveats[0], /2400s/);
+    assert.notEqual(line.caveats[0], t('timing.unreliable'));
+  });
+
+  it('still says "too few" when that is what is wrong', () => {
+    const line = timingLine({
+      building: { p50: 60, p95: 208, reliable: false, coverage: 1,
+                  clock_corrections: [] },
+      target_p95_s: 120,
+    }, t);
+    assert.deepEqual(line.caveats, [t('timing.unreliable')]);
+  });
+
+  it('reports a correction in either direction', () => {
+    assert.match(withClock([{ at_ms: 1, delta_ms: 90_000 }]).caveats[0], /90s/);
+  });
+
+  it('names every correction when a node was stepped more than once', () => {
+    const line = withClock([{ at_ms: 1, delta_ms: -30_000 },
+                            { at_ms: 2, delta_ms: -15_000 }]);
+    assert.equal(line.caveats.length, 2);
+  });
+
+  it('is unchanged for a server that sends no corrections at all', () => {
+    // An edge node a version behind. The panel must not blank its caveats
+    // because a field it has never heard of is absent.
+    const line = timingLine({
+      building: { p50: 60, p95: 110, reliable: true, coverage: 1 },
+      target_p95_s: 120,
+    }, t);
+    assert.deepEqual(line.caveats, []);
+    assert.match(line.text, /110/);
+  });
+
+  it('says it in the language being read', () => {
+    const line = timingLine({
+      building: { p50: 60, p95: 208, reliable: false, coverage: 1,
+                  clock_corrections: [{ at_ms: 1, delta_ms: -30_000 }] },
+      target_p95_s: 120,
+    }, createTranslator('ar'));
+    assert.ok(!/[A-Za-z]{4,}/.test(line.caveats[0]), line.caveats[0]);
+  });
+});

@@ -122,7 +122,7 @@ A target that could not be measured is not a target that was missed, so
 | `COVERAGE_SUFFICIENT` | ≥90% tracked end to end | Evidence |
 | `SYSTEM_MOSTLY_SIGHTED` | Blind for ≤10% of the drill | Evidence |
 | `HEADCOUNTS_AGREE` | No zone disagreed | Disagreement |
-| `P95_MEASURABLE` | ≥20 samples and a reliable percentile | Evidence |
+| `P95_MEASURABLE` | ≥20 samples, a reliable percentile, and a clock nobody corrected | Evidence |
 | `P95_WITHIN_TARGET` | P95 ≤ 120 s | Quality |
 
 `P95_MEASURABLE` is evidence, not quality. Too few measurements for a percentile
@@ -146,6 +146,33 @@ percentile computed only over people who were tracked end to end improves when
 the slow, hard-to-track people fall out of the sample. Low coverage with a good
 P95 is the shape of a number that got better by losing people rather than by
 moving them.
+
+**A corrected clock withdraws the number rather than qualifying it.** An
+evacuation time is the difference between two wall-clock readings, so if
+somebody moved the clock between them it is not a duration and no sample size
+repairs it. This is not hypothetical here: accountability runs on an edge node
+with no Internet, whose clock is whatever the RTC said at boot until a network
+appears and NTP steps it — see `EVAC120_RESILIENCE.md`.
+
+Measured on a simulated hundred-person drill whose true P95 was 208 s, crossing
+a forty-minute correction:
+
+| | Reported P95 | Coverage | Excluded | Caveats |
+|---|---|---|---|---|
+| No correction | 208 s | 100% | 0 | none |
+| Clock stepped **back** | **94 s** | 40% | 60 | coverage only |
+| Clock stepped **forward** | **2608 s** | 100% | 0 | **none at all** |
+
+The backward row is the dangerous one: a drill that missed its 120 s target by
+88 seconds reported as comfortably inside it, because sixty people's arrivals
+landed in front of the start and fell out of the sample — which is the gaming
+vector `COVERAGE_SUFFICIENT` exists to catch, arriving by accident. Those sixty
+were also excluded as `ARRIVED_BEFORE_START`, "already at the muster point when
+the alarm went", which is a false statement about sixty real people in a
+document that gets filed after an incident. They are `CLOCK_CORRECTED` now.
+
+The forward row is quieter and no better: a fabricated number with full
+coverage, nothing excluded and not one qualification on it.
 
 All thresholds are marked `calibrated=False` and will stay that way until a live
 drill exists to set them against.

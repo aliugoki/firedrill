@@ -420,6 +420,7 @@ def build_report(
         timing_coverage=timing.building.coverage,
         p95_s=timing.building.p95,
         p95_reliable=timing.building.is_reliable,
+        clock_corrected=bool(timing.building.clock_corrections),
         blind_fraction=board.health.blind_fraction,
         events_dropped=dropped,
         thresholds=thresholds)

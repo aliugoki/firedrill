@@ -119,7 +119,18 @@ export function timingLine(timing, t) {
   }
   const b = timing.building;
   const caveats = [];
-  if (b.reliable === false) caveats.push(t('timing.unreliable'));
+  // First, and it displaces the sample-size line rather than joining it. A
+  // clock correction sets `reliable: false` too, and left to itself the board
+  // read "too few measurements" on a drill with a hundred of them -- which
+  // sends a reader to look for more people when the problem is that a duration
+  // between two clock readings taken either side of a correction is not a
+  // duration.
+  const moved = b.clock_corrections || [];
+  for (const correction of moved) {
+    const seconds = Math.round(Math.abs(correction.delta_ms) / 1000);
+    caveats.push(`${t('timing.clock_moved')} (${seconds}s)`);
+  }
+  if (b.reliable === false && !moved.length) caveats.push(t('timing.unreliable'));
   if (typeof b.coverage === 'number' && b.coverage < 0.9) {
     const missing = Math.round((1 - b.coverage) * 100);
     caveats.push(`${missing}% ${t('timing.coverage_low')}`);

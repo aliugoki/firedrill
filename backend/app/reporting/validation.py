@@ -195,6 +195,7 @@ def validate(
     timing_coverage: float | None,
     p95_s: float | None,
     p95_reliable: bool,
+    clock_corrected: bool = False,
     blind_fraction: float,
     events_dropped: int = 0,
     thresholds: Thresholds | None = None,
@@ -289,8 +290,15 @@ def validate(
         passed=(p95_s is not None and p95_reliable
                 and timing_samples >= thresholds.min_timing_samples),
         measured=f"{timing_samples} samples",
+        # The two ways this fails are unrelated and the wrong one sends a
+        # reader looking for people. A clock correction is not a shortage of
+        # measurements: it is measurements that are not measurements, and a
+        # hundred-sample drill told "100 measurements is too few" is a report
+        # arguing with itself.
         detail=("the sample supports a 95th percentile"
                 if p95_s is not None and p95_reliable else
+                "the node's clock was corrected during the drill, so the "
+                "durations are not durations" if clock_corrected else
                 f"{timing_samples} measurements is too few for a 95th "
                 "percentile to mean anything"),
     ))

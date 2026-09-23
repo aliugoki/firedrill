@@ -101,6 +101,33 @@ class TestTheVerdictOrder:
         failed = {c.criterion for c in result.failed}
         assert Criterion.P95_MEASURABLE in failed
 
+    def test_a_corrected_clock_makes_the_p95_unmeasurable_too(self):
+        # Not a failure: the drill did not produce a number to judge. Same
+        # verdict as too few samples, for a completely different reason.
+        result = validate(**{**CLEAN, "p95_reliable": False,
+                             "clock_corrected": True})
+        assert Criterion.P95_MEASURABLE in {c.criterion for c in result.failed}
+        assert Criterion.P95_MEASURABLE in {
+            c.criterion for c in result.missing_evidence}
+
+    def test_and_it_is_not_described_as_a_shortage_of_measurements(self):
+        # `CLEAN` has plenty. A report telling a reader that a hundred
+        # measurements are too few is a report arguing with itself, and it
+        # sends them looking for people when the problem is the clock.
+        result = validate(**{**CLEAN, "p95_reliable": False,
+                             "clock_corrected": True})
+        check = next(c for c in result.failed
+                     if c.criterion is Criterion.P95_MEASURABLE)
+        assert "clock" in check.detail
+        assert "too few" not in check.detail
+
+    def test_too_few_samples_still_says_too_few(self):
+        result = validate(**{**CLEAN, "timing_samples": 8, "p95_reliable": False})
+        check = next(c for c in result.failed
+                     if c.criterion is Criterion.P95_MEASURABLE)
+        assert "too few" in check.detail
+        assert "clock" not in check.detail
+
     def test_a_headcount_disagreement_fails_the_drill(self):
         result = validate(**{**CLEAN, "headcount_mismatches": 1})
         assert result.outcome is Outcome.FAIL

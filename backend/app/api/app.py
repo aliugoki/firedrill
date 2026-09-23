@@ -813,7 +813,10 @@ def _percentiles(summary) -> schemas.PercentilesOut:
         p95=summary.p95, p99=summary.p99, maximum=summary.maximum,
         reliable=summary.is_reliable, coverage=summary.coverage,
         exclusion_reasons=dict(summary.exclusion_reasons),
-        caveats=list(summary.caveats()))
+        caveats=list(summary.caveats()),
+        clock_corrections=[
+            schemas.ClockCorrectionOut(at_ms=c.at_ms, delta_ms=c.delta_ms)
+            for c in summary.clock_corrections])
 
 
 def _evidence(item) -> schemas.EvidenceOut:

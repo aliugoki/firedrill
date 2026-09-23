@@ -398,6 +398,38 @@ class TestTiming:
         assert any("No measurements" in c
                    for c in timing["building"]["caveats"])
 
+    def test_a_drill_whose_clock_was_corrected_refuses_to_say_it_passed(
+            self, client):
+        """End to end, because every layer of this was separately right.
+
+        The supervisor detects the step, the ingestor records it, the drill
+        scopes it to itself, timing withdraws the number and `meets_target`
+        answers None. Each half was tested against a stub of the next one and
+        the wire is the only place they meet.
+        """
+        from app.core.timing import ClockCorrection
+
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+
+        before = client.get(f"/api/evac/drills/{drill_id}/timing",
+                            headers=VIEWER).json()
+        assert before["building"]["clock_corrections"] == []
+
+        drill = client.app.state.registry.get(drill_id)
+        drill.ingestor.state.clock_corrections.append(
+            ClockCorrection(at_ms=drill.started_ms + 1_000,
+                            delta_ms=-2_400_000))
+
+        after = client.get(f"/api/evac/drills/{drill_id}/timing",
+                           headers=VIEWER).json()
+        assert after["meets_target"] is None
+        assert after["building"]["reliable"] is False
+        # The values the screen needs to word it, not only the prose.
+        assert after["building"]["clock_corrections"] == [
+            {"at_ms": drill.started_ms + 1_000, "delta_ms": -2_400_000}]
+        assert any("clock" in c.lower() for c in after["building"]["caveats"])
+
     def test_the_target_is_reported_alongside_the_result(self, client):
         drill_id = make_drill(client)
         timing = client.get(f"/api/evac/drills/{drill_id}/timing",
