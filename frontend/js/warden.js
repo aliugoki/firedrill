@@ -279,10 +279,23 @@ async function paint() {
 
   const health = healthLine(zone?.system_health, t);
   const healthEl = document.getElementById('system-health');
+  // Two lines when there are two things to say. The first is what to do about
+  // it now; the second is how much of this drill the system actually saw,
+  // which was computed on every poll and thrown away.
+  //
+  // Nothing at all when the system is fine. A non-blinding outage is a
+  // durability problem at the other end of a link and there is nothing a
+  // warden can do about it; the case that matters to them -- the system having
+  // been blind for much of this drill -- is not `ok`.
+  const tone = health.tone === 'blind' ? 'blind' : 'offline';
+  const headline = health.tone === 'blind'
+    ? t('warden.rely_on_count') : health.text;
   healthEl.innerHTML = health.tone === 'ok'
     ? ''
-    : `<div class="warden-status ${escapeHtml(health.tone === 'blind' ? 'blind' : 'offline')}">${
-        escapeHtml(health.tone === 'blind' ? t('warden.rely_on_count') : health.text)}</div>`;
+    : `<div class="warden-status ${escapeHtml(tone)}">${
+        escapeHtml(headline)}</div>`
+      + (health.caveat
+        ? `<div class="caveat">${escapeHtml(health.caveat)}</div>` : '');
 
   document.getElementById('screen-zone').hidden = screen !== 'zone';
   document.getElementById('screen-roster').hidden = screen !== 'roster';

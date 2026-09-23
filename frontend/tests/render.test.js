@@ -8,7 +8,8 @@ import { describe, it } from 'node:test';
 import { Api, Freshness, ApiError } from '../js/api.js';
 import { createTranslator, missingKeys, STRINGS, isRtl } from '../js/i18n.js';
 import {
-  filterRoster, headcountVerdict, healthLine, orderForWarden, staleness,
+  filterRoster, headcountVerdict, healthLine, healthCaveat, orderForWarden,
+  staleness,
   syncStatus, tiles, timingLine, verdict,
   exitPressure,
   drillControl,
@@ -105,10 +106,81 @@ describe('health', () => {
     assert.equal(healthLine(board().health, t).tone, 'ok');
   });
 
-  it('carries the caveat through', () => {
+  it('falls back to the server sentence when it has no numbers', () => {
+    // An edge node that sends prose and no `blind_fraction`. Better its
+    // English than a blank line where the qualification should be.
     const line = healthLine(
       { degraded: true, blind: true, open_outages: 1, caveat: 'blind for 40%' }, t);
     assert.equal(line.caveat, 'blind for 40%');
+  });
+});
+
+describe('a drill the system watched less than half of', () => {
+  // `blind` and `degraded` are both about this instant, and `health.py` exists
+  // because an instant cannot answer "was the system trustworthy when it said
+  // that?" -- by the time anybody reads the flag the outage is over.
+  const recovered = (fraction, extra = {}) => ({
+    degraded: false, blind: false, open_outages: 0, total_outages: 2,
+    blind_fraction: fraction, longest_blind_ms: 360_000,
+    caveat: 'the English one', ...extra,
+  });
+
+  it('no longer reads "all systems reporting"', () => {
+    // Six of ten minutes with every camera dark, since recovered. This said
+    // the system was fine over a board built from 40% of the drill.
+    const line = healthLine(recovered(0.6), t);
+    assert.notEqual(line.text, t('health.ok'));
+    assert.equal(line.tone, 'degraded');
+    assert.match(line.text, /60%/);
+  });
+
+  it('and says what to do about it, not just that it happened', () => {
+    const line = healthLine(recovered(0.6), t);
+    assert.match(line.caveat, /60%/);
+    assert.match(line.caveat, /authority/i);
+  });
+
+  it('is still ok when the cameras never blinked', () => {
+    const line = healthLine(
+      { degraded: false, blind: false, open_outages: 0, total_outages: 0,
+        blind_fraction: 0 }, t);
+    assert.equal(line.tone, 'ok');
+    assert.equal(line.text, t('health.ok'));
+    assert.equal(line.caveat, null);
+  });
+
+  it('words a short blackout differently from a long one', () => {
+    // Half the drill changes what a commander does: stop reading the board and
+    // go and ask the wardens. Four percent does not.
+    const brief = healthCaveat(recovered(0.04), t);
+    const most = healthCaveat(recovered(0.6), t);
+    assert.notEqual(brief, most);
+    assert.match(brief, /4%/);
+    assert.match(brief, /360s/, 'the longest outage belongs in the short case');
+    assert.doesNotMatch(brief, /authority/i);
+  });
+
+  it('mentions a non-blinding outage without crying blind', () => {
+    const line = healthLine(
+      { degraded: false, blind: false, open_outages: 0, total_outages: 3,
+        blind_fraction: 0 }, t);
+    assert.equal(line.tone, 'ok', 'the system could see the whole time');
+    assert.match(line.caveat, /3/);
+  });
+
+  it('keeps the caveat while the outage is still open', () => {
+    // The open case had one too; it was the recovered case that had nothing.
+    const line = healthLine(
+      { degraded: true, blind: true, open_outages: 1, total_outages: 1,
+        blind_fraction: 0.3, longest_blind_ms: 90_000 }, t);
+    assert.equal(line.tone, 'blind');
+    assert.match(line.caveat, /30%/);
+  });
+
+  it('says all of it in the language being read', () => {
+    const line = healthLine(recovered(0.6), createTranslator('ar'));
+    assert.ok(!/[A-Za-z]{4,}/.test(line.text), line.text);
+    assert.ok(!/[A-Za-z]{4,}/.test(line.caveat), line.caveat);
   });
 });
 

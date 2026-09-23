@@ -134,6 +134,8 @@ class TestTheCommandCentre:
             "stale": "#stale",
             "headline": "#headline",
             "search": "#search",
+            "health": "#health",
+            "health_caveat": "#health-caveat",
         })
 
     def test_the_page_threw_nothing(self, page):
@@ -184,6 +186,34 @@ class TestTheCommandCentre:
         # park holds eleven people and floor 1 holds two.
         assert search.index("send somebody to look") < \
             search.index("a warden must confirm them")
+
+    def test_the_board_says_how_much_of_the_drill_it_actually_saw(self, page):
+        """The demo drill has had a camera dark for 40% of it all along, and
+        that camera has since come back.
+
+        So `blind` is false, `degraded` is false and `open_outages` is zero --
+        every flag the strip read is about this instant, and every number on
+        the board was built from the whole drill. It said "All systems
+        reporting". `healthLine` computed the sentence that says otherwise on
+        every poll and neither screen rendered it.
+        """
+        # A range, not a literal: the fraction is blind time over drill length
+        # and the drill goes on ageing while the fixture runs, so the exact
+        # number drifts down between runs.
+        def blind_percent(text: str) -> int:
+            found = re.search(r"(\d+)%", text)
+            assert found, text
+            return int(found.group(1))
+
+        health = page["text"]["health"]
+        assert "all systems reporting" not in health.lower(), health
+        assert 25 <= blind_percent(health) <= 45, health
+
+        caveat = page["text"]["health_caveat"] or ""
+        assert 25 <= blind_percent(caveat) <= 45, caveat
+        # And it says what to do about it, which is the point of saying it.
+        assert "unobserved" in caveat.lower() or "authority" in caveat.lower(), \
+            caveat
 
     def test_the_verdict_names_what_is_blocking(self, page):
         text = page["text"]["verdict"]

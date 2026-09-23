@@ -67,20 +67,76 @@ export function tiles(board, t) {
  * Three states rather than two. "Degraded" and "cannot see" call for different
  * responses: the first means something is wrong, the second means nothing on
  * this screen can be trusted over a warden's own eyes.
+ *
+ * And a fourth thing, which is not a state: what already happened. `blind` and
+ * `degraded` are both about this instant, and `health.py` exists because an
+ * instant cannot answer the question that matters -- "was the system
+ * trustworthy when it said that?" -- since by the time anybody reads the flag
+ * the outage is over and it is back to healthy.
+ *
+ * That is not hypothetical. A drill whose cameras were all dark for six of its
+ * ten minutes, and have since come back, has `blind: false`, `degraded: false`
+ * and `open_outages: 0`, and this function read "All systems reporting" over a
+ * drill the system watched 40% of. The sentence saying so arrived on every
+ * poll, in `caveat`, and neither screen rendered it.
  */
 export function healthLine(health, t) {
   if (!health) return { tone: 'ok', text: t('health.ok'), caveat: null };
+
+  const caveat = healthCaveat(health, t);
   if (health.blind) {
-    return { tone: 'blind', text: t('health.blind'), caveat: health.caveat };
+    return { tone: 'blind', text: t('health.blind'), caveat };
   }
   if (health.degraded) {
     return {
       tone: 'degraded',
       text: `${t('health.degraded')} — ${health.open_outages} ${t('health.outages')}`,
-      caveat: health.caveat,
+      caveat,
     };
   }
-  return { tone: 'ok', text: t('health.ok'), caveat: health.caveat };
+  const blindFraction = health.blind_fraction || 0;
+  if (blindFraction > 0) {
+    // Recovered, and the history is the finding. "All systems reporting" over
+    // a drill the cameras missed most of is true about this second and
+    // misleading about everything the board is showing.
+    return {
+      tone: 'degraded',
+      text: `${t('health.seeing_now')} — ${Math.round(blindFraction * 100)}% `
+        + `${t('health.was_blind')}`,
+      caveat,
+    };
+  }
+  return { tone: 'ok', text: t('health.ok'), caveat };
+}
+
+/**
+ * The sentence that belongs under the health strip, worded here.
+ *
+ * The server sends one too, and it is English. This is the same move the
+ * blocking list and the exit caveats made: the values travel, the wording
+ * happens in the browser, and the server's prose stays as the fallback for a
+ * node that sends numbers this build does not know about.
+ */
+export function healthCaveat(health, t) {
+  if (!health) return null;
+  const fraction = health.blind_fraction;
+  if (typeof fraction !== 'number') return health.caveat ?? null;
+
+  const percent = Math.round(fraction * 100);
+  if (fraction >= 0.5) {
+    // The one that changes what a commander does: stop reading the board and
+    // go and ask the wardens.
+    return `${percent}% ${t('health.caveat_mostly_blind')}`;
+  }
+  if (fraction > 0) {
+    const longest = Math.round((health.longest_blind_ms || 0) / 1000);
+    return `${percent}% ${t('health.caveat_blind')} `
+      + `(${health.total_outages} ${t('health.outages')}, ${longest}s)`;
+  }
+  if (health.total_outages > 0) {
+    return `${health.total_outages} ${t('health.caveat_non_blinding')}`;
+  }
+  return null;
 }
 
 /**

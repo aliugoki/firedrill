@@ -547,6 +547,16 @@ body.warden .row::before { display: none; }
   margin-bottom: var(--s3);
 }
 
+/* The health caveat borrows this banner and carries the severity of what it is
+ * qualifying. "The system watched 40% of this drill" is not the same warning as
+ * "one non-blinding outage", and yellow for both makes a commander weigh them
+ * the same. */
+.stale.blind {
+  background: var(--red-bg);
+  color: var(--red);
+  border-color: var(--red-edge);
+}
+
 /* --- buttons --------------------------------------------------------------- */
 
 button {

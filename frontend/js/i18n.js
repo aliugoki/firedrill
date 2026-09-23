@@ -105,6 +105,11 @@ export const STRINGS = {
     'health.degraded': 'Degraded',
     'health.blind': 'Cannot see',
     'health.outages': 'outages',
+    'health.seeing_now': 'Seeing now',
+    'health.was_blind': 'of this drill was unseen',
+    'health.caveat_mostly_blind': 'of this drill was unseen. The counts describe the minority the system was watching — the wardens\u2019 own count is the authority.',
+    'health.caveat_blind': 'of this drill was unseen. Treat a gap in somebody\u2019s history as unobserved, not as absence.',
+    'health.caveat_non_blinding': 'outage(s) that did not blind it. The system kept watching; durability or reporting may have suffered.',
 
     'timing.p50': 'Median',
     'timing.p95': '95th percentile',
@@ -269,6 +274,11 @@ export const STRINGS = {
     'health.degraded': 'أداء منخفض',
     'health.blind': 'لا يمكن الرؤية',
     'health.outages': 'انقطاعات',
+    'health.seeing_now': 'يرى الآن',
+    'health.was_blind': 'من هذا التمرين لم يُرَ',
+    'health.caveat_mostly_blind': 'من هذا التمرين لم يُرَ. الأعداد تصف الجزء الأقل الذي كان النظام يراه — وعدّ المراقبين هو المرجع.',
+    'health.caveat_blind': 'من هذا التمرين لم يُرَ. اعتبر أي فجوة في سجل شخص ما عدم رؤية، لا غياباً.',
+    'health.caveat_non_blinding': 'انقطاع/انقطاعات لم تُفقد الرؤية. النظام ظل يرى؛ وقد يتأثر الحفظ أو الإبلاغ.',
 
     'timing.p50': 'الوسيط',
     'timing.p95': 'المئين ٩٥',

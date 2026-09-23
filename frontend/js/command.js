@@ -152,6 +152,15 @@ function paint() {
   healthEl.className = `health ${health.tone}`;
   healthEl.textContent = health.text;
 
+  // `healthLine` has always returned this and nothing has ever rendered it.
+  // It is the difference between "a camera is down" and "the system watched
+  // 60% of this drill, so go and ask the wardens".
+  const caveatEl = document.getElementById('health-caveat');
+  caveatEl.innerHTML = health.caveat
+    ? `<div class="stale ${escapeHtml(health.tone)}">${
+        escapeHtml(health.caveat)}</div>`
+    : '';
+
   document.getElementById('drill-name').textContent = drill?.name || '';
   paintDrillControl(board);
   document.getElementById('elapsed').textContent = board

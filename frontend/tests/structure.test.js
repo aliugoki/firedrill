@@ -143,6 +143,49 @@ describe('the glue imports every function it calls', () => {
   }
 });
 
+describe('the glue reads what render.js hands it', () => {
+  // `healthLine` returned `{tone, text, caveat}` from the first version and
+  // nothing ever read `caveat` -- so the sentence saying the system had been
+  // blind for 40% of the drill was computed on every poll and dropped, while
+  // the strip beside it said "All systems reporting".
+  //
+  // A value a pure function goes to the trouble of producing, that no glue
+  // file ever mentions, is either dead or a defect, and from here the two look
+  // identical. This makes somebody say which.
+  const RETURNED = {
+    // function -> the keys on the object it returns
+    healthLine: ['tone', 'text', 'caveat'],
+    timingLine: ['text', 'caveats', 'settled'],
+    verdict: ['clear', 'headline', 'reasons'],
+    outstanding: ['remaining', 'expected', 'accounted', 'fraction'],
+    exitPressure: ['headline', 'rows', 'caveats'],
+    syncStatus: ['tone', 'text'],
+    themeToggle: ['theme', 'next', 'label', 'chrome'],
+  };
+
+  const glue = ['js/command.js', 'js/warden.js'].map(code).join('\n');
+
+  for (const [fn, keys] of Object.entries(RETURNED)) {
+    it(`every value ${fn} returns is read somewhere`, () => {
+      // Only for the functions the glue actually calls. `warden.js` has no use
+      // for `exitPressure` and that is not a defect.
+      if (!new RegExp(`\\b${fn}\\s*\\(`).test(glue)) return;
+      const unread = keys.filter(
+        (key) => !new RegExp(`\\.${key}\\b|\\b${key}\\s*[,}]`).test(glue));
+      assert.deepEqual(unread, [],
+        `${fn} returns ${unread.join(', ')} and no screen reads it`);
+    });
+  }
+
+  it('the table describes functions that exist', () => {
+    const source = code('js/render.js');
+    for (const fn of Object.keys(RETURNED)) {
+      assert.match(source, new RegExp(`export function ${fn}\\b`),
+        `${fn} is listed here but no longer exported`);
+    }
+  });
+});
+
 describe('every string the screens ask for is written', () => {
   // `t()` returns the key itself when a string is missing, which is ugly on
   // purpose -- but only if somebody looks at that screen in that language.
