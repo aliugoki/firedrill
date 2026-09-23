@@ -57,6 +57,34 @@ def a_running_drill(client: TestClient) -> str:
     return drill_id
 
 
+from app.warden.actions import ActionKind, WardenAction
+
+
+def _account_by_camera(drill, emp: str) -> None:
+    """Put somebody at the assembly point on camera evidence alone."""
+    from app.core.events import Event, EventType, SourceKind
+
+    gid, seq = f"gp-{emp}", [0]
+
+    def ev(kind, ts, payload):
+        seq[0] += 1
+        return Event(
+            tenant_id="t", site_id="site-1", drill_id=drill.drill_id,
+            source="cam-9", source_kind=SourceKind.CAMERA, seq=seq[0],
+            type=kind, ts_ms=ts, subject=gid, payload=payload)
+
+    start = drill.started_ms + 1_000
+    for i in range(3):
+        drill.feed([ev(EventType.FACE_OBSERVED, start + i * 100,
+                       {"candidate_id": emp, "score": 0.85, "margin": 0.4,
+                        "quality": 0.9, "camera_id": "cam-9",
+                        "association": "SHARED_TRACK"})])
+    for i in range(2):
+        drill.feed([ev(EventType.TRACK_UPDATED, start + 10_000 * (i + 1),
+                       {"zone_id": "assembly-north", "zone_kind": "ASSEMBLY",
+                        "camera_id": "cam-9"})])
+
+
 class TestTheReportIsReachable:
 
     def test_it_carries_the_verdict_and_the_text(self, client):
@@ -80,6 +108,46 @@ class TestTheReportIsReachable:
         body = client.get(f"/api/evac/drills/{drill_id}/report",
                           headers=OPERATOR).json()
         assert body["outcome"] != "PASS"
+
+
+    def test_the_unchecked_are_a_field_and_not_only_prose(self, client):
+        """A dashboard must not have to parse the rendered report to find them.
+
+        A regression this asserts against rather than a defect found in
+        somebody else's code. When silence and contradiction were one number, a
+        drill with an unswept zone reported `false_accounted: 80` -- wrong, but
+        loud. Separating them correctly left the API saying `0` with no other
+        field carrying the eighty-one, which is quieter about a real condition
+        than the bug had been.
+        """
+        drill_id = a_running_drill(client)
+        drill = client.app.state.registry.get(drill_id)
+        # Somebody the cameras accounted for, with no warden in the picture.
+        _account_by_camera(drill, "EMP-000")
+
+        body = client.get(f"/api/evac/drills/{drill_id}/report",
+                          headers=OPERATOR).json()
+        assert body["accounted_unverified"] >= 1, body
+        assert body["false_accounted"] == 0, "nobody disputed anything"
+        # And it is a field, not a sentence a dashboard has to grep for.
+        assert not any("accounted_unverified" in line
+                       for line in body["rendered"])
+
+    def test_a_dispute_lands_in_the_other_count(self, client):
+        # The guard: the two must not have been merged back together by making
+        # both of them the same number.
+        drill_id = a_running_drill(client)
+        drill = client.app.state.registry.get(drill_id)
+        _account_by_camera(drill, "EMP-000")
+        drill.record_warden_action(WardenAction(
+            kind=ActionKind.NOT_HERE, warden_id="warden-7",
+            device_id="tablet-3", zone_id="assembly-north",
+            ts_ms=drill.started_ms + 120_000, subject="emp:EMP-000"))
+
+        body = client.get(f"/api/evac/drills/{drill_id}/report",
+                          headers=OPERATOR).json()
+        assert body["false_accounted"] + body["accounted_unverified"] >= 1
+        assert body["false_accounted"] != body["accounted_unverified"]
 
 
 class TestTheAuditLogAnswersWhoDidWhat:

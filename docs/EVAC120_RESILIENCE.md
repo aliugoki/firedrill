@@ -110,6 +110,7 @@ worth having.
 | Edge process crashes | **0** | Everything committed is on disk and replayed on restart |
 | Edge loses power | **0** | `synchronous=FULL` fsyncs before returning |
 | Link to central drops | **0** | Buffered locally; delivered on reconnect |
+| Central refuses one record | **0**, but nothing behind it moves | The queue is oldest-first, so a record central will never accept blocks everything behind it. Reported as a stall, never dropped |
 | Central is rebuilt | **0** | Edge replays its whole buffer |
 | **Edge disk fails** | Everything central has not acknowledged | The only unbounded loss, and the argument for a short flush interval |
 | **Producer crashes mid-flight** | Up to one flush interval | Events produced but not yet committed |
@@ -171,6 +172,7 @@ same accountability conclusions as the edge.
 | Camera | On `CAMERA_RECOVERED` | Time spent degraded is credited back to each affected person's grace window |
 | Pipeline | On `SYSTEM_RECOVERED` | Ingest resumes; the gap in sequence numbers is reported |
 | Redis | Consumer reconnects and replays from its last acknowledged id | Duplicates dropped; gaps reported |
+| A stalled outbox | Only by a person: nothing resolves it on its own | The record stays queued. `attempts` on the head of the queue is what separates this from an outage, and the health endpoint now reports it |
 | Postgres | Projections rebuilt from the ledger | Nothing lost; the ledger is the source of truth |
 | Clock | Backwards: when wall clock climbs past where it was. Forwards: on the next tick | The outage stays in the record, so the report can say the minutes either side of it were not trustworthy |
 | Central link | Replicator drains the backlog | Reconciler deduplicates the flood |
@@ -182,6 +184,34 @@ regained sight.
 
 ---
 
+
+### An outage and a poison record look identical
+
+The outbox is drained oldest-first, so whatever is at the head of the queue is
+what every flush retries. If central refuses that one record — a field it does
+not know, a schema it has moved past — the batch fails, and it fails again in
+fifteen seconds, and again, forever. The backlog grows, `failed_flushes`
+climbs, `last_failure_reason` carries whatever central said.
+
+Every one of those numbers looks the same as a link that is simply down. The
+two need opposite responses: an outage resolves itself the moment the link
+returns, and this one never resolves at all.
+
+`attempts` is what tells them apart, and it had been incremented on every
+failed flush and carried through a schema migration without anything ever
+reading it. Measured: two hundred flushes against a poisoned batch left five
+rows each recording two hundred attempts in SQLite, `is_blocked` false, and no
+field anywhere on the health endpoint saying so.
+
+The head of the queue's attempt count is now reported, and twenty failures
+against the same record — a little over five minutes at the fifteen-second
+flush interval — marks the node degraded with an instruction saying this is not
+an outage waiting to clear.
+
+**Nothing is dropped on the strength of it.** This outbox deletes only what
+central confirmed, and a record central is refusing is still evidence somebody
+may need. Saying so loudly is the remedy; discarding it is not — the same
+reason `unblock` is not automatic.
 
 ### The clock is a dependency
 

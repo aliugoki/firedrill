@@ -372,6 +372,17 @@ class DrillReportOut(BaseModel):
     summary: str | None
     is_safe_result: bool
     false_accounted: int
+    """People a warden disputed, or whom a finished roll-call passed over.
+    The safety-critical count: one of these ends the assessment."""
+    accounted_unverified: int = 0
+    """People the cameras accounted for whom nobody has looked at yet.
+
+    Structured rather than left in the prose, and the reason is a regression
+    this field exists to undo. When silence and contradiction were one number,
+    a dashboard reading a drill with an unswept zone saw `false_accounted: 80`
+    -- wrong, but loud. Separating them correctly left it reading `0` with no
+    other field to tell it that eighty-one people were unchecked, which is
+    quieter about a real condition than the bug had been."""
     false_unaccounted: int
     p95_s: float | None
     rendered: list[str]

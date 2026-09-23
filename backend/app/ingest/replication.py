@@ -37,6 +37,14 @@ from typing import Callable, Protocol
 from app.core.events import Event, EventType, SequenceTracker, SourceKind
 
 
+#: Failures against the same head-of-queue event before it stops being a retry
+#: and starts being a stall. Twenty is a little over five minutes at the
+#: fifteen-second flush interval: long enough that an ordinary outage, a
+#: restart at the other end or a certificate rollover has gone by, short enough
+#: that somebody hears about it during the drill it is spoiling.
+STALL_AFTER_ATTEMPTS = 20
+
+
 class Transport(Protocol):
     """How a batch reaches central. Anything that can fail, and will."""
 
@@ -193,6 +201,23 @@ class Outbox:
     def depth(self) -> int:
         return self.conn.execute("SELECT COUNT(*) FROM pending").fetchone()[0]
 
+    def head_attempts(self) -> int:
+        """How many times the oldest queued event has been tried.
+
+        `pending` always returns oldest-first, so the head of the queue is what
+        every flush retries. If one record is one central will never accept --
+        a field it does not know, a schema it has moved past -- the batch fails
+        forever, the backlog grows, and it looks exactly like a link outage.
+
+        The two need opposite responses: a link outage resolves itself when the
+        link returns, and this one never resolves at all. `attempts` is what
+        tells them apart, and it was being incremented on every failure,
+        carried through schema migrations, and read by nothing.
+        """
+        row = self.conn.execute(
+            "SELECT attempts FROM pending ORDER BY id LIMIT 1").fetchone()
+        return row[0] if row else 0
+
     def oldest_queued_ms(self) -> int | None:
         row = self.conn.execute(
             "SELECT MIN(queued_at_ms) FROM pending").fetchone()
@@ -320,6 +345,22 @@ class Replicator:
     def backlog(self) -> int:
         return self.outbox.depth()
 
+    @property
+    def head_attempts(self) -> int:
+        """Failures against the event at the front of the queue."""
+        return self.outbox.head_attempts()
+
+    @property
+    def is_stalled(self) -> bool:
+        """Whether this is a link that will come back or a record that will not.
+
+        Nothing is dropped on the strength of it. This outbox deletes only what
+        central confirmed, and a poison record is still evidence somebody may
+        need -- so the answer is to say so loudly and let a person decide, the
+        same reason `unblock` is not automatic.
+        """
+        return self.head_attempts >= STALL_AFTER_ATTEMPTS
+
     def lag_ms(self, now_ms: int) -> int | None:
         """How stale central's copy is. None when there is nothing outstanding."""
         oldest = self.outbox.oldest_queued_ms()
@@ -416,6 +457,12 @@ class RPO:
     unsent_events: int
     oldest_unsent_age_ms: int | None
     exposure_window_ms: int
+    head_attempts: int = 0
+    """Failures against the oldest unsent event."""
+    is_stalled: bool = False
+    """Whether the backlog is one central will never accept rather than one it
+    has not had the chance to. Reported because the two look identical from
+    every other number here and need opposite responses."""
 
     @property
     def durable_loss_on_power_failure(self) -> int:
@@ -460,7 +507,9 @@ def measure_rpo(replicator: Replicator, *, now_ms: int,
         committed_events=replicator.stats.buffered,
         unsent_events=replicator.backlog,
         oldest_unsent_age_ms=replicator.lag_ms(now_ms),
-        exposure_window_ms=flush_interval_ms)
+        exposure_window_ms=flush_interval_ms,
+        head_attempts=replicator.head_attempts,
+        is_stalled=replicator.is_stalled)
 
 
 class InMemoryTransport:

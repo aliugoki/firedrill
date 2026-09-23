@@ -82,6 +82,8 @@ class EdgeNode:
             "loss_on_power_failure": measured.durable_loss_on_power_failure,
             "loss_on_disk_failure": measured.loss_on_disk_failure,
             "producer_exposure_ms": measured.exposure_window_ms,
+            "head_attempts": measured.head_attempts,
+            "stalled": measured.is_stalled,
         }
 
     def health(self, now_ms: int) -> dict:
@@ -100,7 +102,13 @@ class EdgeNode:
                          # acts. It had its own key and was absent from the one
                          # a monitor alerts on.
                          or (self.replicator is not None
-                             and self.replicator.is_blocked)),
+                             and (self.replicator.is_blocked
+                                  # A queue whose head central keeps refusing
+                                  # never drains either, and it reaches none of
+                                  # the flags above: not blocked, not an
+                                  # outage, just a backlog that grows forever
+                                  # while every number here says "retrying".
+                                  or self.replicator.is_stalled))),
             "blind": state.health.is_blind,
             "open_outages": len(state.health.open_now()),
             "events_accepted": state.accepted,
@@ -125,6 +133,19 @@ class EdgeNode:
                 "EVAC_CENTRAL_TOKEN and restart the edge process; nothing is "
                 "lost in the meantime, the events stay in the outbox."
                 if self.replicator is not None and self.replicator.is_blocked
+                else None),
+            # Distinct from blocked, and from an ordinary outage. `attempts`
+            # was incremented on every failed flush, carried through schema
+            # migrations, and read by nothing -- so a node retrying one record
+            # central will never accept looked exactly like one waiting for a
+            # link to come back, and only one of those resolves itself.
+            "replication_stalled_action": (
+                f"the oldest unsent event has been refused "
+                f"{self.replicator.head_attempts} times. This is not an "
+                f"outage waiting to clear: central is rejecting that record "
+                f"and the backlog behind it cannot drain until somebody looks "
+                f"at it. Nothing is lost; nothing is being dropped either."
+                if self.replicator is not None and self.replicator.is_stalled
                 else None),
             # The recovery point objective, from live counters. The module's
             # own docstring says it is reported "from real counters rather than

@@ -433,6 +433,7 @@ def create_app(registry: DrillRegistry | None = None,
             summary=validation.summary() if validation else None,
             is_safe_result=report.is_safe_result,
             false_accounted=len(report.false_accounted),
+            accounted_unverified=len(report.accounted_unverified),
             false_unaccounted=len(report.false_unaccounted),
             p95_s=report.p95_s,
             rendered=report.render())

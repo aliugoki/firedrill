@@ -544,6 +544,10 @@ class TestBlockedReplicationIsNotAHealthyJob:
     class Blocked:
         blocked_reason = "401 Unauthorized: unknown site credential"
         backlog = 12
+        # A blocked link is not a stalled queue: it has stopped trying on
+        # purpose, so the head has not been hammered.
+        head_attempts = 0
+        is_stalled = False
 
         @property
         def is_blocked(self):
@@ -595,6 +599,55 @@ class TestBlockedReplicationIsNotAHealthyJob:
     def test_a_working_link_carries_no_instruction(self, tmp_path):
         node = build_edge(full_env(tmp_path), now_ms=T0)
         assert node.health(T0)["replication_blocked_action"] is None
+
+
+class TestAStalledQueueReachesTheMonitor:
+    """A backlog central will never accept reaches none of the flags a monitor
+    watches: not blocked, not an outage, just a number that grows while every
+    other field says "retrying"."""
+
+    class Stalled:
+        blocked_reason = None
+        is_blocked = False
+        backlog = 5
+        head_attempts = 47
+        is_stalled = True
+
+        def __init__(self):
+            from app.ingest.replication import ReplicationStats
+            self.stats = ReplicationStats(buffered=12)
+
+        def lag_ms(self, now_ms):
+            return 600_000
+
+    def node(self, tmp_path):
+        node = build_edge(full_env(tmp_path), now_ms=T0)
+        node.ingestor.state.health.close_all(T0)
+        node.replicator = self.Stalled()
+        return node
+
+    def test_it_reaches_the_key_a_monitor_alerts_on(self, tmp_path):
+        assert self.node(tmp_path).health(T0)["degraded"] is True
+
+    def test_and_says_it_is_not_an_outage_waiting_to_clear(self, tmp_path):
+        action = self.node(tmp_path).health(T0)["replication_stalled_action"]
+        assert "47 times" in action
+        assert "not an outage" in action
+        assert "Nothing is lost" in action
+
+    def test_the_rpo_block_carries_the_attempts(self, tmp_path):
+        rpo = self.node(tmp_path).health(T0)["rpo"]
+        assert rpo["head_attempts"] == 47
+        assert rpo["stalled"] is True
+
+    def test_a_healthy_link_carries_no_instruction(self, tmp_path):
+        node = build_edge(full_env(tmp_path), now_ms=T0)
+        health = node.health(T0)
+        assert health["replication_stalled_action"] is None
+        # `full_env` builds a node with no replicator at all, so there is no
+        # RPO block to read -- which is itself the honest answer and is
+        # asserted rather than worked around.
+        assert health["rpo"] is None
 
 
 class TestTheRecoveryPointObjectiveIsReported:

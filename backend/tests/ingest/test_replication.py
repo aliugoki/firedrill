@@ -4,6 +4,7 @@ import pytest
 
 from app.core.events import Event, EventType, SourceKind
 from app.ingest.replication import (
+    STALL_AFTER_ATTEMPTS,
     InMemoryTransport,
     Outbox,
     Reconciler,
@@ -256,3 +257,104 @@ class TestTwoDrillsOnOneNode:
         # And the drill it could not previously fit now goes in beside it.
         assert outbox.add(self.start_of("afternoon"), T0) is True
         assert outbox.depth() == 2
+
+
+class TestAQueueThatWillNeverDrain:
+    """`pending` always returns oldest-first, so the head of the queue is what
+    every flush retries. One record central will never accept -- a field it
+    does not know, a schema it has moved past -- fails the batch forever.
+
+    From every other number the node reports that is indistinguishable from a
+    link outage: the backlog grows, `failed_flushes` climbs,
+    `last_failure_reason` says whatever central said. And the two need opposite
+    responses, because an outage resolves itself when the link returns and this
+    never resolves at all.
+
+    `attempts` is what separates them. It was incremented on every failure,
+    carried through the schema migration, and read by nothing.
+    """
+
+    class Poison:
+        """Central refuses the batch with an ordinary error, not a rejection.
+
+        Deliberately not `ReplicationRejected`: that already blocks and already
+        says so. This is the case that looks transient and is not.
+        """
+
+        def __init__(self):
+            self.calls = 0
+
+        def send(self, batch):
+            self.calls += 1
+            raise ValueError("400: unknown field in record 1")
+
+    @pytest.fixture
+    def poisoned(self, tmp_path):
+        rep = Replicator(outbox=Outbox(tmp_path / "outbox.db"),
+                         transport=self.Poison())
+        for i in range(1, 6):
+            rep.enqueue(event(i))
+        return rep
+
+    def test_the_backlog_never_moves_and_nothing_says_it_is_blocked(
+            self, poisoned):
+        # The state of the world this exists to make visible, asserted so a
+        # reader can see what the numbers looked like before.
+        for _ in range(200):
+            poisoned.flush(now_ms=T0)
+        assert poisoned.backlog == 5
+        assert poisoned.transport.calls == 200
+        assert poisoned.is_blocked is False, "not a credential refusal"
+
+    def test_the_attempts_against_the_head_are_readable_now(self, poisoned):
+        for _ in range(7):
+            poisoned.flush(now_ms=T0)
+        assert poisoned.head_attempts == 7
+
+    def test_a_few_failures_are_a_retry_and_many_are_a_stall(self, poisoned):
+        for _ in range(STALL_AFTER_ATTEMPTS - 1):
+            poisoned.flush(now_ms=T0)
+        assert poisoned.is_stalled is False, "still plausibly an outage"
+
+        poisoned.flush(now_ms=T0)
+        assert poisoned.is_stalled is True
+
+    def test_an_ordinary_outage_is_not_a_stall(self, poisoned, tmp_path):
+        # The guard. A link that comes back must not have been called poison
+        # on the way, or the distinction is worthless.
+        transport = InMemoryTransport()
+        transport.up = False
+        rep = Replicator(outbox=Outbox(tmp_path / "other.db"),
+                         transport=transport)
+        for i in range(1, 6):
+            rep.enqueue(event(i))
+        for _ in range(STALL_AFTER_ATTEMPTS + 5):
+            rep.flush(now_ms=T0)
+        assert rep.is_stalled is True, "long enough to be indistinguishable"
+
+        # And the moment it recovers, it drains -- which a poisoned queue does
+        # not, and is the whole difference.
+        transport.up = True
+        assert rep.drain(now_ms=T0) == 5
+        assert rep.backlog == 0
+        assert rep.is_stalled is False
+
+    def test_nothing_is_dropped_on_the_strength_of_it(self, poisoned):
+        """This outbox deletes only what central confirmed, and a poison
+        record is still evidence somebody may need. Saying so loudly is the
+        remedy; discarding it is not."""
+        for _ in range(200):
+            poisoned.flush(now_ms=T0)
+        assert poisoned.backlog == 5
+        assert poisoned.stats.sent == 0
+
+    def test_an_empty_outbox_has_nothing_stalled(self, replicator):
+        assert replicator.head_attempts == 0
+        assert replicator.is_stalled is False
+
+    def test_the_rpo_carries_it(self, poisoned):
+        for _ in range(STALL_AFTER_ATTEMPTS):
+            poisoned.flush(now_ms=T0)
+        rpo = measure_rpo(poisoned, now_ms=T0, flush_interval_ms=15_000)
+        assert rpo.head_attempts == STALL_AFTER_ATTEMPTS
+        assert rpo.is_stalled is True
