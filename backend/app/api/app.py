@@ -453,7 +453,10 @@ def create_app(registry: DrillRegistry | None = None,
             limiting_zone_id=(panel.limiting.zone_id if panel.limiting else None),
             total_through=panel.total_through,
             measured_over_s=panel.measured_over_s,
-            caveats=list(panel.caveats))
+            caveats=list(panel.caveats),
+            caveat_codes=[schemas.CaveatOut(code=c.code.value,
+                                            detail=dict(c.detail))
+                          for c in panel.caveat_codes])
 
     @app.get("/api/evac/drills/{drill_id}/zones",
              response_model=list[schemas.ZonePanelOut], tags=["board"])

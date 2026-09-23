@@ -326,6 +326,36 @@ class TestTheGlueNothingUnitTests:
         assert not any(letter.isascii() and letter.isalpha()
                        for letter in page["text"]["title"].split("·")[0])
 
+    def test_the_arabic_board_has_no_english_sentences_left_on_it(
+            self, server, browser):
+        """Read on a screen, not asserted against a translation table.
+
+        The board's own blocking list was worded from codes a gate ago and the
+        two panels beside it were not, so a commander reading Arabic got one
+        list translated and the two next to it in English. The zone ids are
+        identifiers and stay; the sentences must not.
+        """
+        base, _ = server
+        page = probe(
+            browser, f"{base}/?drill=demo&lang=ar",
+            {"zones": "#zones", "exits": "#exits", "direction": "dir:html"})
+        assert page["errors"] == []
+        assert page["text"]["direction"] == "rtl"
+
+        leaked = [
+            phrase for phrase in (
+                "the sweep is still in progress",
+                "the sweep has not been started",
+                "have not been confirmed or reported",
+                "no physical headcount has been recorded",
+                "No capacity recorded",
+                "not yet meaningful",
+            )
+            if phrase.lower() in (page["text"]["zones"]
+                                  + page["text"]["exits"]).lower()
+        ]
+        assert leaked == [], f"English prose on an Arabic screen: {leaked}"
+
     def test_the_warden_tabs_switch_screens(self, server, browser):
         base, swept = server
         page = probe(

@@ -24,10 +24,50 @@ by two overlapping cameras must not be counted as two.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from datetime import datetime, timezone
 
 from app.core.presence_fsm import ZoneKind
 from app.vendor.visiontrack.dwell import union_seconds
+
+
+class CaveatCode(str, Enum):
+    """Everything that can qualify an exit measurement.
+
+    Small on purpose. A caveat exists because somebody would otherwise read a
+    number as more solid than it is, so each one has to be worth a line on a
+    screen that has no room for a second opinion.
+    """
+
+    SHORT_WINDOW = "SHORT_WINDOW"
+    NO_CAPACITY = "NO_CAPACITY"
+
+
+#: The English sentence for each code, held here so the prose and the code
+#: cannot drift apart. `blockers.py` is arranged the same way and says why.
+_CAVEAT_WORDS: dict[CaveatCode, str] = {
+    CaveatCode.SHORT_WINDOW:
+        "Less than {seconds} seconds of drill; throughput is not yet "
+        "meaningful.",
+    CaveatCode.NO_CAPACITY:
+        "No capacity recorded for {zone_list}, so density is not reported "
+        "for them.",
+}
+
+
+@dataclass(frozen=True)
+class Caveat:
+    """One qualification, as a code a screen can word and prose it can fall
+    back to."""
+
+    code: CaveatCode
+    detail: dict = field(default_factory=dict)
+
+    def describe(self) -> str:
+        values = dict(self.detail)
+        if "zones" in values:
+            values["zone_list"] = ", ".join(values["zones"])
+        return _CAVEAT_WORDS[self.code].format(**values)
 
 
 @dataclass
@@ -94,6 +134,9 @@ class BottleneckPanel:
     disappears, and a caveat is exactly the thing that must not be dropped: it
     is there because somebody would otherwise read the number as more solid
     than it is."""
+    caveat_codes: tuple = ()
+    """The same caveats as `Caveat` records. The prose above is English and
+    this panel is read on a command centre in Arabic."""
 
     @property
     def limiting(self) -> ExitMeasure | None:
@@ -189,18 +232,20 @@ class BottleneckTracker:
                 throughput_per_min=throughput, median_dwell_s=median,
                 worst_dwell_s=worst, capacity=capacity, density=density))
 
-        caveats = []
+        # Codes first, prose derived from them. Both shapes are needed -- the
+        # post-drill report is a document and wants the English sentence, the
+        # screen is read in Arabic and wants the code -- and building the
+        # sentences separately is how the two drift apart.
+        coded: list[Caveat] = []
         if window_s < 30:
-            caveats.append(
-                "Less than 30 seconds of drill; throughput is not yet "
-                "meaningful.")
+            coded.append(Caveat(CaveatCode.SHORT_WINDOW, {"seconds": 30}))
         if no_capacity:
-            caveats.append(
-                f"No capacity recorded for {', '.join(no_capacity)}, so "
-                "density is not reported for them.")
+            coded.append(Caveat(CaveatCode.NO_CAPACITY,
+                                {"zones": list(no_capacity)}))
 
         return BottleneckPanel(exits=tuple(measures), measured_over_s=window_s,
-                               caveats=tuple(caveats))
+                               caveats=tuple(c.describe() for c in coded),
+                               caveat_codes=tuple(coded))
 
     def total_exit_time_s(self, person_id: str, now_ms: int) -> float:
         """How long one person spent in exit zones, overlaps unioned.

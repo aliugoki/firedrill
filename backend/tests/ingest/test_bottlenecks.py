@@ -150,6 +150,38 @@ class TestHonestyAboutTheWindow:
         panel = t.measure(T0 + 5_000, started_ms=T0)
         assert len(panel.caveats) == 2
 
+    def test_every_caveat_travels_as_a_code_as_well_as_prose(self):
+        """A caveat is the line that stops a reader taking a number as more
+        solid than it is, which makes it exactly the line that must not arrive
+        in a language they do not read.
+
+        The pairing matters as much as the codes: the screen falls back to
+        `caveats[i]` for a code it does not know, so two lists of different
+        lengths would pair a code with the wrong sentence.
+        """
+        t = tracker()
+        walk_through(t, "gp-1", "exit-main", T0, T0 + 1_000)
+        panel = t.measure(T0 + 5_000, started_ms=T0)
+
+        assert len(panel.caveat_codes) == len(panel.caveats) == 2
+        assert {c.code.value for c in panel.caveat_codes} == {
+            "SHORT_WINDOW", "NO_CAPACITY"}
+        # One source. The prose is derived from the codes rather than written
+        # a second time beside them.
+        assert [c.describe() for c in panel.caveat_codes] == list(panel.caveats)
+        # And the values a screen needs to word it travel with the code.
+        no_capacity = next(c for c in panel.caveat_codes
+                           if c.code.value == "NO_CAPACITY")
+        assert no_capacity.detail["zones"] == ["exit-main"]
+
+    def test_a_clean_measurement_carries_no_caveat_of_either_kind(self):
+        t = tracker(**{"exit-main": 50})
+        for i in range(10):
+            walk_through(t, f"gp-{i}", "exit-main", T0, T0 + 1_000)
+        panel = t.measure(T0 + 120_000, started_ms=T0)
+        assert panel.caveats == ()
+        assert panel.caveat_codes == ()
+
     def test_an_unobserved_building_says_so(self):
         panel = tracker().measure(T0 + 120_000, started_ms=T0)
         assert panel.exits == ()

@@ -12,9 +12,9 @@
 import { Api, Freshness } from './api.js';
 import { createTranslator, isRtl, formatDuration } from './i18n.js';
 import {
-  drillControl, escapeHtml, explainSummary, exitPressure, healthLine,
-  describeReason, orderForWarden, outstanding, rowNotes, staleness, tiles,
-  timingLine, trend, verdict, whereToLook,
+  blockingReasons, drillControl, escapeHtml, explainSummary, exitPressure,
+  healthLine, describeReason, orderForWarden, outstanding, rowNotes, staleness,
+  tiles, timingLine, trend, verdict, whereToLook,
   wardenContact,
 } from './render.js';
 
@@ -326,7 +326,7 @@ function paintZones() {
         <div class="meta">${panel.confirmed}/${panel.expected} ${
           escapeHtml(t('warden.confirmed'))} · ${panel.outstanding} ${
           escapeHtml(t('warden.outstanding'))}</div>
-        ${(panel.blocking || []).map(
+        ${blockingReasons(panel, t).map(
           (reason) => `<div class="reason">${escapeHtml(reason)}</div>`).join('')}
         ${(() => {
           const contact = wardenContact(panel, t);

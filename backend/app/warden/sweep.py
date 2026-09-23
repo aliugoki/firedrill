@@ -211,4 +211,11 @@ class SweepState:
             "severity": latest.severity.value if latest else None,
             "is_clean": self.is_clean(expected),
             "blocking": self.blocking_clean(expected),
+            # The same refusals as codes. The prose above is English and this
+            # panel is read on a tablet at an assembly point in Sialkot: the
+            # board's own blocking list made this move and the zone panel,
+            # which is the half a warden actually stands in front of, was left
+            # behind. Built from `blockers()` rather than written twice.
+            "blockers": [{"code": b.code.value, "detail": dict(b.detail)}
+                         for b in self.blockers(expected)],
         }

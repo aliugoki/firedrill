@@ -323,12 +323,25 @@ class ExitMeasureOut(BaseModel):
     is_congested: bool
 
 
+class CaveatOut(BaseModel):
+    """One qualification on a measurement, as a code a screen can word."""
+
+    code: str
+    detail: dict = {}
+
+
 class BottlenecksOut(BaseModel):
     exits: list[ExitMeasureOut]
     limiting_zone_id: str | None
     total_through: int
     measured_over_s: float
     caveats: list[str] = []
+    """English prose, and the fallback for a client that does not know the
+    codes below."""
+    caveat_codes: list[CaveatOut] = []
+    """The same qualifications as codes. A caveat is the line that stops a
+    reader taking a number as more solid than it is, so it is exactly the line
+    that must not arrive in a language they do not read."""
 
 
 class DrillReportOut(BaseModel):
@@ -365,6 +378,12 @@ class ZonePanelOut(BaseModel):
     severity: str | None
     is_clean: bool
     blocking: list[str]
+    """English prose, and the fallback for a client that does not know the
+    codes below."""
+    blockers: list[BlockerOut] = []
+    """The same refusals, as codes the screen words in the language it is
+    being read in. This panel is on the command centre and on the warden's
+    tablet, and both are read in Arabic at some sites."""
     warden_silent_ms: int | None = None
     """How long since this zone's warden device was last heard from. None
     means it has never spoken, which reads on the screen as a zone with no

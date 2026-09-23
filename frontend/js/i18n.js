@@ -82,6 +82,8 @@ export const STRINGS = {
     'blocker.ZONE_UNCONFIRMED': 'not confirmed or reported',
     'blocker.NO_HEADCOUNT': 'no physical headcount yet',
     'blocker.HEADCOUNT_MISMATCH': 'the count disagrees with the system',
+    'caveat.SHORT_WINDOW': 'Too little of the drill has run for throughput to mean anything',
+    'caveat.NO_CAPACITY': 'No capacity recorded, so no crowding figure is reported for',
     'blocker.of': 'of',
     'blocker.people': 'people',
 
@@ -240,6 +242,8 @@ export const STRINGS = {
     'blocker.ZONE_UNCONFIRMED': 'لم يتم تأكيدهم أو الإبلاغ عنهم',
     'blocker.NO_HEADCOUNT': 'لا يوجد عدّ يدوي بعد',
     'blocker.HEADCOUNT_MISMATCH': 'العدّ يخالف النظام',
+    'caveat.SHORT_WINDOW': 'لم يمضِ من التمرين ما يكفي ليكون معدل العبور ذا معنى',
+    'caveat.NO_CAPACITY': 'لا سعة مسجّلة، فلا يُذكر ازدحام لـ',
     'blocker.of': 'من',
     'blocker.people': 'شخصاً',
 

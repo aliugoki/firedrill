@@ -22,6 +22,7 @@ import {
   describeReason,
   describeBlocker,
   blockingReasons,
+  describeCaveats,
   outstanding,
   trend,
   whereToLook,
@@ -1064,5 +1065,76 @@ describe('where to send somebody', () => {
   it('is empty when everybody is accounted for', () => {
     assert.deepEqual(whereToLook({ rows: [person('a', 'ACCOUNTED', 'x')] }, t), []);
     assert.deepEqual(whereToLook({}, t), []);
+  });
+});
+
+describe('nothing English reaches a screen being read in Arabic', () => {
+  // The board's blocking list made this move a gate ago. The zone panel and
+  // the exits panel did not, and they are the two halves of the screen a
+  // commander reads before deciding whether to keep people outside.
+  const ar = createTranslator('ar');
+  const ascii = (text) => /[A-Za-z]{4,}/.test(text);
+
+  it('words a zone panel from its codes, not its English', () => {
+    const panel = {
+      zone_id: 'assembly-south',
+      blocking: ['assembly-south: the sweep has not been started',
+                 'assembly-south: 111 person(s) in this zone have not been '
+                 + 'confirmed or reported'],
+      blockers: [
+        { code: 'SWEEP_NOT_STARTED', detail: { zone_id: 'assembly-south' } },
+        { code: 'ZONE_UNCONFIRMED',
+          detail: { zone_id: 'assembly-south', count: 111 } },
+      ],
+    };
+    const worded = blockingReasons(panel, ar);
+    assert.equal(worded.length, 2);
+    for (const line of worded) {
+      // The zone id is an identifier and stays. Nothing else may be English.
+      assert.ok(!ascii(line.replace(/assembly-south/g, '')), line);
+    }
+    assert.match(worded[1], /111/);
+  });
+
+  it('still shows the server sentence for a code it does not know', () => {
+    // An edge node a version ahead must not blank the line it is trying to
+    // show, because the line is the reason an all-clear is being refused.
+    const worded = blockingReasons({
+      blocking: ['something new the server knows about'],
+      blockers: [{ code: 'INVENTED_LATER', detail: {} }],
+    }, ar);
+    assert.deepEqual(worded, ['something new the server knows about']);
+  });
+
+  it('words an exit caveat from its code and keeps the zones it names', () => {
+    const worded = describeCaveats({
+      caveats: ['No capacity recorded for exit-main, so density is not '
+                + 'reported for them.'],
+      caveat_codes: [{ code: 'NO_CAPACITY', detail: { zones: ['exit-main'] } }],
+    }, ar);
+    assert.equal(worded.length, 1);
+    assert.ok(!ascii(worded[0].replace(/exit-main/g, '')), worded[0]);
+    assert.match(worded[0], /exit-main/);
+  });
+
+  it('falls back to the prose when the server sends no codes at all', () => {
+    const sentences = ['Less than 30 seconds of drill.'];
+    assert.deepEqual(describeCaveats({ caveats: sentences }, ar), sentences);
+    assert.deepEqual(describeCaveats({}, ar), []);
+    assert.deepEqual(describeCaveats(null, ar), []);
+  });
+
+  it('carries the caveats through the exits panel rather than around it', () => {
+    // `exitPressure` handed the server prose straight to the screen. A worded
+    // list that nothing renders is the defect this codebase keeps finding.
+    const panel = exitPressure({
+      exits: [{ zone_id: 'exit-main', completed: 9, queue: 0 }],
+      caveats: ['No capacity recorded for exit-main, so density is not '
+                + 'reported for them.'],
+      caveat_codes: [{ code: 'NO_CAPACITY', detail: { zones: ['exit-main'] } }],
+    }, ar);
+    assert.equal(panel.caveats.length, 1);
+    assert.ok(!ascii(panel.caveats[0].replace(/exit-main/g, '')),
+              panel.caveats[0]);
   });
 });

@@ -75,6 +75,44 @@ describe('every element the glue reaches for exists', () => {
   }
 });
 
+describe('the glue imports every function it calls', () => {
+  // `CLAUDE.md` exempts `command.js` and `warden.js` from unit testing on the
+  // grounds that they are DOM glue, so a call to a function nobody imported is
+  // a `ReferenceError` at paint time that no unit test can see. The browser
+  // gate catches it and the browser gate skips wherever Chrome is absent,
+  // which is the normal state of an edge node -- so the check that runs
+  // everywhere is this one.
+  const exported = new Set(
+    [...code('js/render.js').matchAll(/^export (?:function|const) (\w+)/gm)]
+      .map((m) => m[1]));
+
+  it('the scan found render.js', () => {
+    assert.ok(exported.size > 20, `only found ${exported.size} exports`);
+  });
+
+  for (const file of ['js/command.js', 'js/warden.js']) {
+    it(`${file} imports everything it uses from render.js`, () => {
+      const source = code(file);
+      const imported = new Set();
+      for (const block of source.matchAll(
+        /import\s*\{([^}]*)\}\s*from\s*'\.\/render\.js'/g)) {
+        for (const name of block[1].split(',')) {
+          const trimmed = name.trim();
+          if (trimmed) imported.add(trimmed);
+        }
+      }
+      // Only the names this file actually calls. A render export it has no use
+      // for is not a defect.
+      const body = source.slice(source.indexOf("from './render.js'"));
+      const missing = [...exported].filter(
+        (name) => !imported.has(name)
+          && new RegExp(`\\b${name}\\s*\\(`).test(body));
+      assert.deepEqual(missing, [],
+        `${file} calls these without importing them: ${missing.join(', ')}`);
+    });
+  }
+});
+
 describe('every string the screens ask for is written', () => {
   // `t()` returns the key itself when a string is missing, which is ugly on
   // purpose -- but only if somebody looks at that screen in that language.

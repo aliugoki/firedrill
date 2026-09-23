@@ -36,7 +36,11 @@ export function verdict(board, t) {
  * refusals down with it.
  */
 export function blockingReasons(board, t) {
-  const sentences = board?.blocking_all_clear || [];
+  // Either shape. The board calls its prose `blocking_all_clear` and a zone
+  // panel calls its own `blocking`; both carry the same `blockers` codes
+  // alongside, and a second function to word the second list is how the two
+  // drift apart.
+  const sentences = board?.blocking_all_clear || board?.blocking || [];
   const coded = board?.blockers;
   if (!Array.isArray(coded) || !coded.length) return sentences;
   return coded.map((blocker, index) => describeBlocker(
@@ -346,8 +350,37 @@ export function exitPressure(bottlenecks, t) {
       ? `${t('bottleneck.limiting')}: ${limiting}`
       : t('bottleneck.none_limiting'),
     rows,
-    caveats: bottlenecks.caveats || [],
+    caveats: describeCaveats(bottlenecks, t),
   };
+}
+
+/**
+ * Exit caveats, worded here rather than passed through as the server's
+ * English.
+ *
+ * A caveat is the line that stops a reader taking a number as more solid than
+ * it is, which makes it exactly the line that must not arrive in a language
+ * they do not read. Per entry rather than for the whole list: a code added in
+ * a version this device has not been updated to must not take the other
+ * caveats down with it.
+ */
+export function describeCaveats(panel, t) {
+  const sentences = panel?.caveats || [];
+  const coded = panel?.caveat_codes;
+  if (!Array.isArray(coded) || !coded.length) return sentences;
+  return coded.map((caveat, index) => {
+    const key = `caveat.${caveat.code}`;
+    const worded = t(key);
+    if (worded === key) return sentences[index] ?? key;
+    const detail = caveat.detail || {};
+    if (caveat.code === 'NO_CAPACITY') {
+      return `${worded}: ${(detail.zones || []).join(', ')}`;
+    }
+    if (caveat.code === 'SHORT_WINDOW') {
+      return `${worded} (${detail.seconds ?? 30}s)`;
+    }
+    return worded;
+  });
 }
 
 /** What the sync indicator says. */

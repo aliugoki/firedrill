@@ -349,6 +349,43 @@ class TestTheBoard:
                             headers=VIEWER).json()
         assert {p["zone_id"] for p in panels} == {"assembly-north", "assembly-south"}
 
+    def test_every_zone_refusal_travels_as_a_code_as_well_as_prose(self, client):
+        """The screen in front of a commander is read in Arabic at some sites,
+        and it can only translate what arrives as a code.
+
+        The board's own blocking list made this move already. The zone panel
+        did not, so the assembly column stayed English on an Arabic screen --
+        one list translated, the one beside it not.
+        """
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        panels = client.get(f"/api/evac/drills/{drill_id}/zones",
+                            headers=VIEWER).json()
+        assert panels, "no zone panels to check"
+        for panel in panels:
+            assert panel["blocking"], f"{panel['zone_id']} blocks nothing"
+            # One code per sentence, in the same order: the screen falls back
+            # to `blocking[i]` for a code it does not know, and a list of a
+            # different length silently pairs a code with the wrong sentence.
+            assert len(panel["blockers"]) == len(panel["blocking"])
+            for blocker in panel["blockers"]:
+                assert blocker["code"]
+                assert blocker["detail"]["zone_id"] == panel["zone_id"]
+
+    def test_the_prose_and_the_codes_are_one_list(self, client):
+        # Two methods computing the same list in two shapes is the drift this
+        # codebase keeps finding, so the sentences are derived from the codes
+        # rather than written a second time. Asserted directly.
+        from app.core.blockers import describe_all
+        from app.warden.sweep import SweepState
+
+        sweep = SweepState(zone_id="assembly-north")
+        summary = sweep.summary(set())
+        codes = sweep.blockers(set())
+        assert summary["blocking"] == describe_all(codes)
+        assert [b["code"] for b in summary["blockers"]] == [
+            c.code.value for c in codes]
+
 
 class TestTiming:
     def test_an_empty_drill_reports_no_percentiles_rather_than_zero(self, client):
