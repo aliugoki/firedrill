@@ -25,12 +25,12 @@ nothing will until a labelled set from real footage exists.
 
 ## 2. The harness is built
 
-`app/calibration/`, 71 tests. Labelled observations in, validated thresholds
+`app/calibration/`, 77 tests. Labelled observations in, validated thresholds
 out, or a refusal explaining why not. It runs today against simulator output and
 **refuses to certify it**, because simulated scores measure a model of a matcher
 rather than a matcher.
 
-Four properties worth knowing before it is used in anger.
+Five properties worth knowing before it is used in anger.
 
 **The split is by person, not by observation.** The same face appears in dozens
 of frames. Splitting by frame puts near-duplicates on both sides, and the
@@ -41,6 +41,29 @@ do with the threshold.
 false-accept rate cannot be measured at all, and that is the error that marks a
 stranger safe under a colleague's name. A set lacking them is refused outright
 rather than warned about.
+
+**Two ceilings, because one of them is a ratio a big employer can dilute.**
+The false-accept rate is denominated on admissions, and admissions are almost
+all enrolled employees, so a large well-matched roster drowns stranger
+admissions out of exactly the number the ceiling is applied to. Measured on a
+set of 2,202 admitted identities with 12 of them wrong:
+
+| | |
+|---|---|
+| False-accept rate | 0.54% against a 1.00% ceiling — **passed** |
+| Strangers in the set | 35 |
+| Strangers given an employee's name | **12 (34%)** |
+| Certified | **yes**, `calibrated=True` |
+
+One unenrolled person in three walked away wearing an employee's name. In an
+evacuation that marks a real employee accounted for while they may still be
+inside, which is the error this harness exists to price.
+
+`unknown_accept_rate` is the number that catches it, and it was there the whole
+time — computed, printed in the report, constraining nothing. It is now a
+ceiling of its own, defaulting to the same value as the false-accept ceiling
+rather than to a second number nobody calibrated, and checked on the held-out
+half as well as the tuning half.
 
 **An impossible ceiling raises rather than relaxes.** If no threshold pair holds
 the false-accept rate under the ceiling, that is a finding about the pipeline.
@@ -62,9 +85,10 @@ observations.
 
 Certification fails closed on any of: too few observations, too few enrolled
 people, no unenrolled observations, a person leaking across both halves, a
-held-out false-accept rate above the ceiling, drift beyond two points, no real
-footage at all, real footage that fails readiness on its own, or a
-false-accept rate above the ceiling on the real footage alone.
+held-out false-accept rate above the ceiling, a held-out unknown-accept rate
+above its ceiling, drift beyond two points, no real footage at all, real
+footage that fails readiness on its own, or a false-accept rate above the
+ceiling on the real footage alone.
 
 ---
 

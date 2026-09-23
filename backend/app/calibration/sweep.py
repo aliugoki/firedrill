@@ -15,6 +15,20 @@ So the default operating point is chosen by holding the false-accept rate at or
 below a stated ceiling and taking the best true-accept rate available under that
 constraint — not by maximising accuracy, and not by any single-number score that
 would let one error trade freely against the other.
+
+**Two ceilings, because one of them is a ratio a big employer can dilute.**
+`false_accept_rate` is denominated on admissions, and admissions are almost all
+enrolled employees, so a large well-matched roster drowns out stranger
+admissions in exactly the number the ceiling is applied to. Measured: 2,202
+admitted identities, 12 of them wrong, a false-accept rate of 0.54% against a
+1.00% ceiling — **certified** — while 12 of the 35 strangers in the set had been
+given an employee's name. One unenrolled person in three, and in an evacuation
+that marks a real employee accounted for while they may still be inside.
+
+`unknown_accept_rate` is the number that catches it, and it existed the whole
+time: computed, printed in the report, and constraining nothing. It is now a
+ceiling of its own, defaulting to the same value as the false-accept ceiling
+rather than to a second invented number.
 """
 
 from __future__ import annotations
@@ -150,7 +164,12 @@ class OperatingPoint:
     on_tune: ThresholdOutcome
     on_validate: ThresholdOutcome | None
     ceiling: float
-    rationale: str
+    #: The ceiling on how often an unenrolled person may be given an employee's
+    #: name. Separate from `ceiling` because the false-accept rate is
+    #: denominated on admissions and a large enrolled roster dilutes strangers
+    #: out of it -- see the module docstring for the measured case.
+    unknown_ceiling: float = 1.0
+    rationale: str = ""
     #: Whether the chosen pair sits on the edge of the grid that was searched.
     #: A point on the boundary means the best pair may lie outside where anyone
     #: looked, so the number is a limit of the search rather than an optimum.
@@ -160,15 +179,22 @@ class OperatingPoint:
 
     @property
     def generalises(self) -> bool | None:
-        """Whether the held-out half agrees the ceiling was respected.
+        """Whether the held-out half agrees both ceilings were respected.
 
         None when there is no held-out half, which is itself the answer: without
         one, nothing is known about generalisation.
+
+        Both, not just the false-accept rate. A pair chosen under two
+        constraints that is only checked against one on unseen people is
+        checked against the weaker half of its own definition.
         """
         if self.on_validate is None:
             return None
         rate = self.on_validate.false_accept_rate
-        return rate is not None and rate <= self.ceiling
+        if rate is None or rate > self.ceiling:
+            return False
+        unknown = self.on_validate.unknown_accept_rate
+        return unknown is None or unknown <= self.unknown_ceiling
 
     @property
     def drift(self) -> float | None:
@@ -215,12 +241,18 @@ class Sweep:
                 self.results.append(evaluate(self.split.tune, config))
         return self
 
-    def choose(self, *, false_accept_ceiling: float = 0.01) -> OperatingPoint:
-        """Best true-accept rate subject to a false-accept ceiling.
+    def choose(self, *, false_accept_ceiling: float = 0.01,
+               unknown_accept_ceiling: float | None = None) -> OperatingPoint:
+        """Best true-accept rate subject to both ceilings.
 
-        Raises if nothing clears the ceiling. That is the honest outcome: it
-        means this pipeline cannot hit the required accuracy on this data, and
-        the answer is better enrolment or better cameras, not a looser ceiling
+        `unknown_accept_ceiling` defaults to `false_accept_ceiling`: a stranger
+        may not be given an employee's name more often than the overall error
+        budget allows. Defaulted rather than given a number of its own, because
+        a second invented constant is a second thing nobody calibrated.
+
+        Raises if nothing clears them. That is the honest outcome: it means
+        this pipeline cannot hit the required accuracy on this data, and the
+        answer is better enrolment or better cameras, not a looser ceiling
         chosen after the fact to make the report pass.
         """
         from dataclasses import replace
@@ -228,17 +260,49 @@ class Sweep:
         if not self.results:
             raise ValueError("run the sweep before choosing an operating point")
 
-        eligible = [
+        unknown_ceiling = (false_accept_ceiling if unknown_accept_ceiling is None
+                           else unknown_accept_ceiling)
+
+        def respects_unknown(r: ThresholdOutcome) -> bool:
+            # None means the set held no unenrolled people to test against, so
+            # nothing was shown about the dangerous error. Not the same as
+            # respecting the ceiling, and `readiness` refuses such a set
+            # anyway -- this keeps `choose` honest when called directly.
+            return (r.unknown_accept_rate is not None
+                    and r.unknown_accept_rate <= unknown_ceiling)
+
+        within_false = [
             r for r in self.results
             if r.false_accept_rate is not None
             and r.false_accept_rate <= false_accept_ceiling
             and r.true_accept_rate is not None
         ]
+        eligible = [r for r in within_false if respects_unknown(r)]
         if not eligible:
             best = min(
                 (r for r in self.results if r.false_accept_rate is not None),
                 key=lambda r: r.false_accept_rate, default=None)
             achieved = f"{best.false_accept_rate:.3f}" if best else "unknown"
+            # Which ceiling failed, because the two call for different
+            # remedies. A false-accept rate that cannot be met is a matcher
+            # problem; strangers being named while the overall rate looks fine
+            # is an enrolment-gallery problem, and a report that says only "no
+            # acceptable pair" sends somebody to the wrong one.
+            if within_false:
+                worst = min(
+                    (r.unknown_accept_rate for r in within_false
+                     if r.unknown_accept_rate is not None), default=None)
+                measured = (f"{worst:.3f}" if worst is not None
+                            else "unmeasured: the set holds no unenrolled people")
+                raise NoAcceptableOperatingPoint(
+                    f"{len(within_false)} threshold pair(s) hold the "
+                    f"false-accept rate at or below {false_accept_ceiling:.3f}, "
+                    f"and none of them holds the unknown-accept rate at or "
+                    f"below {unknown_ceiling:.3f}; the best achievable is "
+                    f"{measured}. An unenrolled person given an employee's "
+                    f"name marks that employee safe while they may still be "
+                    f"inside."
+                )
             raise NoAcceptableOperatingPoint(
                 f"no threshold pair holds the false-accept rate at or below "
                 f"{false_accept_ceiling:.3f}; the best achievable on this data "
@@ -262,11 +326,12 @@ class Sweep:
 
         return OperatingPoint(
             config=config, on_tune=best, on_validate=validate_outcome,
-            ceiling=false_accept_ceiling,
+            ceiling=false_accept_ceiling, unknown_ceiling=unknown_ceiling,
             rationale=(
                 f"highest true-accept rate ({best.true_accept_rate:.3f}) among "
                 f"{len(eligible)} threshold pairs holding false accepts at or "
-                f"below {false_accept_ceiling:.3f}"),
+                f"below {false_accept_ceiling:.3f} and unknown accepts at or "
+                f"below {unknown_ceiling:.3f}"),
             on_grid_boundary=self._boundary(best),
         )
 

@@ -137,6 +137,7 @@ MAX_DRIFT = 0.02
 
 def certify(
     sweep: Sweep, *, false_accept_ceiling: float = 0.01,
+    unknown_accept_ceiling: float | None = None,
     require_real_footage: bool = True,
 ) -> CalibrationReport:
     """Produce a report, and certify the thresholds only if the evidence allows.
@@ -147,6 +148,8 @@ def certify(
       * a split that leaked a person across both halves;
       * no held-out half at all;
       * a held-out false-accept rate above the ceiling;
+      * a held-out unknown-accept rate above its ceiling, which is the
+        dangerous error measured where the answer is unambiguous;
       * drift beyond `MAX_DRIFT`, which means the thresholds were fitted;
       * a set made only of simulated data, when real footage is required.
 
@@ -159,7 +162,9 @@ def certify(
 
     chose_an_operating_point = True
     try:
-        point = sweep.choose(false_accept_ceiling=false_accept_ceiling)
+        point = sweep.choose(
+            false_accept_ceiling=false_accept_ceiling,
+            unknown_accept_ceiling=unknown_accept_ceiling)
     except NoAcceptableOperatingPoint as exc:
         # A finding, not a crash. The docstring promises an uncertified report
         # is still worth reading, and a caller who cannot see how far short the
@@ -199,11 +204,24 @@ def certify(
     if point.on_validate is None:
         refusals.append("no held-out half, so generalisation is unmeasured")
     elif chose_an_operating_point:
-        if point.generalises is False:
+        held = point.on_validate
+        if held.false_accept_rate is None or \
+                held.false_accept_rate > point.ceiling:
             refusals.append(
                 f"on held-out people the false-accept rate is "
-                f"{_pct(point.on_validate.false_accept_rate)}, above the "
-                f"{false_accept_ceiling * 100:.2f}% ceiling")
+                f"{_pct(held.false_accept_rate)}, above the "
+                f"{point.ceiling * 100:.2f}% ceiling")
+        unknown = held.unknown_accept_rate
+        if unknown is not None and unknown > point.unknown_ceiling:
+            # Named separately from the false-accept rate because the remedies
+            # differ: this one says the enrolment gallery is matching people
+            # who are not in it, and the overall rate can look healthy while it
+            # happens -- a large roster dilutes strangers out of the ratio.
+            refusals.append(
+                f"on held-out people {_pct(unknown)} of unenrolled faces were "
+                f"given an employee's name, above the "
+                f"{point.unknown_ceiling * 100:.2f}% ceiling; that marks a real "
+                f"employee accounted for while they may still be inside")
         drift = point.drift
         if drift is not None and drift > MAX_DRIFT:
             refusals.append(

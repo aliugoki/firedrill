@@ -335,6 +335,85 @@ class TestCertification:
         report = certify(self._sweep(good_set(source=Source.SIMULATOR)))
         assert sum("rests on the" in c for c in report.caveats) == 0
 
+    def _diluted_set(self, *, named: int = 14) -> CalibrationSet:
+        """A big, well-matched roster, and a matcher that names strangers.
+
+        The false-accept rate is denominated on admissions and admissions are
+        almost all employees, so the strangers drown in exactly the ratio the
+        ceiling is applied to.
+        """
+        cs = CalibrationSet(name="diluted")
+        n = 0
+        for p in range(120):
+            for _ in range(30):
+                cs.add(obs(n, true=f"EMP-{p:03d}", proposed=f"EMP-{p:03d}",
+                           score=0.85, margin=0.35, camera=f"cam-{n % 3}"))
+                n += 1
+        for u in range(50):
+            named_here = u < named
+            cs.add(obs(n, true=None, proposed=f"EMP-{u % 120:03d}",
+                       score=0.86 if named_here else 0.20,
+                       margin=0.36 if named_here else 0.01,
+                       camera=f"cam-{n % 3}"))
+            n += 1
+        return cs
+
+    def test_a_big_roster_cannot_dilute_strangers_out_of_the_ceiling(self):
+        """Measured before the fix: certified, `calibrated=True`, with a
+        false-accept rate of 0.54% against a 1.00% ceiling -- while 12 of the
+        35 strangers in the set had been given an employee's name.
+
+        One unenrolled person in three. In an evacuation that marks a real
+        employee accounted for while they may still be inside, which this
+        module's own opening calls the error that kills.
+        """
+        report = certify(self._sweep(self._diluted_set()))
+        assert report.certified is False
+        assert report.config.calibrated is False
+        assert any("unknown-accept rate" in r for r in report.refusals), \
+            report.refusals
+
+    def test_the_refusal_says_which_ceiling_failed(self):
+        # The two call for different remedies. A false-accept rate that cannot
+        # be met is a matcher problem; strangers being named while the overall
+        # rate looks healthy is an enrolment-gallery problem.
+        report = certify(self._sweep(self._diluted_set()))
+        refusal = next(r for r in report.refusals if "unknown-accept" in r)
+        assert "hold the false-accept rate at or below" in refusal
+        assert "still be inside" in refusal
+
+    def test_an_honest_set_is_unaffected(self):
+        # The guard. A second ceiling that also refuses good data is not a
+        # safety improvement, it is a harness nobody can use.
+        report = certify(self._sweep(good_set()))
+        assert report.certified is True, report.refusals
+
+    def test_the_unknown_ceiling_can_be_set_apart_from_the_other(self):
+        # It defaults to the false-accept ceiling rather than to a number of
+        # its own, and a caller with a calibrated figure can still say so.
+        loose = certify(self._sweep(self._diluted_set()),
+                        unknown_accept_ceiling=0.9)
+        assert not any("unknown-accept" in r for r in loose.refusals), \
+            loose.refusals
+
+    def test_a_set_with_no_strangers_cannot_choose_a_point(self):
+        """None is not the same as zero. A set holding no unenrolled people
+        proved nothing about the dangerous error, and `readiness` refuses it --
+        but `choose` is callable on its own and used to treat the absence as
+        compliance."""
+        no_unknowns = good_set(unknowns=0)
+        sweep = self._sweep(no_unknowns)
+        with pytest.raises(NoAcceptableOperatingPoint):
+            sweep.choose()
+
+    def test_generalisation_is_checked_against_both_ceilings(self):
+        # A pair chosen under two constraints and checked against one on unseen
+        # people is checked against the weaker half of its own definition.
+        point = certify(self._sweep(good_set())).operating_point
+        assert point.generalises is True
+        broken = replace(point, unknown_ceiling=-1.0)
+        assert broken.generalises is False
+
     def test_an_unusable_set_never_certifies(self):
         report = certify(self._sweep(good_set(unknowns=0)))
         assert report.certified is False
