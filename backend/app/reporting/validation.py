@@ -51,6 +51,7 @@ class Criterion(str, Enum):
     SYSTEM_MOSTLY_SIGHTED = "SYSTEM_MOSTLY_SIGHTED"
     P95_MEASURABLE = "P95_MEASURABLE"
     P95_WITHIN_TARGET = "P95_WITHIN_TARGET"
+    ACCOUNTED_VERIFIED = "ACCOUNTED_VERIFIED"
 
 
 #: Criteria that, if not satisfied, mean the drill cannot judge the system at
@@ -79,6 +80,12 @@ EVIDENTIARY: frozenset[Criterion] = frozenset({
     Criterion.SWEEPS_COMPLETED, Criterion.HEADCOUNTS_TAKEN,
     Criterion.COVERAGE_SUFFICIENT, Criterion.SYSTEM_MOSTLY_SIGHTED,
     Criterion.P95_MEASURABLE, Criterion.RECORD_COMPLETE,
+    #: Somebody the cameras accounted for whom no warden laid eyes on has not
+    #: been checked. That is missing evidence, and it used to be counted as a
+    #: safety failure -- which made every drill with an unswept zone a FAIL
+    #: rather than INCONCLUSIVE, because rule 1 of the decision order
+    #: short-circuits rule 3.
+    Criterion.ACCOUNTED_VERIFIED,
 })
 
 #: The one whose failure is a safety failure.
@@ -186,6 +193,8 @@ class Validation:
 def validate(
     *,
     false_accounted: int,
+    accounted_unverified: int = 0,
+    accounted_total: int = 0,
     false_unaccounted: int,
     sweeps_completed: int,
     sweeps_expected: int,
@@ -214,10 +223,25 @@ def validate(
         criterion=Criterion.NO_FALSE_ACCOUNTED,
         passed=false_accounted == 0,
         measured=str(false_accounted),
-        detail=("nobody was marked accounted whom a warden did not confirm"
+        # Contradictions only. The wording used to say "not confirmed by any
+        # warden", which described the far commoner case of a warden simply not
+        # having got there yet -- and counted it as the error that ends the
+        # assessment.
+        detail=("no warden contradicted anybody the system marked accounted"
                 if false_accounted == 0 else
                 f"{false_accounted} person(s) were marked accounted by the "
-                "system and not confirmed by any warden"),
+                "system and a warden said they were not there"),
+    ))
+
+    checks.append(Check(
+        criterion=Criterion.ACCOUNTED_VERIFIED,
+        passed=accounted_unverified == 0,
+        measured=f"{accounted_unverified} of {accounted_total}",
+        detail=("every accounted person was confirmed by a warden"
+                if accounted_unverified == 0 else
+                f"{accounted_unverified} of {accounted_total} accounted "
+                "people were accounted by camera and confirmed by no warden, "
+                "so the roll-call has not checked them"),
     ))
 
     checks.append(Check(

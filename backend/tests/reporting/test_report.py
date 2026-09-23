@@ -40,6 +40,36 @@ def drill_with(people=4, zone="assembly-north") -> Drill:
     return drill
 
 
+def feed_to_assembly(drill: Drill, emp: str, start=T0 + 1_000) -> None:
+    """Make the cameras account for somebody, with no warden involved.
+
+    The other route into `ACCOUNTED`: assembly-zone presence plus a confirmed
+    identity. Every test in this file used the warden route, so the camera one
+    -- and what the report said about it -- was never exercised.
+    """
+    from app.core.events import Event, EventType, SourceKind
+
+    gid = f"gp-{emp}"
+    seq = [0]
+
+    def ev(event_type, ts_ms, subject, payload):
+        seq[0] += 1
+        return Event(
+            tenant_id="t", site_id="s", drill_id="d1", source="cam-9",
+            source_kind=SourceKind.CAMERA, seq=hash((emp, seq[0])) & 0xFFFFFF,
+            type=event_type, ts_ms=ts_ms, subject=subject, payload=payload)
+
+    for i in range(3):
+        drill.feed([ev(EventType.FACE_OBSERVED, start + i * 100, gid,
+                       {"candidate_id": emp, "score": 0.85, "margin": 0.4,
+                        "quality": 0.9, "camera_id": "cam-9",
+                        "association": "SHARED_TRACK"})])
+    for i in range(2):
+        drill.feed([ev(EventType.TRACK_UPDATED, start + 10_000 * (i + 1), gid,
+                       {"zone_id": "assembly-north", "zone_kind": "ASSEMBLY",
+                        "camera_id": "cam-9"})])
+
+
 def confirm(drill: Drill, person_ref: str, ts_ms=T0 + 60_000, zone="assembly-north"):
     drill.record_warden_action(WardenAction(
         kind=ActionKind.CONFIRM_PRESENT, warden_id="warden-7",
@@ -56,7 +86,7 @@ class TestTheVerdictOrder:
         result = validate(**{**CLEAN, "false_accounted": 1})
         assert result.outcome is Outcome.FAIL
         assert result.safety_failures
-        assert "not confirmed by any warden" in result.summary()
+        assert "a warden said they were not there" in result.summary()
 
     def test_a_safety_failure_outranks_missing_evidence(self):
         # Both wrong. The report must lead with the dangerous one.
@@ -135,6 +165,135 @@ class TestTheVerdictOrder:
     def test_thresholds_are_marked_unvalidated(self):
         assert Thresholds().calibrated is False
         assert "no live drill has run" in "\n".join(validate(**CLEAN).describe())
+
+
+class TestSilenceIsNotAContradiction:
+    """`ACCOUNTED` has two routes in by design: camera presence with a
+    confirmed identity, or a warden's word. Both used to land in
+    `false_accounted` unless a warden had personally confirmed the person —
+    which is the safety-critical count, and one of those ends the assessment.
+
+    Measured on the demo drill, 175 accounted with one zone swept and one still
+    being walked: **80 safety failures, every one of them "did not confirm"**,
+    and not one a warden contradicting anything. The verdict was FAIL.
+
+    Three things were wrong with that. It deleted half the accountability state
+    machine. Rule 1 of the decision order short-circuits rule 3, so an unswept
+    zone could never be INCONCLUSIVE. And eighty false alarms is how the one
+    real contradiction stops being visible.
+    """
+
+    def _camera_accounted(self, people=3):
+        """A drill whose people reach the assembly zone on camera alone."""
+        drill = drill_with(people=people)
+        for i in range(people):
+            feed_to_assembly(drill, f"EMP-{i:03d}")
+        return drill
+
+    def test_a_warden_who_has_not_looked_is_not_a_safety_failure(self):
+        drill = self._camera_accounted()
+        report = build_report(drill, now_ms=T0 + 600_000)
+        assert report.accounted == 3, report.accounted
+        assert report.false_accounted == ()
+        assert len(report.accounted_unverified) == 3
+        assert report.is_safe_result is True
+
+    def test_it_is_missing_evidence_and_the_drill_is_inconclusive(self):
+        # Not a pass either. Nobody has checked these people.
+        drill = self._camera_accounted()
+        report = build_report(drill, now_ms=T0 + 600_000)
+        assert report.validation.outcome is Outcome.INCONCLUSIVE
+        assert Criterion.ACCOUNTED_VERIFIED in {
+            c.criterion for c in report.validation.missing_evidence}
+        assert not report.validation.safety_failures
+
+    def test_a_warden_saying_not_here_is_still_a_safety_failure(self):
+        # The guard. Separating the two must not soften the case the count
+        # exists for.
+        drill = self._camera_accounted(people=1)
+        drill.record_warden_action(WardenAction(
+            kind=ActionKind.NOT_HERE, warden_id="warden-7",
+            device_id="tablet-3", zone_id="assembly-north",
+            ts_ms=T0 + 120_000, subject="emp:EMP-000"))
+        report = build_report(drill, now_ms=T0 + 600_000)
+        assert report.is_safe_result is False
+        assert report.validation.outcome is Outcome.FAIL
+        assert [c.criterion for c in report.validation.safety_failures] == [
+            Criterion.NO_FALSE_ACCOUNTED]
+
+    def test_one_contradiction_is_not_buried_among_many_unchecked(self):
+        """The reason the two are separated at all. A list of eighty is a list
+        nobody reads, and the one name in it that matters is the one a warden
+        actually disputed."""
+        drill = self._camera_accounted(people=12)
+        confirm(drill, "emp:EMP-000")
+        drill.record_warden_action(WardenAction(
+            kind=ActionKind.NOT_HERE, warden_id="warden-7",
+            device_id="tablet-3", zone_id="assembly-north",
+            ts_ms=T0 + 120_000, subject="emp:EMP-001"))
+        report = build_report(drill, now_ms=T0 + 600_000)
+        assert len(report.false_accounted) == 1
+        assert report.false_accounted[0].person_ref == "emp:EMP-001"
+        assert report.false_accounted[0].warden_said == "not here"
+        assert len(report.accounted_unverified) >= 9
+
+    def test_the_summary_no_longer_calls_silence_a_contradiction(self):
+        # The wording said "not confirmed by any warden", which described the
+        # far commoner case and called it the error that ends the assessment.
+        drill = self._camera_accounted(people=1)
+        drill.record_warden_action(WardenAction(
+            kind=ActionKind.NOT_HERE, warden_id="warden-7",
+            device_id="tablet-3", zone_id="assembly-north",
+            ts_ms=T0 + 120_000, subject="emp:EMP-000"))
+        summary = build_report(drill, now_ms=T0 + 600_000).validation.summary()
+        assert "a warden said they were not there" in summary
+
+    def test_a_finished_roll_call_turns_the_silence_into_a_contradiction(self):
+        """The distinction the whole split turns on, and the one I got wrong
+        first.
+
+        A sweep still being walked has not reached everybody. A sweep marked
+        complete went through the entire list and never confirmed this person,
+        which is exactly how a stable misidentification is caught -- nothing in
+        `core/` can see one, and the roll-call is the only thing that does.
+        """
+        drill = self._camera_accounted(people=2)
+
+        before = build_report(drill, now_ms=T0 + 300_000)
+        assert before.false_accounted == ()
+        assert len(before.accounted_unverified) == 2
+
+        drill.record_warden_action(WardenAction(
+            kind=ActionKind.SWEEP_COMPLETE, warden_id="warden-7",
+            device_id="tablet-3", zone_id="assembly-north",
+            ts_ms=T0 + 400_000))
+
+        after = build_report(drill, now_ms=T0 + 600_000)
+        assert after.accounted_unverified == ()
+        assert len(after.false_accounted) == 2
+        assert after.is_safe_result is False
+        assert after.validation.outcome is Outcome.FAIL
+
+    def test_an_escalated_sweep_has_not_been_through_the_list(self):
+        # A warden who stopped because they hit something they could not
+        # resolve has not finished looking, so their silence is still silence.
+        drill = self._camera_accounted(people=2)
+        drill.record_warden_action(WardenAction(
+            kind=ActionKind.ESCALATE, warden_id="warden-7",
+            device_id="tablet-3", zone_id="assembly-north",
+            ts_ms=T0 + 400_000, note="cannot get to the far side"))
+        report = build_report(drill, now_ms=T0 + 600_000)
+        assert report.false_accounted == ()
+        assert len(report.accounted_unverified) == 2
+
+    def test_the_report_counts_the_unchecked_without_listing_them(self):
+        # Eighty names under a heading nobody can act on is how the list above
+        # it, which is always short and always matters, stops being read.
+        drill = self._camera_accounted(people=12)
+        rendered = "\n".join(build_report(drill, now_ms=T0 + 600_000).render())
+        assert "accounted, unverified" in rendered
+        assert "no warden has looked" in rendered
+        assert rendered.count("EMP-0") < 12
 
 
 class TestFalseAccountedAgainstTheRollCall:
@@ -616,7 +775,7 @@ class TestADrillNobodyCanReplay:
     def test_a_safety_failure_still_outranks_it(self):
         result = validate(**{**CLEAN, "events_dropped": 12, "false_accounted": 1})
         assert result.outcome is Outcome.FAIL
-        assert "not confirmed by any warden" in result.summary()
+        assert "a warden said they were not there" in result.summary()
 
     def test_a_complete_record_says_so_rather_than_staying_silent(self):
         # The check appears on every drill, passing. A line that shows up only

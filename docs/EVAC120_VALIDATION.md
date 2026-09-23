@@ -116,7 +116,8 @@ A target that could not be measured is not a target that was missed, so
 
 | Criterion | Passes when | Kind |
 |---|---|---|
-| `NO_FALSE_ACCOUNTED` | Zero | Safety |
+| `NO_FALSE_ACCOUNTED` | Zero warden contradictions | Safety |
+| `ACCOUNTED_VERIFIED` | Nobody accounted is still waiting on a roll-call that has not finished | Evidence |
 | `SWEEPS_COMPLETED` | Every zone swept | Evidence |
 | `HEADCOUNTS_TAKEN` | Every zone recorded a physical count | Evidence |
 | `COVERAGE_SUFFICIENT` | ≥90% tracked end to end | Evidence |
@@ -134,7 +135,44 @@ drills could ever have changed it, because the site is smaller than the sample a
 95th percentile needs. Reporting that as a failure of the system says something
 untrue about the system.
 
-Two are worth explaining.
+**A warden's silence is not a contradiction, and separating the two mattered
+more than it sounds.** `ACCOUNTED` has two routes in by design — camera
+presence with a confirmed identity, or a warden's word — and both used to land
+in `NO_FALSE_ACCOUNTED` unless a warden had personally confirmed the person.
+That is the safety-critical count, and rule 1 above says one of them ends the
+assessment.
+
+Measured on the demo drill — 175 accounted, one assembly point swept and one
+still being walked:
+
+| | Before | After |
+|---|---|---|
+| Safety failures | **80** | 0 |
+| All of them "did not confirm" | yes | — |
+| Warden contradictions | 0 | 0 |
+| Accounted but unchecked | not distinguished | 80, as missing evidence |
+| Verdict | **FAIL** | INCONCLUSIVE |
+
+Three things were wrong with the old reading. It deleted half the
+accountability state machine, by treating a legitimate route into `ACCOUNTED`
+as a safety failure. It short-circuited the decision order, because rule 1
+outranks rule 3 — so a drill with an unswept zone could never be INCONCLUSIVE,
+which is precisely the verdict it deserves. And eighty false alarms is how the
+one real contradiction stops being visible: the list of people a warden
+actually disputed is always short and always matters, and it was buried.
+
+What decides between them is whether the roll-call has **finished**. A sweep
+still being walked has not reached everybody, so its silence is silence. A
+sweep marked complete went through the entire list and never confirmed this
+person, which is a contradiction — and it is exactly how a stable
+misidentification is caught, since nothing in `core/` can see one and the
+roll-call is the only thing that does.
+
+So `NO_FALSE_ACCOUNTED` counts what a warden disputed *and* whoever a finished
+roll-call passed over. `ACCOUNTED_VERIFIED` counts who nobody has looked at
+yet, and is evidentiary.
+
+Two more are worth explaining.
 
 **`HEADCOUNTS_TAKEN` is evidentiary, not quality.** Walking a zone and ticking
 people off the system's own list is checking the system against itself. The
@@ -230,8 +268,9 @@ Accountability against the manual roll-call
     no gallery entry      13
     no home floor         12
 
-  FALSE ACCOUNTED         0   (system said safe, no warden confirmed)
+  FALSE ACCOUNTED         0   (system said safe, a warden said not here)
   false unaccounted       19   (warden confirmed, system could not)
+  accounted, unverified   0   (system said safe, no warden has looked)
 
   Identities the system could not settle:
     - track gp-emp:EMP-0078: claimed as EMP-0078 and EMP-0092, first at 3.0s
@@ -277,7 +316,9 @@ NOTE: no threshold in this system has been validated against a calibration set.
 INCONCLUSIVE — this drill cannot judge the system: only 82% of people were tracked from alarm to arrival; 18% produced no timing at all, and a percentile that improves by losing the slow people is the easiest way to fake this number
 
   PASS  NO_FALSE_ACCOUNTED  [0]
-        nobody was marked accounted whom a warden did not confirm
+        no warden contradicted anybody the system marked accounted
+  PASS  ACCOUNTED_VERIFIED  [0 of 185]
+        every accounted person was confirmed by a warden
   PASS  RECORD_COMPLETE  [0 dropped]
         every event this drill produced reached the database
   PASS  SWEEPS_COMPLETED  [2/2]

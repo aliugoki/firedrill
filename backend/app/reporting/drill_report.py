@@ -71,6 +71,14 @@ class DrillReport:
     drill, and the drill is where it shows up."""
 
     false_accounted: tuple = ()
+    accounted_unverified: tuple = ()
+    """Accounted by camera, with nobody having laid eyes on them.
+
+    Not a disagreement: no warden said anything about these people. Kept apart
+    from `false_accounted` because that one is safety-critical and ends the
+    assessment, and burying "the sweep has not reached them yet" in it made
+    every incomplete drill a safety failure -- and made the one real
+    contradiction impossible to see among eighty."""
     false_unaccounted: tuple = ()
 
     p50_s: float | None = None
@@ -182,9 +190,11 @@ class DrillReport:
         lines += [
             "",
             f"  FALSE ACCOUNTED         {len(self.false_accounted)}   "
-            "(system said safe, no warden confirmed)",
+            "(system said safe, a warden said not here)",
             f"  false unaccounted       {len(self.false_unaccounted)}   "
             "(warden confirmed, system could not)",
+            f"  accounted, unverified   {len(self.accounted_unverified)}   "
+            "(system said safe, no warden has looked)",
         ]
 
         if self.identity_disputes:
@@ -203,6 +213,22 @@ class DrillReport:
             for item in self.false_accounted:
                 lines.append(f"    - {item.describe()}")
                 lines.append(f"      system reasoning: {item.system_reason}")
+
+        if self.accounted_unverified:
+            # Counted, not listed. Eighty names under a heading nobody can act
+            # on is how the list above -- which is always short and always
+            # matters -- stops being read.
+            lines.append("")
+            lines.append(
+                f"  {len(self.accounted_unverified)} of {self.accounted} "
+                "accounted people were accounted by camera and confirmed by "
+                "no warden.")
+            lines.append(
+                "    Not a disagreement: nobody said otherwise. It means the "
+                "roll-call has not")
+            lines.append(
+                "    checked them, which is why this drill cannot be judged "
+                "rather than why it failed.")
 
         lines += ["", "Evacuation times"]
         if self.p95_s is None:
@@ -318,6 +344,24 @@ def _count_line(history: dict) -> str:
     return f"{line} — {'; '.join(notes)}" if notes else line
 
 
+def _sweep_finished(warden, zone_id: str | None) -> bool:
+    """Whether the roll-call for a zone has been all the way through.
+
+    Only `COMPLETE`. A sweep still in progress has not reached everybody, and
+    an escalated one stopped because the warden hit something they could not
+    resolve -- neither has been through the list, so neither turns a silence
+    into a contradiction.
+    """
+    from app.warden.sweep import SweepStatus
+
+    if zone_id is None:
+        # Nobody's list includes them, so no roll-call can ever confirm them.
+        # The board says so under its own reason; it is not a contradiction.
+        return False
+    sweep = warden.sweeps.get(zone_id)
+    return sweep is not None and sweep.status is SweepStatus.COMPLETE
+
+
 def build_report(
     drill: Drill, *, now_ms: int, audit: AuditLog | None = None,
     thresholds: Thresholds | None = None,
@@ -339,20 +383,46 @@ def build_report(
     }
 
     false_accounted: list[Disagreement] = []
+    accounted_unverified: list[Disagreement] = []
     false_unaccounted: list[Disagreement] = []
 
     for row in board.rows:
         is_accounted = row.state is AccountabilityState.ACCOUNTED
-        # The manual roll-call is the reference. A person the system called safe
-        # whom no warden laid eyes on has not been checked, and one a warden
-        # actively said was absent has been checked and contradicted.
-        if is_accounted and (row.person_ref in denied_by_warden
-                             or row.person_ref not in confirmed_by_warden):
+        # The manual roll-call is the reference, and what it means for it to be
+        # silent about somebody depends on whether it has finished.
+        #
+        # Every unconfirmed accounted person used to land in `false_accounted`,
+        # which is the safety-critical count: one of those is a FAIL and ends
+        # the assessment. On the demo drill -- 175 accounted, one assembly
+        # point swept and one still being walked -- that produced 80 safety
+        # failures, every single one of them "did not confirm" and not one a
+        # warden contradicting anything. It deleted half the accountability
+        # state machine, since camera presence with a confirmed identity is a
+        # legitimate route into ACCOUNTED; it short-circuited the decision
+        # order, because rule 1 outranks rule 3 and so an unswept zone could
+        # never be INCONCLUSIVE; and eighty false alarms is how the one real
+        # contradiction stops being visible.
+        #
+        # But the sweep being *finished* changes the meaning entirely. A
+        # completed roll-call that went through the whole list and never
+        # confirmed this person has checked them and not found them, which is
+        # exactly how a stable misidentification is caught -- nothing in
+        # `core/` can see one, and this is the only thing that does.
+        if is_accounted and row.person_ref in denied_by_warden:
+            # Checked, and contradicted outright.
             false_accounted.append(Disagreement(
                 person_ref=row.person_ref, display_name=row.display_name,
+                system_state=row.state.value, warden_said="not here",
+                system_reason=row.decision.reason,
+                zone_id=row.assigned_assembly_zone))
+        elif is_accounted and row.person_ref not in confirmed_by_warden:
+            swept = _sweep_finished(warden, row.assigned_assembly_zone)
+            target = false_accounted if swept else accounted_unverified
+            target.append(Disagreement(
+                person_ref=row.person_ref, display_name=row.display_name,
                 system_state=row.state.value,
-                warden_said=("not here" if row.person_ref in denied_by_warden
-                             else "did not confirm"),
+                warden_said=("finished the roll-call without them"
+                             if swept else "has not looked yet"),
                 system_reason=row.decision.reason,
                 zone_id=row.assigned_assembly_zone))
         elif not is_accounted and row.person_ref in confirmed_by_warden:
@@ -411,6 +481,8 @@ def build_report(
 
     validation = validate(
         false_accounted=len(false_accounted),
+        accounted_unverified=len(accounted_unverified),
+        accounted_total=board.accounted,
         false_unaccounted=len(false_unaccounted),
         sweeps_completed=sweeps_completed,
         sweeps_expected=sweeps_expected,
@@ -442,6 +514,7 @@ def build_report(
                      for reason, count in drill.roster.coverage_gaps().items()
                      if count},
         false_accounted=tuple(false_accounted),
+        accounted_unverified=tuple(accounted_unverified),
         false_unaccounted=tuple(false_unaccounted),
         p50_s=timing.building.p50, p90_s=timing.building.p90,
         p95_s=timing.building.p95, p99_s=timing.building.p99,
