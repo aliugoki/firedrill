@@ -23,23 +23,26 @@ import {
   composer, escapeHtml, filterRoster, headcountVerdict, healthLine,
   describeReason, orderForWarden, rowNotes, syncProblems, syncStatus,
 } from './render.js';
-import { OfflineQueue, reconcileSync } from './queue.js';
+import { OfflineQueue, Settings, deviceIdentity, reconcileSync } from './queue.js';
+
+// Guarded, and read once. A tablet with site data blocked throws on the
+// `localStorage` getter itself, and this file read it three lines into module
+// scope -- so the whole screen was blank on the one device the offline path
+// was designed for. See `Settings` in `queue.js`.
+const settings = new Settings();
 
 const params = new URLSearchParams(location.search);
-let lang = params.get('lang') || localStorage.getItem('evac.lang') || 'en';
+let lang = params.get('lang') || settings.get('evac.lang') || 'en';
 let t = createTranslator(lang);
 
-const wardenId = params.get('warden') || localStorage.getItem('evac.warden') || 'warden-7';
-const zoneId = params.get('zone') || localStorage.getItem('evac.zone') || 'assembly-north';
-const drillId = params.get('drill') || localStorage.getItem('evac.drill') || '';
-localStorage.setItem('evac.warden', wardenId);
-localStorage.setItem('evac.zone', zoneId);
+const wardenId = params.get('warden') || settings.get('evac.warden') || 'warden-7';
+const zoneId = params.get('zone') || settings.get('evac.zone') || 'assembly-north';
+const drillId = params.get('drill') || settings.get('evac.drill') || '';
+settings.set('evac.warden', wardenId);
+settings.set('evac.zone', zoneId);
 
-let deviceId = localStorage.getItem('evac.device');
-if (!deviceId) {
-  deviceId = `device-${crypto.randomUUID().slice(0, 8)}`;
-  localStorage.setItem('evac.device', deviceId);
-}
+const identity = deviceIdentity(settings);
+const deviceId = identity.deviceId;
 
 const api = new Api().withIdentity({
   userId: wardenId, permissions: ['evac:read', 'evac:warden'], zones: [zoneId],
@@ -69,6 +72,11 @@ let unanswered = [];
 //: with the next, and a banner that flickers off is a banner a warden stops
 //: reading.
 let storageFailed = false;
+//: Distinct from `storageFailed`, and less severe. Confirmations still reach
+//: IndexedDB; what this device cannot do is remember which device it is, so
+//: its sequence numbers start again at 1 after every reload and the server's
+//: gap detection for it stops meaning anything.
+let settingsFailed = !identity.persisted;
 
 // --- language ---------------------------------------------------------------
 
@@ -102,7 +110,7 @@ function applyLanguage() {
 
 document.getElementById('lang').addEventListener('click', () => {
   lang = lang === 'en' ? 'ar' : 'en';
-  localStorage.setItem('evac.lang', lang);
+  settings.set('evac.lang', lang);
   applyLanguage();
   paint();
 });
@@ -226,6 +234,7 @@ async function paint() {
     pending: depth,
     stalenessMs: staleness,
     storageFailed,
+    settingsFailed,
   }, t);
   const syncEl = document.getElementById('sync');
   syncEl.className = `warden-status ${status.tone}`;

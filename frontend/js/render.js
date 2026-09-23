@@ -385,7 +385,8 @@ export function describeCaveats(panel, t) {
 
 /** What the sync indicator says. */
 export function syncStatus({ online, pending, stalenessMs, fromCache,
-                             storageFailed = false }, t) {
+                             storageFailed = false,
+                             settingsFailed = false }, t) {
   if (storageFailed) {
     // First, and in the blind tone, because it outranks everything else this
     // strip can say. A warden whose device cannot write to IndexedDB -- a
@@ -396,6 +397,15 @@ export function syncStatus({ online, pending, stalenessMs, fromCache,
     // on. The queue was built to reject rather than hang and the screen
     // dropped the rejection, which produced the silence anyway.
     return { tone: 'blind', text: t('warden.cannot_save') };
+  }
+  if (settingsFailed) {
+    // Ranked under the one above and over everything below it. Confirmations
+    // still reach IndexedDB, so this is not "your work is being lost"; what is
+    // lost is the device's own identity, and with it the sequence numbers that
+    // let the server tell an action that vanished from one that was late. A
+    // warden cannot fix that, but the person reading the board can stop
+    // trusting this device's gaps, and nothing said it.
+    return { tone: 'offline', text: t('warden.cannot_remember') };
   }
   if (fromCache) {
     // Distinct from being offline: the device may have signal and still be

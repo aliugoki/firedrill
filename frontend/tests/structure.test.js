@@ -75,6 +75,36 @@ describe('every element the glue reaches for exists', () => {
   }
 });
 
+describe('nothing reaches for browser storage unguarded', () => {
+  // `localStorage` is not a property you can read safely: on a device with
+  // site data blocked the getter itself throws, and both screens read it at
+  // module scope, so neither rendered anything at all -- not even the banner
+  // this codebase built for that device. Every access goes through
+  // `Settings`, which is the one place allowed to touch it.
+  for (const file of SHIPPED) {
+    if (file === 'js/queue.js') continue;
+    it(`${file} goes through Settings`, () => {
+      const source = code(file)
+        // Not the prose. A comment naming the API is how the next reader finds
+        // out why this rule exists.
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+      for (const api of ['localStorage', 'sessionStorage']) {
+        assert.ok(!source.includes(api),
+          `${file} touches ${api} directly; use Settings from queue.js`);
+      }
+    });
+  }
+
+  it('Settings itself is the only thing that does', () => {
+    const source = code('js/queue.js');
+    // Once, inside the try. A second reach is a second thing that can throw
+    // somewhere the guard does not cover.
+    const reaches = source.match(/globalThis\.localStorage/g) || [];
+    assert.equal(reaches.length, 1, 'queue.js reaches for the store more than once');
+  });
+});
+
 describe('the glue imports every function it calls', () => {
   // `CLAUDE.md` exempts `command.js` and `warden.js` from unit testing on the
   // grounds that they are DOM glue, so a call to a function nobody imported is

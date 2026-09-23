@@ -10,6 +10,7 @@
  */
 
 import { Api, Freshness } from './api.js';
+import { Settings } from './queue.js';
 import { createTranslator, isRtl, formatDuration } from './i18n.js';
 import {
   blockingReasons, drillControl, escapeHtml, explainSummary, exitPressure,
@@ -18,8 +19,14 @@ import {
   wardenContact,
 } from './render.js';
 
+// Guarded. A browser with site data blocked throws on the `localStorage`
+// getter itself, and this line ran at module scope -- so the command centre
+// rendered nothing at all, which during an evacuation looks exactly like a
+// building that has emptied. See `Settings` in `queue.js`.
+const settings = new Settings();
+
 const params = new URLSearchParams(location.search);
-let lang = params.get('lang') || localStorage.getItem('evac.lang') || 'en';
+let lang = params.get('lang') || settings.get('evac.lang') || 'en';
 let t = createTranslator(lang);
 
 // Phase 4 reads identity from the page. A gateway sets these headers in a real
@@ -61,7 +68,7 @@ function applyLanguage() {
 
 document.getElementById('lang').addEventListener('click', () => {
   lang = lang === 'en' ? 'ar' : 'en';
-  localStorage.setItem('evac.lang', lang);
+  settings.set('evac.lang', lang);
   applyLanguage();
   paint();
 });

@@ -243,3 +243,93 @@ export function reconcileSync(sent, response) {
   };
 }
 
+
+/**
+ * Settings that survive a reload, on a device that may refuse to keep any.
+ *
+ * `localStorage` is not a property you can read safely. On a tablet with site
+ * data blocked the *getter* throws a `SecurityError`, and both screens read it
+ * at module scope, so the module stopped evaluating before it rendered
+ * anything at all. Not a blank panel -- a blank page: no roster, no tabs, not
+ * even the safety notice, and not the "this device cannot save your work"
+ * banner this codebase built for exactly that tablet. On the command centre a
+ * blank page during an evacuation looks like a building that has emptied.
+ *
+ * So every access goes through here, every one of them is guarded, and a
+ * device that cannot remember anything degrades to remembering nothing for the
+ * length of the session rather than to showing nothing.
+ */
+export class Settings {
+  /**
+   * The store is read once, inside a try, and never touched directly again.
+   * Reading it lazily would mean every later call could throw somewhere new.
+   */
+  constructor(store = undefined) {
+    if (store === undefined) {
+      try {
+        // The read is the test. A store that throws on access is indistinct
+        // from one that is absent, and both mean the same thing here.
+        store = globalThis.localStorage;
+        store.getItem('evac.probe');
+      } catch {
+        store = null;
+      }
+    }
+    this._store = store || null;
+    //: Set by a refused read or write, not only by an absent store. A device
+    //: whose quota is full reads fine and writes nothing, which is the case a
+    //: screen is least likely to notice.
+    this.failed = this._store === null;
+    //: Everything still works this session. Falling back to memory rather than
+    //: to nothing is what keeps a warden able to work while the banner tells
+    //: them the record will not survive a reload.
+    this._memory = new Map();
+  }
+
+  get(key, fallback = null) {
+    if (this._store) {
+      try {
+        const value = this._store.getItem(key);
+        if (value !== null) return value;
+      } catch {
+        this.failed = true;
+      }
+    }
+    return this._memory.has(key) ? this._memory.get(key) : fallback;
+  }
+
+  set(key, value) {
+    this._memory.set(key, value);
+    if (!this._store) return false;
+    try {
+      this._store.setItem(key, value);
+      return true;
+    } catch {
+      // Quota, or a store that allows reads and refuses writes. Either way the
+      // value is held for this session and the device says so.
+      this.failed = true;
+      return false;
+    }
+  }
+}
+
+/**
+ * This device's identity, and whether it will still be this device tomorrow.
+ *
+ * The id is not a convenience. Sequence numbers are assigned per device, and a
+ * hole in the sequence is how the server tells an action that was genuinely
+ * lost from one that is merely late. A device that cannot persist its id gets
+ * a new one on every reload, so every reload starts a fresh sequence at 1 --
+ * and that distinction, which is the reason the sequence is assigned on the
+ * device at all, quietly stops existing.
+ *
+ * It still works. It just has to say so, which is what `persisted` is for.
+ */
+export function deviceIdentity(settings, {
+  newId = () => `device-${globalThis.crypto.randomUUID().slice(0, 8)}`,
+} = {}) {
+  const existing = settings.get('evac.device');
+  if (existing) return { deviceId: existing, persisted: true };
+  const deviceId = newId();
+  return { deviceId, persisted: settings.set('evac.device', deviceId) };
+}

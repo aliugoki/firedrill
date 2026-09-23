@@ -1068,6 +1068,33 @@ describe('where to send somebody', () => {
   });
 });
 
+describe('what the strip says when the device cannot remember itself', () => {
+  it('is ranked under losing work and over everything else', () => {
+    // Losing confirmations is worse than losing an id, and both outrank being
+    // offline -- a warden reading "12 pending" has no reason to suspect the
+    // queue will never drain.
+    const both = syncStatus(
+      { online: false, pending: 12, storageFailed: true, settingsFailed: true },
+      t);
+    assert.equal(both.text, t('warden.cannot_save'));
+
+    const forgetful = syncStatus(
+      { online: false, pending: 12, settingsFailed: true }, t);
+    assert.equal(forgetful.text, t('warden.cannot_remember'));
+  });
+
+  it('does not claim the work is being lost, because it is not', () => {
+    const line = syncStatus({ online: true, pending: 0, settingsFailed: true }, t);
+    assert.notEqual(line.text, t('warden.cannot_save'));
+    assert.equal(line.tone, 'offline', 'a warning, not the blind tone');
+  });
+
+  it('says nothing at all on a device that is fine', () => {
+    assert.equal(syncStatus({ online: true, pending: 0 }, t).text,
+                 t('warden.synced'));
+  });
+});
+
 describe('nothing English reaches a screen being read in Arabic', () => {
   // The board's blocking list made this move a gate ago. The zone panel and
   // the exits panel did not, and they are the two halves of the screen a

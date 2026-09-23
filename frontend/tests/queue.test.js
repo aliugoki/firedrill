@@ -8,7 +8,9 @@
 import assert from 'node:assert/strict';
 import { describe, it, beforeEach } from 'node:test';
 
-import { OfflineQueue, reconcileSync } from '../js/queue.js';
+import {
+  OfflineQueue, Settings, deviceIdentity, reconcileSync,
+} from '../js/queue.js';
 import { createFakeIndexedDb } from './fake-idb.js';
 
 function makeQueue(device = 'tablet-3', { online = true } = {}) {
@@ -285,5 +287,113 @@ describe('deleting only what the server says it holds', () => {
     });
     assert.deepEqual(out.acknowledged, [1, 2]);
     assert.deepEqual(out.refused.map((r) => r.device_seq), [3]);
+  });
+});
+
+describe('settings on a device that will not keep any', () => {
+  const working = () => {
+    const map = new Map();
+    return {
+      getItem: (k) => (map.has(k) ? map.get(k) : null),
+      setItem: (k, v) => { map.set(k, String(v)); },
+    };
+  };
+
+  it('reads and writes through a store that works', () => {
+    const settings = new Settings(working());
+    assert.equal(settings.set('evac.lang', 'ar'), true);
+    assert.equal(settings.get('evac.lang'), 'ar');
+    assert.equal(settings.failed, false);
+  });
+
+  it('answers the fallback rather than throwing when there is no store', () => {
+    // This is the tablet with site data blocked. The old code read the
+    // `localStorage` getter at module scope and the whole screen went blank.
+    const settings = new Settings(null);
+    assert.equal(settings.get('evac.lang', 'en'), 'en');
+    assert.equal(settings.failed, true);
+    assert.doesNotThrow(() => settings.set('evac.lang', 'ar'));
+  });
+
+  it('survives a store whose accessor throws on every call', () => {
+    const hostile = {
+      getItem() { throw new DOMException('denied', 'SecurityError'); },
+      setItem() { throw new DOMException('denied', 'SecurityError'); },
+    };
+    const settings = new Settings(hostile);
+    assert.equal(settings.get('evac.lang', 'en'), 'en');
+    assert.equal(settings.set('evac.lang', 'ar'), false);
+    assert.equal(settings.failed, true);
+  });
+
+  it('still remembers for this session when the store refuses to', () => {
+    // A warden switching to Arabic must not have it switch back on the next
+    // repaint. Falling back to memory is what keeps the device usable while
+    // the banner says the choice will not survive a reload.
+    const settings = new Settings(null);
+    settings.set('evac.lang', 'ar');
+    assert.equal(settings.get('evac.lang'), 'ar');
+  });
+
+  it('notices a store that reads fine and refuses to write', () => {
+    // Quota. Much commoner than a full block, and the case a screen is least
+    // likely to notice, because everything looks like it worked.
+    const map = new Map([['evac.lang', 'en']]);
+    const full = {
+      getItem: (k) => (map.has(k) ? map.get(k) : null),
+      setItem() { throw new DOMException('full', 'QuotaExceededError'); },
+    };
+    const settings = new Settings(full);
+    assert.equal(settings.failed, false, 'nothing has failed yet');
+    assert.equal(settings.get('evac.lang'), 'en');
+    assert.equal(settings.set('evac.lang', 'ar'), false);
+    assert.equal(settings.failed, true);
+  });
+});
+
+describe('the device knowing which device it is', () => {
+  const store = (initial = {}) => {
+    const map = new Map(Object.entries(initial));
+    return {
+      getItem: (k) => (map.has(k) ? map.get(k) : null),
+      setItem: (k, v) => { map.set(k, String(v)); },
+    };
+  };
+
+  it('keeps the id it was given last time', () => {
+    const settings = new Settings(store({ 'evac.device': 'device-abc' }));
+    assert.deepEqual(deviceIdentity(settings),
+                     { deviceId: 'device-abc', persisted: true });
+  });
+
+  it('makes one and says it will survive', () => {
+    const settings = new Settings(store());
+    const first = deviceIdentity(settings, { newId: () => 'device-new' });
+    assert.deepEqual(first, { deviceId: 'device-new', persisted: true });
+    // And the next load finds it rather than making a second one.
+    assert.equal(deviceIdentity(settings).deviceId, 'device-new');
+  });
+
+  it('says plainly when the id will not survive a reload', () => {
+    // The sequence numbers are per device, and a hole in the sequence is how
+    // the server tells an action that was lost from one that was late. A
+    // device that gets a new id on every reload restarts the sequence at 1,
+    // and that distinction quietly stops existing. It still works; it has to
+    // say so.
+    const settings = new Settings(null);
+    let n = 0;
+    const one = deviceIdentity(settings, { newId: () => `device-${++n}` });
+    assert.equal(one.persisted, false);
+    assert.equal(one.deviceId, 'device-1');
+  });
+
+  it('does not hand out a second id within one session', () => {
+    // The memory fallback has to hold here too, or two actions taken a minute
+    // apart carry different device ids and neither sequence means anything.
+    const settings = new Settings(null);
+    let n = 0;
+    const first = deviceIdentity(settings, { newId: () => `device-${++n}` });
+    const second = deviceIdentity(settings, { newId: () => `device-${++n}` });
+    assert.equal(second.deviceId, first.deviceId);
   });
 });

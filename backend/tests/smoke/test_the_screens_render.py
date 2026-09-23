@@ -110,8 +110,10 @@ def browser():
 
 
 def probe(browser_port: int, url: str, read: dict, steps: list | None = None,
-          wait: int = 4000) -> dict:
+          wait: int = 4000, before: str | None = None) -> dict:
     spec = {"url": url, "read": read, "steps": steps or [], "wait": wait}
+    if before:
+        spec["before"] = before
     result = subprocess.run(
         [NODE, str(PROBE), str(browser_port), json.dumps(spec)],
         capture_output=True, text=True, timeout=180, cwd=str(ROOT))
@@ -250,6 +252,79 @@ class TestTheWardenScreen:
 
     def test_the_three_screens_are_offered(self, page):
         assert page["text"]["tabs"].count("\n") >= 2
+
+
+#: A browser with site data blocked, which is what the accessor does there:
+#: `localStorage` is a property whose *getter* throws, so a module that reads
+#: it at load never finishes evaluating.
+STORAGE_BLOCKED = """
+  Object.defineProperty(window, 'localStorage', {
+    configurable: true,
+    get() { throw new DOMException('access denied', 'SecurityError'); },
+  });
+"""
+
+
+class TestADeviceThatRefusesToRemember:
+    """The tablet the offline path was designed for, and the one it died on.
+
+    Every screen read `localStorage` at module scope. On a device with site
+    data blocked the getter throws, so neither screen rendered anything at all
+    -- not a blank panel, a blank page: no roster, no tabs, not even the safety
+    notice, and not the "this device cannot save your work" banner this
+    codebase built for exactly that tablet.
+
+    Both assertions are made in a browser because neither could be made
+    anywhere else: the failure is in module evaluation, which no unit test
+    reaches.
+    """
+
+    def test_the_warden_screen_still_renders(self, server, browser):
+        base, swept = server
+        page = probe(
+            browser,
+            f"{base}/evac/warden?drill=demo&zone={swept}&warden=warden-1",
+            {"safety": "#safety", "tabs": "#tabs", "sync": "#sync",
+             "roster": "#roster"},
+            before=STORAGE_BLOCKED)
+        assert page["errors"] == []
+        # The notice `CLAUDE.md` requires on the UI, which was the first thing
+        # to disappear.
+        assert "supplements" in (page["text"]["safety"] or "").lower()
+        assert page["text"]["tabs"], "no tabs rendered"
+        assert page["text"]["roster"], "the roster never painted"
+
+    def test_the_warden_is_told_the_device_forgets_itself(self, server, browser):
+        """Not the same warning as losing work, and it must not claim to be.
+
+        Confirmations still reach IndexedDB. What this device cannot do is
+        remember which device it is, so its sequence numbers restart at 1 after
+        every reload and the server's gap detection for it stops meaning
+        anything -- which is the one thing the person reading the board needs
+        to know before trusting a gap.
+        """
+        base, swept = server
+        page = probe(
+            browser,
+            f"{base}/evac/warden?drill=demo&zone={swept}&warden=warden-1",
+            {"sync": "#sync"}, before=STORAGE_BLOCKED)
+        sync = (page["text"]["sync"] or "").lower()
+        assert "forgets itself" in sync, sync
+        assert "cannot save your work" not in sync, \
+            "claimed the confirmations are being lost, which they are not"
+
+    def test_the_command_centre_still_renders(self, server, browser):
+        # A blank command centre during an evacuation looks exactly like a
+        # building that has emptied.
+        base, _ = server
+        page = probe(browser, f"{base}/?drill=demo",
+                     {"verdict": "#verdict", "tiles": "#tiles",
+                      "headline": "#headline"},
+                     before=STORAGE_BLOCKED)
+        assert page["errors"] == []
+        assert "212" in page["text"]["tiles"]
+        assert "NOT ALL CLEAR" in page["text"]["verdict"]
+        assert page["text"]["headline"], "the headline never painted"
 
 
 class TestTheGlueNothingUnitTests:

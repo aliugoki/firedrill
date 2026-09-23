@@ -105,6 +105,13 @@ await send('Network.enable');
 // under test is a test of yesterday's file.
 await send('Network.setCacheDisabled', { cacheDisabled: true });
 await send('Page.enable');
+if (spec.before) {
+  // Runs before the page's own modules do, which is the only place a test can
+  // stand to emulate a device whose environment is hostile from the first
+  // line -- a browser with site data blocked throws on the `localStorage`
+  // getter, and a screen that reads it at module scope never renders.
+  await send('Page.addScriptToEvaluateOnNewDocument', { source: spec.before });
+}
 await send('Page.navigate', { url: spec.url });
 await pause(settle);
 
