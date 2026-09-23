@@ -22,6 +22,7 @@ import { createTranslator, isRtl } from './i18n.js';
 import {
   composer, escapeHtml, filterRoster, headcountVerdict, healthLine,
   describeReason, orderForWarden, rowNotes, syncProblems, syncStatus,
+  themeToggle,
 } from './render.js';
 import { OfflineQueue, Settings, deviceIdentity, reconcileSync } from './queue.js';
 
@@ -78,6 +79,29 @@ let storageFailed = false;
 //: gap detection for it stops meaning anything.
 let settingsFailed = !identity.persisted;
 
+// --- how it is read ---------------------------------------------------------
+
+//: Outlives the drill. A warden who set this once in the morning is not going
+//: to think about it again while people are streaming out of a building.
+let theme = settings.get('evac.theme') || 'night';
+
+function applyTheme() {
+  const state = themeToggle(theme, t);
+  theme = state.theme;
+  document.documentElement.dataset.theme = state.theme;
+  document.getElementById('theme').textContent = state.label;
+  // The colour behind a standalone PWA's status bar. Left alone, a black strip
+  // sits above a white app and the seam is the first thing anybody notices.
+  document.querySelector('meta[name="theme-color"]')
+    ?.setAttribute('content', state.chrome);
+}
+
+document.getElementById('theme').addEventListener('click', () => {
+  theme = themeToggle(theme, t).next;
+  settings.set('evac.theme', theme);
+  applyTheme();
+});
+
 // --- language ---------------------------------------------------------------
 
 function applyLanguage() {
@@ -98,6 +122,9 @@ function applyLanguage() {
   document.getElementById('composer-send').textContent = t('warden.send');
   document.getElementById('composer-cancel').textContent = t('warden.cancel');
   document.getElementById('search').placeholder = t('warden.search');
+  // The theme button's label is a string like any other, and it was English on
+  // an Arabic tablet until it was repainted here.
+  applyTheme();
   // Read by a screen reader, so they are strings like any other. They were
   // hard-coded English in the markup, which is invisible until somebody using
   // assistive technology in Arabic reaches them.

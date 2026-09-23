@@ -84,6 +84,67 @@
   --shadow-lift: 0 2px 4px rgb(0 0 0 / 40%), 0 16px 32px -16px rgb(0 0 0 / 70%);
 
   --tap: 56px; /* a gloved hand, outdoors, in a hurry */
+
+  /* The page wash. A literal here rather than further down, because the rule
+   * at the top of this file says a colour appearing at the point of use is a
+   * mistake -- and this one had to be found by hand when the light theme
+   * below turned everything white except the page behind it. */
+  --glow: #16202c;
+}
+
+/* --- sunlight -------------------------------------------------------------- *
+ *
+ * A warden stands in a car park holding a tablet, and the rest of this
+ * stylesheet is dark because a control room at night is worse with a white
+ * background. In direct sun that same screen is a mirror. This is the same
+ * interface at maximum luminance contrast: white behind black, borders that
+ * survive glare, and the four states restated in colours that are legible as
+ * text on white -- the dark theme's yellow is 4.4:1 against its own surface
+ * and about 1.6:1 against white, which is a state nobody can read.
+ *
+ * Opted into rather than detected. There is no signal worth trusting: the
+ * ambient light API is gone from every browser that matters, the OS colour
+ * preference says what somebody set indoors last week, and the clock cannot
+ * tell a night drill in a lit car park from a morning one. So it is a button,
+ * it is large, and the choice outlives the drill.
+ */
+:root[data-theme="sunlight"] {
+  --bg: #ffffff;
+  --glow: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #eef2f7;
+  --surface-3: #dfe6ee;
+  /* Far darker than the dark theme's. A hairline that reads as a boundary
+   * indoors is not there at all at 100,000 lux, and the layout below leans on
+   * borders to group things. */
+  --line: #8b98a6;
+  --line-soft: #b8c2cd;
+
+  --text: #000000;
+  --muted: #333d47;
+  --dim: #4b5560;
+
+  --green: #056b3c;
+  --yellow: #7a5200;   /* amber: yellow on white is not a colour, it is a hint */
+  --orange: #9a3a00;
+  --red: #b00d05;
+
+  --green-bg: #ddf3e7;
+  --yellow-bg: #fbeed0;
+  --orange-bg: #fbe3d4;
+  --red-bg: #ffdedc;
+
+  --green-edge: #056b3c;
+  --yellow-edge: #7a5200;
+  --orange-edge: #9a3a00;
+  --red-edge: #b00d05;
+
+  --accent: #0b4fd0;
+
+  /* Shadows are a dark-theme device. In sunlight they are invisible, and the
+   * borders above are doing the work instead. */
+  --shadow: 0 1px 2px rgb(0 0 0 / 12%);
+  --shadow-lift: 0 2px 6px rgb(0 0 0 / 16%);
 }
 
 * { box-sizing: border-box; }
@@ -93,7 +154,7 @@ html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
   background:
-    radial-gradient(1200px 600px at 50% -300px, #16202c 0%, transparent 70%),
+    radial-gradient(1200px 600px at 50% -300px, var(--glow) 0%, transparent 70%),
     var(--bg);
   background-attachment: fixed;
   color: var(--text);

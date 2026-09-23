@@ -327,6 +327,108 @@ class TestADeviceThatRefusesToRemember:
         assert page["text"]["headline"], "the headline never painted"
 
 
+class TestTheTabletInDirectSun:
+    """A warden holds this in a car park. The rest of the stylesheet is dark
+    because a control room at night is worse with a white background, and in
+    direct sun that same screen is a mirror.
+
+    Asserted as pixels rather than as a class name: a theme that sets an
+    attribute nothing is styled against is a button that does nothing, and the
+    unit tests cannot tell the difference.
+    """
+
+    BACKGROUND = "js:getComputedStyle(document.body).backgroundColor"
+    THEME = "js:document.documentElement.dataset.theme || 'night'"
+
+    def test_the_toggle_repaints_the_page_and_the_choice_survives_a_reload(
+            self, server, browser):
+        base, swept = server
+        url = f"{base}/evac/warden?drill=demo&zone={swept}&warden=warden-1"
+
+        night = probe(browser, url, {"bg": self.BACKGROUND,
+                                     "theme": self.THEME})
+        assert night["text"]["theme"] == "night"
+
+        # A separate probe, because each one gets its own browser context and
+        # the point of the reload is that the choice outlived the page.
+        sunlit = probe(
+            browser, url, {"bg": self.BACKGROUND, "theme": self.THEME,
+                           "label": "#theme"},
+            steps=[
+                {"click": "#theme"},
+                {"until": "document.documentElement.dataset.theme "
+                          "=== 'sunlight'"},
+                {"eval": "location.reload()"},
+                {"until": "document.documentElement.dataset.theme "
+                          "=== 'sunlight'", "timeout": 20000},
+            ])
+        assert sunlit["errors"] == []
+        assert sunlit["text"]["theme"] == "sunlight"
+        assert sunlit["text"]["bg"] != night["text"]["bg"], \
+            "the attribute changed and nothing was styled against it"
+        # And it is light. A theme that only rearranges dark greys has not
+        # solved the problem it was added for.
+        assert self._luminance(sunlit["text"]["bg"]) > 200
+        assert self._luminance(night["text"]["bg"]) < 60
+        # Labelled with the theme it switches to, which is now the dark one.
+        assert "night" in sunlit["text"]["label"].lower()
+
+    def test_the_states_stay_four_different_colours_in_sunlight(
+            self, server, browser):
+        """The colour scale is the operator's whole vocabulary. A light theme
+        that leaves the dark theme's yellow in place is a state nobody can
+        read: it is about 1.6:1 against white.
+        """
+        base, swept = server
+        read_chip = (
+            "js:(() => {"
+            "  const out = {};"
+            "  for (const state of ['GREEN','YELLOW','ORANGE','RED']) {"
+            "    const el = document.createElement('span');"
+            "    el.className = 'chip ' + state;"
+            "    document.body.appendChild(el);"
+            "    out[state] = getComputedStyle(el).color;"
+            "    el.remove();"
+            "  }"
+            "  return JSON.stringify(out);"
+            "})()")
+        page = probe(
+            browser,
+            f"{base}/evac/warden?drill=demo&zone={swept}&warden=warden-1",
+            {"chips": read_chip},
+            steps=[{"click": "#theme"},
+                   {"until": "document.documentElement.dataset.theme "
+                             "=== 'sunlight'"}])
+        colours = json.loads(page["text"]["chips"])
+        assert len(set(colours.values())) == 4, colours
+        # Every one of them legible as text on white. 4.5:1 is the AA
+        # threshold and a car park is not an office.
+        for state, colour in colours.items():
+            assert self._contrast_on_white(colour) >= 4.5, (state, colour)
+
+    @staticmethod
+    def _rgb(css: str) -> tuple:
+        numbers = [int(n) for n in re.findall(r"\d+", css)[:3]]
+        assert len(numbers) == 3, css
+        return tuple(numbers)
+
+    @classmethod
+    def _luminance(cls, css: str) -> float:
+        r, g, b = cls._rgb(css)
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+    @classmethod
+    def _contrast_on_white(cls, css: str) -> float:
+        def channel(value: float) -> float:
+            v = value / 255
+            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+
+        r, g, b = cls._rgb(css)
+        relative = (0.2126 * channel(r) + 0.7152 * channel(g)
+                    + 0.0722 * channel(b))
+        return 1.05 / (relative + 0.05)
+
+
 class TestTheGlueNothingUnitTests:
     """`CLAUDE.md` exempts `command.js` and `warden.js` from unit testing on
     the grounds that they are DOM glue. That is a reasonable line and it leaves

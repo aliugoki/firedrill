@@ -738,3 +738,35 @@ export function whereToLook(board, t, assemblyZones = null) {
       || (b.unaccounted - a.unaccounted)
       || (b.count - a.count));
 }
+
+/**
+ * The two themes, and what the button offering the other one says.
+ *
+ * Opted into rather than detected. There is no signal worth trusting -- the
+ * ambient light API is gone from the browsers that matter, the OS colour
+ * preference records what somebody set indoors last week, and the clock cannot
+ * tell a night drill in a lit car park from a morning one. A warden who can
+ * see nothing taps a button, and that choice outlives the drill.
+ *
+ * The button is labelled with the theme it switches *to*, which is the one
+ * thing about a toggle that is worth getting right: a control labelled with
+ * the state it is already in is a control people press twice.
+ */
+export const THEMES = ['night', 'sunlight'];
+
+export function themeToggle(current, t) {
+  // Anything unrecognised is night, which is the default and the one this
+  // stylesheet is written in. A stored value from a future version must not
+  // leave the page themeless.
+  const now = THEMES.includes(current) ? current : 'night';
+  const next = now === 'night' ? 'sunlight' : 'night';
+  return {
+    theme: now,
+    next,
+    label: t(`warden.theme_${next}`),
+    //: The browser chrome around a standalone PWA is painted from this, and a
+    //: black status bar over a white app is the seam that makes a web app look
+    //: like a web app.
+    chrome: now === 'sunlight' ? '#ffffff' : '#0f1720',
+  };
+}

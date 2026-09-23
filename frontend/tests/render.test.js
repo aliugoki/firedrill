@@ -23,6 +23,8 @@ import {
   describeBlocker,
   blockingReasons,
   describeCaveats,
+  themeToggle,
+  THEMES,
   outstanding,
   trend,
   whereToLook,
@@ -1163,5 +1165,47 @@ describe('nothing English reaches a screen being read in Arabic', () => {
     assert.equal(panel.caveats.length, 1);
     assert.ok(!ascii(panel.caveats[0].replace(/exit-main/g, '')),
               panel.caveats[0]);
+  });
+});
+
+describe('reading the tablet in direct sun', () => {
+  const ar = createTranslator('ar');
+
+  it('offers the theme it is not already in', () => {
+    // A control labelled with the state it is already in is a control people
+    // press twice.
+    assert.equal(themeToggle('night', t).label, t('warden.theme_sunlight'));
+    assert.equal(themeToggle('sunlight', t).label, t('warden.theme_night'));
+  });
+
+  it('switches to the other one and back', () => {
+    const first = themeToggle('night', t).next;
+    assert.equal(first, 'sunlight');
+    assert.equal(themeToggle(first, t).next, 'night');
+  });
+
+  it('falls back to night rather than leaving the page themeless', () => {
+    // A value stored by a future version, or a store that answered with
+    // something nobody wrote.
+    for (const stored of [undefined, null, '', 'daylight', 'NIGHT']) {
+      assert.equal(themeToggle(stored, t).theme, 'night', String(stored));
+    }
+  });
+
+  it('gives the browser chrome a colour that matches the app', () => {
+    // A black status bar over a white app is the seam that makes a web app
+    // look like a web app, on the one surface that has to feel like a tool.
+    assert.notEqual(themeToggle('night', t).chrome,
+                    themeToggle('sunlight', t).chrome);
+    assert.equal(themeToggle('sunlight', t).chrome, '#ffffff');
+  });
+
+  it('names both themes and no others', () => {
+    assert.deepEqual([...THEMES].sort(), ['night', 'sunlight']);
+  });
+
+  it('is labelled in the language being read', () => {
+    assert.notEqual(themeToggle('night', ar).label,
+                    themeToggle('night', t).label);
   });
 });
