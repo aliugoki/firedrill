@@ -34,7 +34,7 @@ still see, and only loses durability or reach.
 | DeepStream pipeline | Yes | Event production stops | `SYSTEM_DEGRADED`, pipeline named |
 | Redis (event bus) | Yes | Events stop arriving; gaps on resume | `SEQUENCE_GAP` in each person's evidence |
 | Postgres (projections) | **No** | Read models stop persisting | `SYSTEM_DEGRADED`, but counts keep updating |
-| Link to central | **No** | Replication buffers locally | Backlog depth rises; drill unaffected |
+| Link to central | **No** | Replication buffers locally | `SYSTEM_DEGRADED` after four failed flushes; backlog rises; drill unaffected |
 | FaceTrack (roster) | **No** | Roster snapshot cannot be refreshed | Roster marked unverified; all-clear blocked |
 | The node's own clock is corrected | Yes | Ageing stops meaning anything; see below | `SYSTEM_DEGRADED`, the correction and its size named |
 
@@ -184,6 +184,41 @@ regained sight.
 
 ---
 
+
+### The link going down was recorded by the simulator and by nothing else
+
+`Component.CENTRAL_LINK` has been in the health vocabulary, and in the
+non-blinding set, since health was written. The only thing that ever recorded
+one was the simulator's network-partition injection — so the chaos suite proved
+this node survives a failure the node itself could not detect.
+
+Measured: a real link down for thirteen minutes of flushes.
+
+| | Before | After |
+|---|---|---|
+| Replicator's own counters | 39 failed flushes, reason recorded | same |
+| `replicate` job failures | **0** | 13 |
+| `job.is_healthy` | **true** | false |
+| Drill health log | **empty** | one `CENTRAL_LINK` interval |
+| Report's system-health section | no outages | the outage, with its minutes |
+
+Three surfaces all saying "fine" about the same dead link. The cause is that
+`flush` swallows a transport failure and returns zero — deliberately, because
+replication must never interrupt a drill — and zero is also what a quiet drill
+returns. The comment above the replicate job already describes this exact
+shape, having been written when a refused credential produced it; the ordinary
+case, a link that is simply down, was left with no way to say so.
+
+Four consecutive failures — one minute at the flush interval — now marks the
+link down. Not one: a job that goes unhealthy on a dropped packet is a job
+whose health nobody reads. The job keeps retrying with backoff throughout and
+clears on the first success.
+
+**It is still non-blinding, and that matters.** An edge node with no Internet
+is fully operational; that is the architecture, and recording the outage must
+not contradict it. What the interval buys is a report that can say which
+minutes of a drill the copy held at central is missing — and central is where
+anybody reads it afterwards.
 
 ### An outage and a poison record look identical
 

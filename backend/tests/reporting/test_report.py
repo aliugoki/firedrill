@@ -167,6 +167,73 @@ class TestTheVerdictOrder:
         assert "no live drill has run" in "\n".join(validate(**CLEAN).describe())
 
 
+class TestTheLinkToCentralReachesTheRecord:
+    """`Component.CENTRAL_LINK` has been in the vocabulary and in the
+    non-blinding set since health was written, and the only thing that ever
+    recorded one was the simulator's network-partition injection.
+
+    So the chaos suite proved this node survives a failure the node could not
+    detect: a real link down for ten minutes left the health log empty and the
+    report's system-health section saying no outages.
+    """
+
+    def _drill_with_dead_central(self, tmp_path, *, up=False):
+        from app.ingest.replication import (
+            InMemoryTransport, Outbox, Replicator,
+        )
+
+        drill = drill_with(people=2)
+        transport = InMemoryTransport()
+        transport.up = up
+        drill.replicator = Replicator(
+            outbox=Outbox(tmp_path / "outbox.db"), transport=transport)
+        return drill, transport
+
+    def _drive(self, drill, rounds=8):
+        """Feed a little and flush, the way the edge node does."""
+        for i in range(rounds):
+            feed_to_assembly(drill, f"EMP-{i:03d}", start=T0 + 1_000 + i * 50)
+            drill.replicator.flush(now_ms=T0 + 2_000 + i * 1_000)
+
+    def test_a_dead_link_lands_in_the_drills_health_log(self, tmp_path):
+        from app.ingest.health import Component
+
+        drill, _ = self._drill_with_dead_central(tmp_path)
+        self._drive(drill)
+        open_now = drill.ingestor.state.health.open_now()
+        assert Component.CENTRAL_LINK in {d.component for d in open_now}
+
+    def test_it_does_not_blind_the_board(self, tmp_path):
+        # An edge node with no Internet is fully operational: that is the
+        # architecture, and recording the outage must not contradict it.
+        drill, _ = self._drill_with_dead_central(tmp_path)
+        self._drive(drill)
+        assert drill.ingestor.state.is_blind is False
+        assert drill.ingestor.state.is_degraded is True
+
+    def test_a_healthy_link_records_nothing(self, tmp_path):
+        from app.ingest.health import Component
+
+        drill, _ = self._drill_with_dead_central(tmp_path, up=True)
+        self._drive(drill)
+        assert not [d for d in drill.ingestor.state.health.degradations
+                    if d.component is Component.CENTRAL_LINK]
+
+    def test_the_interval_closes_when_the_link_returns(self, tmp_path):
+        # The reason it is an interval at all: a report has to be able to say
+        # which minutes of this drill central is missing.
+        from app.ingest.health import Component
+
+        drill, transport = self._drill_with_dead_central(tmp_path)
+        self._drive(drill)
+        transport.up = True
+        self._drive(drill, rounds=2)
+
+        central = [d for d in drill.ingestor.state.health.degradations
+                   if d.component is Component.CENTRAL_LINK]
+        assert central and all(not d.is_open for d in central)
+
+
 class TestSilenceIsNotAContradiction:
     """`ACCOUNTED` has two routes in by design: camera presence with a
     confirmed identity, or a warden's word. Both used to land in

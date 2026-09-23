@@ -58,6 +58,16 @@ from typing import Callable
 DEFAULT_REPLICATE_INTERVAL_MS = 15_000
 
 
+class CentralUnreachable(RuntimeError):
+    """Central has not answered for several flushes in a row.
+
+    Distinct from `ReplicationBlocked`, which is a credential central refused
+    and which no amount of waiting fixes. This one usually does fix itself,
+    and the job keeps retrying with backoff -- it is raised so that the health
+    endpoint stops claiming everything is fine while the replica falls behind.
+    """
+
+
 class ReplicationBlocked(RuntimeError):
     """Replication cannot proceed and waiting will not change that.
 
@@ -406,7 +416,21 @@ def build_supervisor(
             if replicator.is_blocked:
                 raise ReplicationBlocked(replicator.blocked_reason
                                          or "central refused the credential")
-            return replicator.flush(now_ms)
+            sent = replicator.flush(now_ms)
+            # The same reasoning as above, for the far commoner failure. A link
+            # that is simply down also makes `flush` return zero, so this job
+            # went on succeeding every fifteen seconds while nothing had
+            # reached central for ten minutes -- measured: 39 consecutive
+            # failed flushes, `job.failures` 0, `job.is_healthy` true.
+            #
+            # Raised only once the link has been down long enough to mean it,
+            # because a job that goes unhealthy on one dropped packet is a job
+            # whose health nobody reads.
+            if replicator.is_offline:
+                raise CentralUnreachable(
+                    replicator.stats.last_failure_reason
+                    or "central is not answering")
+            return sent
 
         supervisor.add(Job(name="replicate", interval_ms=replicate_interval_ms,
                            run=replicate))

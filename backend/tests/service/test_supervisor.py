@@ -463,6 +463,78 @@ class TestWhatAStepCosts:
         assert Component.CLOCK in BLINDING
 
 
+class TestTheJobNoticesCentralHasGoneQuiet:
+    """`flush` returns zero on a dead link and zero on a quiet drill, so this
+    job succeeded every fifteen seconds while nothing reached central.
+
+    Measured before the fix: 39 consecutive failed flushes, `job.failures` 0,
+    `job.is_healthy` true. The comment above the job already describes this
+    exact shape and had been applied only to a refused credential.
+    """
+
+    def _node(self, tmp_path, *, up: bool):
+        from app.ingest.replication import (
+            InMemoryTransport, Outbox, Replicator,
+        )
+        from app.core.events import Event, EventType, SourceKind
+
+        transport = InMemoryTransport()
+        transport.up = up
+        rep = Replicator(outbox=Outbox(tmp_path / "outbox.db"),
+                         transport=transport)
+        for n in range(1, 6):
+            rep.enqueue(Event(
+                tenant_id="t", site_id="s", drill_id="d", source="cam-1",
+                source_kind=SourceKind.CAMERA, seq=n,
+                type=EventType.TRACK_UPDATED, ts_ms=T0 + n,
+                subject=f"gp-{n}", payload={"zone_id": "floor-1"}))
+        return rep, transport
+
+    def test_a_dead_link_stops_the_job_reporting_success(self, tmp_path):
+        rep, _ = self._node(tmp_path, up=False)
+        supervisor = build_supervisor(ingestor=Ingestor(), replicator=rep)
+        supervisor.start(T0)
+        for i in range(1, 30):
+            supervisor.run_due(T0 + i * 20_000)
+
+        job = supervisor.job("replicate")
+        assert job.is_healthy is False
+        assert "CentralUnreachable" in job.last_error
+
+    def test_a_brief_blip_does_not(self, tmp_path):
+        # One dropped flush must not mark the node unhealthy, or nobody reads
+        # the flag when it matters.
+        rep, transport = self._node(tmp_path, up=False)
+        supervisor = build_supervisor(ingestor=Ingestor(), replicator=rep)
+        supervisor.start(T0)
+        supervisor.run_due(T0 + 20_000)
+        transport.up = True
+
+        job = supervisor.job("replicate")
+        assert job.is_healthy is True
+
+    def test_it_recovers_when_the_link_does(self, tmp_path):
+        rep, transport = self._node(tmp_path, up=False)
+        supervisor = build_supervisor(ingestor=Ingestor(), replicator=rep)
+        supervisor.start(T0)
+        now = T0
+        for i in range(1, 30):
+            now = T0 + i * 20_000
+            supervisor.run_due(now)
+        assert supervisor.job("replicate").is_healthy is False
+
+        transport.up = True
+        # Past the backoff, which is doing its job and is why this waits.
+        for _ in range(8):
+            now += 60_000
+            supervisor.run_due(now)
+
+        job = supervisor.job("replicate")
+        assert job.is_healthy is True
+        assert job.last_error is None
+        assert rep.backlog == 0
+
+
 class TestWindingDown:
     """While stopping, only critical jobs run.
 

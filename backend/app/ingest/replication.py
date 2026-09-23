@@ -37,6 +37,12 @@ from typing import Callable, Protocol
 from app.core.events import Event, EventType, SequenceTracker, SourceKind
 
 
+#: Consecutive failed flushes before the link counts as down rather than as
+#: blipping. Four, which is one minute at the fifteen-second flush interval:
+#: past a single dropped packet or a restart at the other end, and well inside
+#: the length of a drill.
+OFFLINE_AFTER_FAILURES = 4
+
 #: Failures against the same head-of-queue event before it stops being a retry
 #: and starts being a stall. Twenty is a little over five minutes at the
 #: fifteen-second flush interval: long enough that an ordinary outage, a
@@ -254,6 +260,11 @@ class ReplicationStats:
     buffered: int = 0
     sent: int = 0
     failed_flushes: int = 0
+    consecutive_failures: int = 0
+    """Failures since the last success, which is the count that means
+    something. `failed_flushes` is cumulative, so a link that blips once an
+    hour and a link that has been dead all afternoon both produce a large
+    number and only one of them is a problem now."""
     last_success_ms: int | None = None
     last_failure_reason: str | None = None
 
@@ -297,6 +308,7 @@ class Replicator:
         try:
             self.transport.send([record for _, record in batch])
         except Exception as exc:
+            self.stats.consecutive_failures += 1
             if isinstance(exc, ReplicationRejected):
                 self.blocked_reason = str(exc)
                 self.stats.last_failure_reason = self.blocked_reason
@@ -307,6 +319,7 @@ class Replicator:
             self.stats.last_failure_reason = f"{type(exc).__name__}: {exc}"
             return 0
         self.outbox.acknowledge(ids)
+        self.stats.consecutive_failures = 0
         self.stats.sent += len(ids)
         self.stats.last_success_ms = (
             now_ms if now_ms is not None else int(time.time() * 1000))
@@ -349,6 +362,20 @@ class Replicator:
     def head_attempts(self) -> int:
         """Failures against the event at the front of the queue."""
         return self.outbox.head_attempts()
+
+    @property
+    def is_offline(self) -> bool:
+        """Whether central has stopped answering.
+
+        `flush` swallows a transport failure and returns zero, deliberately:
+        replication must never interrupt a drill. But zero is also what a quiet
+        drill returns, so the supervisor's job succeeded every fifteen seconds
+        while nothing had reached central for ten minutes, and reported itself
+        healthy throughout. That exact reasoning is written above the replicate
+        job for the credential case, and the ordinary case -- a link that is
+        simply down, which is the common one -- was left with no way to say so.
+        """
+        return self.stats.consecutive_failures >= OFFLINE_AFTER_FAILURES
 
     @property
     def is_stalled(self) -> bool:

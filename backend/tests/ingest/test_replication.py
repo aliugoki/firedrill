@@ -4,6 +4,7 @@ import pytest
 
 from app.core.events import Event, EventType, SourceKind
 from app.ingest.replication import (
+    OFFLINE_AFTER_FAILURES,
     STALL_AFTER_ATTEMPTS,
     InMemoryTransport,
     Outbox,
@@ -358,3 +359,64 @@ class TestAQueueThatWillNeverDrain:
         rpo = measure_rpo(poisoned, now_ms=T0, flush_interval_ms=15_000)
         assert rpo.head_attempts == STALL_AFTER_ATTEMPTS
         assert rpo.is_stalled is True
+
+
+class TestALinkThatIsSimplyDown:
+    """`flush` swallows a transport failure and returns zero, deliberately:
+    replication must never interrupt a drill.
+
+    But zero is also what a quiet drill returns. The module already knew this
+    -- the comment above the supervisor's replicate job says the job "succeeded
+    every fifteen seconds forever and the supervisor reported it healthy while
+    nothing had reached central since the node booted" -- and fixed it only for
+    a refused credential. An ordinary outage, which is the common one, still
+    had no way to say so.
+    """
+
+    @pytest.fixture
+    def offline(self, tmp_path):
+        transport = InMemoryTransport()
+        transport.up = False
+        rep = Replicator(outbox=Outbox(tmp_path / "outbox.db"),
+                         transport=transport)
+        for i in range(1, 6):
+            rep.enqueue(event(i))
+        return rep
+
+    def test_one_failure_is_not_an_outage(self, offline):
+        # A job that goes unhealthy on a dropped packet is a job whose health
+        # nobody reads.
+        offline.flush(now_ms=T0)
+        assert offline.stats.consecutive_failures == 1
+        assert offline.is_offline is False
+
+    def test_a_run_of_them_is(self, offline):
+        for _ in range(OFFLINE_AFTER_FAILURES):
+            offline.flush(now_ms=T0)
+        assert offline.is_offline is True
+
+    def test_one_success_clears_it(self, offline):
+        for _ in range(OFFLINE_AFTER_FAILURES + 3):
+            offline.flush(now_ms=T0)
+        assert offline.is_offline is True
+
+        offline.transport.up = True
+        offline.flush(now_ms=T0)
+        assert offline.stats.consecutive_failures == 0
+        assert offline.is_offline is False
+
+    def test_consecutive_is_not_cumulative(self, offline):
+        """A link that blips once an hour and one that has been dead all
+        afternoon both run `failed_flushes` up, and only one of them is a
+        problem now."""
+        # Something new to fail on each round: an empty outbox returns zero
+        # without trying, so a drained queue cannot blip.
+        for round_ in range(3):
+            offline.enqueue(event(100 + round_))
+            offline.flush(now_ms=T0)
+            offline.transport.up = True
+            offline.flush(now_ms=T0)
+            offline.transport.up = False
+        assert offline.stats.failed_flushes >= 3
+        assert offline.stats.consecutive_failures <= 1
+        assert offline.is_offline is False

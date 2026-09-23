@@ -191,6 +191,7 @@ class Drill:
             for event in events:
                 self.events_store.append(event)
             self._mirror_store_health(events)
+        self._mirror_central_health(events)
         self._replicate(events)
         return self.ingestor.feed_batch(events)
 
@@ -240,6 +241,36 @@ class Drill:
                 self.events_store.stats.last_error or "unreachable")
         else:
             health.recover(Component.DATABASE, "events", ts_ms)
+
+    def _mirror_central_health(self, events: list[Event]) -> None:
+        """Put the link to central into this drill's health log.
+
+        `Component.CENTRAL_LINK` has been in the vocabulary and in the
+        non-blinding set since health was written, and the only thing that ever
+        recorded one was the simulator's network-partition injection. So the
+        chaos suite proved this node survives a failure the node could not
+        detect: a real link down for ten minutes left the log empty, and the
+        report's system-health section said no outages.
+
+        Non-blinding, and that is the whole point of recording it. It must not
+        hold back an all-clear -- an edge node with no Internet is fully
+        operational, which is the architecture -- but the interval is what lets
+        a report say the copy of this drill held at central is incomplete for
+        those minutes, and central is where anybody reads it afterwards.
+        """
+        if self.replicator is None or not events:
+            return
+        ts_ms = max(event.ts_ms for event in events)
+        health = self.ingestor.state.health
+        if self.replicator.is_blocked:
+            health.degrade(Component.CENTRAL_LINK, "*", ts_ms,
+                           self.replicator.blocked_reason or "refused")
+        elif self.replicator.is_offline:
+            health.degrade(
+                Component.CENTRAL_LINK, "*", ts_ms,
+                self.replicator.stats.last_failure_reason or "not answering")
+        else:
+            health.recover(Component.CENTRAL_LINK, "*", ts_ms)
 
     def record_warden_action(self, action: WardenAction) -> Event:
         """Apply a warden's assertion to both the warden state and the stream.
