@@ -12,7 +12,9 @@ import pytest
 
 from app.core.events import Event, EventType, SourceKind
 from app.core.identity_fsm import IdentityState
+from app.ingest.health import Component
 from app.ingest.ingestor import Ingestor
+from app.service.supervisor import ClockStep
 
 T0 = 1_788_000_000_000
 SEQ = {"n": 0}
@@ -108,3 +110,72 @@ class TestHowTheFaceGotOntoTheBody:
 
         assert DEFAULT_ASSOCIATION_WEIGHTS[AssociationKind.SHARED_TRACK] == 1.0
         assert DEFAULT_ASSOCIATION_WEIGHTS[AssociationKind.NONE] == 0.0
+
+
+class TestTheNodesOwnClockFailing:
+    """A clock correction is an infrastructure failure, and it is the one that
+    makes this board *more* confident rather than less.
+
+    Invariant 8 says a failure degrades the system rather than being absorbed
+    by it, so the step is recorded as an outage with a cause, the way a dark
+    camera is -- which is what lets a post-drill report answer "was the system
+    trustworthy when it said that?" about the minutes either side of it.
+    """
+
+    def back(self, by_ms=2_400_000, at=T0):
+        return ClockStep(at_ms=at, delta_ms=-by_ms, monotonic_ms=0)
+
+    def test_a_correction_opens_an_outage_rather_than_being_logged(self, ingestor):
+        ingestor.clock_stepped(self.back())
+        open_now = ingestor.state.health.open_now()
+        assert [d.component for d in open_now] == [Component.CLOCK]
+        assert "backwards" in open_now[0].reason
+
+    def test_and_it_blinds_the_board_while_it_is_open(self, ingestor):
+        # Ageing is how this system decides nobody has seen somebody for
+        # ninety seconds, and after a backward step every reading it has sits
+        # in the future. Silence stops carrying information.
+        ingestor.clock_stepped(self.back())
+        assert ingestor.state.is_blind
+
+    def test_it_stays_open_until_wall_clock_has_caught_up(self, ingestor):
+        ingestor.clock_stepped(self.back(by_ms=2_400_000))
+        # A tick a minute later: wall clock is nowhere near back to where it
+        # was, and the readings taken before the step still mean nothing.
+        ingestor.tick(T0 + 60_000)
+        assert ingestor.state.is_blind
+
+        ingestor.tick(T0 + 2_400_000)
+        assert not ingestor.state.is_blind
+        assert ingestor.state.health.open_now() == []
+
+    def test_a_forward_correction_clears_on_the_next_tick(self, ingestor):
+        # The board over-reports people as unobserved, which is the safe
+        # direction, and one tick later every age has been recomputed against
+        # the new clock.
+        ingestor.clock_stepped(
+            ClockStep(at_ms=T0, delta_ms=2_400_000, monotonic_ms=0))
+        assert ingestor.state.is_blind
+        ingestor.tick(T0 + 1_000)
+        assert not ingestor.state.is_blind
+
+    def test_the_outage_is_still_in_the_record_after_it_closes(self, ingestor):
+        # The whole reason it is an interval. A boolean is back to healthy by
+        # the time anybody reads the report.
+        ingestor.clock_stepped(self.back(by_ms=30_000))
+        ingestor.tick(T0 + 30_000)
+        assert ingestor.state.health.was_degraded_at(T0 + 10_000)
+        assert not ingestor.state.health.was_degraded_at(T0 + 40_000)
+
+    def test_two_corrections_in_a_row_do_not_stack_up(self, ingestor):
+        # A node being brought into sync can step more than once. A second
+        # outage for the same thing already down is noise in a report somebody
+        # reads under pressure.
+        ingestor.clock_stepped(self.back(by_ms=30_000))
+        ingestor.clock_stepped(self.back(by_ms=30_000, at=T0 + 1_000))
+        assert len(ingestor.state.health.open_now()) == 1
+
+    def test_a_node_whose_clock_never_moves_records_nothing(self, ingestor):
+        ingestor.tick(T0)
+        ingestor.tick(T0 + 1_000)
+        assert ingestor.state.health.degradations == []

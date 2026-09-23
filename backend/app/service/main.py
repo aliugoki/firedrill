@@ -50,9 +50,16 @@ def main(argv: list | None = None) -> int:
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
 
+    def clock_stepped(step) -> None:
+        # Loud, because it is the one failure on this node that makes the board
+        # more confident rather than less, and an edge node with no Internet is
+        # exactly the node whose clock gets corrected under its own feet.
+        log.warning("clock correction: %s", step.describe())
+        node.ingestor.clock_stepped(step)
+
     log.info("running jobs: %s", ", ".join(j.name for j in node.supervisor.jobs))
     try:
-        serve(node.supervisor)
+        serve(node.supervisor, on_clock_step=clock_stepped)
     finally:
         # Last chance to get buffered events to central. A drill interrupted by
         # a deploy should lose nothing.

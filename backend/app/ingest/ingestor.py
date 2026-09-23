@@ -59,6 +59,9 @@ class IngestState:
     ledger: EvidenceLedger
     tracker: SequenceTracker
     health: HealthLog = field(default_factory=HealthLog)
+    #: Wall clock from which ages mean something again, or None when they
+    #: always did. Set when the clock is corrected under this node's feet.
+    clock_trusted_from_ms: int | None = None
     bottlenecks: BottleneckTracker = field(default_factory=BottleneckTracker)
     drill_started_ms: int | None = None
     drill_completed_ms: int | None = None
@@ -159,8 +162,41 @@ class Ingestor:
 
     def tick(self, now_ms: int) -> None:
         """Advance time with no new events. Ages tracks and identities."""
+        self._close_clock_outage(now_ms)
         self.state.presence.tick(now_ms)
         self.state.identity.tick(now_ms)
+
+    # -- the node's own sense of time ------------------------------------------
+
+    def clock_stepped(self, step) -> None:
+        """Somebody corrected the clock. Record it as an outage.
+
+        Ageing is the thing a clock step breaks, and ageing is how this system
+        decides nobody has seen somebody for ninety seconds. Every
+        `last_seen_ms` already recorded was taken on the old clock, so until
+        wall clock has moved past them again they mean nothing -- and after a
+        backward step that takes exactly as long as the step did.
+
+        Invariant 8: an infrastructure failure degrades the system rather than
+        being absorbed by it. This is an infrastructure failure that makes the
+        board *more* optimistic, which is the direction the invariant exists to
+        forbid, so it is recorded rather than logged and forgotten.
+        """
+        self.state.clock_trusted_from_ms = step.at_ms + step.blind_for_ms
+        self.state.health.degrade(
+            Component.CLOCK, "*", step.at_ms, step.describe())
+
+    def _close_clock_outage(self, now_ms: int) -> None:
+        """Close it once wall clock has caught up with what it already knew.
+
+        Closed on the tick rather than on a timer, because the tick is the job
+        that does the ageing: the outage should end at the moment the next
+        piece of work it invalidates is about to run correctly again.
+        """
+        until = self.state.clock_trusted_from_ms
+        if until is not None and now_ms >= until:
+            self.state.health.recover(Component.CLOCK, "*", now_ms)
+            self.state.clock_trusted_from_ms = None
 
     # -- per-event handling ----------------------------------------------------
 

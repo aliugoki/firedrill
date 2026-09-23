@@ -33,12 +33,25 @@ class Component(str, Enum):
     DATABASE = "DATABASE"
     CENTRAL_LINK = "CENTRAL_LINK"
     ROSTER_SOURCE = "ROSTER_SOURCE"
+    CLOCK = "CLOCK"
+    """The node's own sense of time. It fails when somebody corrects it: this
+    runs on an edge node with no Internet, so its clock is wrong at boot and
+    gets stepped the moment a network appears.
+
+    Blinding, and it took some thought to be sure. A clock correction does not
+    stop a camera seeing. What it stops is *ageing* -- and ageing is how this
+    system decides that nobody has seen somebody for ninety seconds. After a
+    backward step, every `last_seen_ms` already recorded sits in the future,
+    so for the length of the step everybody looks as though they were seen a
+    moment ago and nobody becomes LOST. Silence stops carrying information,
+    which is the definition this file gives for blinding."""
 
 
 #: Components whose failure blinds the system to people. While one of these is
 #: down, silence carries no information and nothing may be inferred from it.
 BLINDING: frozenset[Component] = frozenset({
     Component.CAMERA, Component.PIPELINE, Component.EVENT_BUS,
+    Component.CLOCK,
 })
 
 #: Components whose failure costs durability or reach but not sight. The system

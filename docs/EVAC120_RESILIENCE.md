@@ -36,6 +36,7 @@ still see, and only loses durability or reach.
 | Postgres (projections) | **No** | Read models stop persisting | `SYSTEM_DEGRADED`, but counts keep updating |
 | Link to central | **No** | Replication buffers locally | Backlog depth rises; drill unaffected |
 | FaceTrack (roster) | **No** | Roster snapshot cannot be refreshed | Roster marked unverified; all-clear blocked |
+| The node's own clock is corrected | Yes | Ageing stops meaning anything; see below | `SYSTEM_DEGRADED`, the correction and its size named |
 
 Two rows in that table are the ones people get wrong.
 
@@ -171,6 +172,7 @@ same accountability conclusions as the edge.
 | Pipeline | On `SYSTEM_RECOVERED` | Ingest resumes; the gap in sequence numbers is reported |
 | Redis | Consumer reconnects and replays from its last acknowledged id | Duplicates dropped; gaps reported |
 | Postgres | Projections rebuilt from the ledger | Nothing lost; the ledger is the source of truth |
+| Clock | Backwards: when wall clock climbs past where it was. Forwards: on the next tick | The outage stays in the record, so the report can say the minutes either side of it were not trustworthy |
 | Central link | Replicator drains the backlog | Reconciler deduplicates the flood |
 
 The camera credit is worth spelling out. Without it, a ten-minute camera failure
@@ -179,6 +181,38 @@ one outage into a wave of false alarms at exactly the moment the operator
 regained sight.
 
 ---
+
+
+### The clock is a dependency
+
+It is the one this node cannot get from anywhere else, and the one most likely
+to be wrong: accountability runs on a site edge node with **zero Internet**, so
+its clock is whatever the RTC said at boot until a network appears and NTP
+corrects it — which may well be during a drill.
+
+Two clocks, therefore. Scheduling runs on `time.monotonic`, which counts
+forward regardless of what anybody does to the wall clock. The `now_ms` each
+job is handed is wall clock, because it has to be comparable with the
+timestamps VisionTrack puts on its observations and with the evidence already
+in the ledger.
+
+Scheduling on wall clock, which is what this did, meant a backward correction
+of forty minutes stopped every job for forty minutes: `now_ms >= last_run_ms +
+interval` is false for as long as the clock is catching up. Including the tick,
+which the design says must never stop. And silently — a job that never runs
+never fails, so the supervisor reported itself healthy throughout, and
+`staleness_ms` wrapped its answer in `max(0, …)` so it reported zero.
+
+The correction itself is detected by comparing the two clocks: time passing
+shows up in both, a correction in only one. It is recorded as a `CLOCK` outage,
+which is **blinding** — a correction does not stop a camera seeing, but it
+stops ageing, and ageing is how the system decides nobody has seen somebody for
+ninety seconds. The two directions cost differently:
+
+| Direction | What it does | How long it blinds |
+|---|---|---|
+| Backwards | Every recorded `last_seen_ms` is now in the future, so everybody looks freshly seen and nobody becomes `LOST`. This is the false optimism invariant 8 exists to forbid. | Exactly the size of the step |
+| Forwards | Every age inflates at once; the board over-reports people as unobserved, which is the safe direction to be wrong in | Until the next tick |
 
 ## 7. The chaos suite
 

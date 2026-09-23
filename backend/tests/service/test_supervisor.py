@@ -9,7 +9,10 @@ from __future__ import annotations
 import pytest
 
 from app.ingest.ingestor import Ingestor
-from app.service.supervisor import Job, Supervisor, build_supervisor, serve
+from app.ingest.health import BLINDING, Component
+from app.service.supervisor import (
+    ClockStep, ClockWatch, Job, Supervisor, build_supervisor, serve,
+)
 
 T0 = 1_788_000_000_000
 
@@ -285,6 +288,179 @@ class TestServing:
         serve(supervisor, clock=lambda: T0, sleep=slept.append,
               max_iterations=2)
         assert all(duration <= 0.25 for duration in slept)
+
+
+class TestAClockCorrectedUnderTheNodesFeet:
+    """This runs on an edge node with no Internet, which is a node whose clock
+    is wrong at boot and gets stepped the moment a network appears.
+
+    Scheduling on wall clock made that stop every job for the length of the
+    correction, silently -- a job that never runs never fails, so the
+    supervisor reported itself healthy throughout, and `staleness_ms` wrapped
+    its answer in `max(0, ...)` so it reported zero.
+
+    The tick is the job the module docstring says must never stop, and this was
+    the way to stop it that nothing in the suite could see.
+    """
+
+    BACKWARDS = 40 * 60 * 1000
+
+    def _stepping_clocks(self, delta_ms, after=3):
+        """Wall clock that jumps by `delta_ms` once, and a clock that cannot."""
+        state = {"wall": T0, "mono": 0, "reads": 0, "stepped": False}
+
+        def monotonic():
+            state["mono"] += 500
+            state["wall"] += 500
+            return state["mono"]
+
+        def clock():
+            state["reads"] += 1
+            if state["reads"] > after and not state["stepped"]:
+                state["stepped"] = True
+                state["wall"] += delta_ms
+            return state["wall"]
+
+        return clock, monotonic, state
+
+    def test_a_backward_correction_no_longer_stops_every_job(self):
+        job, calls = counting_job(interval_ms=1_000, critical=True)
+        supervisor = Supervisor(jobs=[job])
+        clock, monotonic, _ = self._stepping_clocks(-self.BACKWARDS)
+
+        serve(supervisor, clock=clock, monotonic=monotonic,
+              sleep=lambda _: None, max_iterations=200)
+
+        # Forty minutes of wall clock to catch up. On the old schedule this
+        # was three.
+        assert len(calls) > 50, len(calls)
+
+    def test_and_the_freeze_was_invisible_before(self):
+        """The same run, scheduled the way it used to be: one clock for both.
+
+        Kept as a test rather than as a paragraph, because the fix is a pair of
+        clocks and a reader has to be able to see what the second one buys.
+        """
+        job, calls = counting_job(interval_ms=1_000, critical=True)
+        supervisor = Supervisor(jobs=[job])
+        clock, monotonic, _ = self._stepping_clocks(-self.BACKWARDS)
+
+        # `monotonic` also advances wall clock, so passing it as both is the
+        # old single-clock behaviour exactly.
+        serve(supervisor, clock=clock, monotonic=clock,
+              sleep=lambda _: None, max_iterations=200)
+
+        assert len(calls) < 10, "the old failure no longer reproduces"
+        assert job.is_healthy, "and it reported itself healthy while frozen"
+
+    def test_staleness_stops_reading_zero_on_a_clock_that_went_back(self):
+        job, _ = counting_job(interval_ms=1_000)
+        job.execute(T0, tick_ms=10_000)
+        # Wall clock has since moved back an hour; the monotonic reading has
+        # advanced thirty seconds.
+        assert job.staleness_ms(T0 - 3_600_000, tick_ms=40_000) == 30_000
+        # And without a monotonic reading it still answers, for every caller
+        # that has only one clock.
+        assert job.staleness_ms(T0 + 5_000) == 5_000
+
+    def test_a_forward_correction_is_invisible_to_the_schedule(self):
+        """The run count is the same with the jump as without it.
+
+        Asserted as a comparison rather than against a number, because the
+        number is a property of the fake clocks and the finding is that the
+        jump does not change it. A schedule reading wall clock would have
+        fired a burst the moment it leapt forty minutes.
+        """
+        def run(step_ms):
+            job, calls = counting_job(interval_ms=1_000)
+            supervisor = Supervisor(jobs=[job])
+            clock, monotonic, _ = self._stepping_clocks(step_ms)
+            serve(supervisor, clock=clock, monotonic=monotonic,
+                  sleep=lambda _: None, max_iterations=40)
+            return len(calls)
+
+        assert run(self.BACKWARDS) == run(0)
+        assert run(-self.BACKWARDS) == run(0)
+
+    def test_the_step_is_reported_rather_than_absorbed(self):
+        job, _ = counting_job(interval_ms=1_000)
+        supervisor = Supervisor(jobs=[job])
+        clock, monotonic, _ = self._stepping_clocks(-self.BACKWARDS)
+        seen = []
+
+        serve(supervisor, clock=clock, monotonic=monotonic,
+              sleep=lambda _: None, max_iterations=200,
+              on_clock_step=seen.append)
+
+        assert len(seen) == 1, [s.describe() for s in seen]
+        assert seen[0].backwards
+        assert seen[0].delta_ms == pytest.approx(-self.BACKWARDS, abs=2_000)
+
+
+class TestNoticingTheClockMoved:
+    def test_ordinary_drift_is_not_a_correction(self):
+        # Wall clock and a monotonic source are read a few instructions apart
+        # and drift by microseconds. A watch that called that a correction
+        # would report one every second.
+        watch = ClockWatch()
+        assert watch.observe(T0, 0) is None
+        for n in range(1, 60):
+            assert watch.observe(T0 + n * 1_000 + n, n * 1_000) is None
+
+    def test_the_first_reading_is_never_a_step(self):
+        # A node whose clock was wrong at boot has not stepped. It is merely
+        # wrong, which NTP is about to fix, and that is what gets reported.
+        assert ClockWatch().observe(0, 999_999) is None
+
+    def test_it_catches_a_correction_in_either_direction(self):
+        watch = ClockWatch()
+        watch.observe(T0, 0)
+        step = watch.observe(T0 + 500 - 3_600_000, 500)
+        assert step is not None and step.backwards
+
+        watch = ClockWatch()
+        watch.observe(T0, 0)
+        step = watch.observe(T0 + 500 + 3_600_000, 500)
+        assert step is not None and not step.backwards
+
+    def test_it_reports_a_correction_once_and_not_forever_after(self):
+        # The pair is re-based on the post-step readings, so the next
+        # comparison is an ordinary one. A watch that kept comparing against
+        # the pre-step reading would report the same correction every second
+        # until the drill ended.
+        watch = ClockWatch()
+        watch.observe(T0, 0)
+        assert watch.observe(T0 + 500 - 3_600_000, 500) is not None
+        for n in range(2, 20):
+            assert watch.observe(T0 + n * 500 - 3_600_000, n * 500) is None
+
+
+class TestWhatAStepCosts:
+    def test_backwards_blinds_for_exactly_as_long_as_the_step(self):
+        # Every `last_seen_ms` already recorded now sits in the future, so for
+        # the length of the step everybody looks as though they were seen a
+        # moment ago and nobody becomes LOST.
+        step = ClockStep(at_ms=T0, delta_ms=-2_400_000, monotonic_ms=0)
+        assert step.blind_for_ms == 2_400_000
+
+    def test_forwards_blinds_only_until_the_next_tick(self):
+        # The board over-reports people as unobserved, which is the safe
+        # direction, and one tick later every age has been recomputed.
+        step = ClockStep(at_ms=T0, delta_ms=2_400_000, monotonic_ms=0)
+        assert step.blind_for_ms == 1_000
+
+    def test_the_window_is_never_zero(self):
+        # A zero-length interval is invisible to `was_degraded_at`, and the
+        # reason this is an interval at all is so a post-drill report can
+        # answer "was the system trustworthy when it said that?".
+        for delta in (3_000, -3_000):
+            assert ClockStep(at_ms=T0, delta_ms=delta,
+                             monotonic_ms=0).blind_for_ms > 0
+
+    def test_the_clock_is_a_blinding_component(self):
+        # A correction does not stop a camera seeing. It stops ageing, and
+        # ageing is how this system decides nobody has seen somebody.
+        assert Component.CLOCK in BLINDING
 
 
 class TestWindingDown:

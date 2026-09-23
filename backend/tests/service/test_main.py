@@ -62,7 +62,7 @@ class TestShutdown:
         replicator = FakeReplicator()
         monkeypatch.setattr(entry, "build_edge",
                             lambda: node_with(replicator=replicator))
-        monkeypatch.setattr(entry, "serve", lambda supervisor: None)
+        monkeypatch.setattr(entry, "serve", lambda supervisor, **kwargs: None)
 
         assert entry.main([]) == 0
         assert replicator.drains == 1
@@ -78,7 +78,7 @@ class TestShutdown:
         monkeypatch.setattr(entry, "build_edge",
                             lambda: node_with(replicator=replicator))
 
-        def explode(supervisor):
+        def explode(supervisor, **kwargs):
             raise RuntimeError("the ingest thread died")
 
         monkeypatch.setattr(entry, "serve", explode)
@@ -90,7 +90,7 @@ class TestShutdown:
     def test_a_node_with_no_replicator_still_exits_cleanly(
             self, monkeypatch, no_signals):
         monkeypatch.setattr(entry, "build_edge", lambda: node_with())
-        monkeypatch.setattr(entry, "serve", lambda supervisor: None)
+        monkeypatch.setattr(entry, "serve", lambda supervisor, **kwargs: None)
         assert entry.main([]) == 0
 
 
@@ -99,7 +99,7 @@ class TestStartup:
     def test_a_signal_winds_the_supervisor_down(self, monkeypatch, no_signals):
         node = node_with()
         monkeypatch.setattr(entry, "build_edge", lambda: node)
-        monkeypatch.setattr(entry, "serve", lambda supervisor: None)
+        monkeypatch.setattr(entry, "serve", lambda supervisor, **kwargs: None)
         entry.main([])
 
         assert signal.SIGTERM in no_signals
@@ -113,7 +113,7 @@ class TestStartup:
         monkeypatch.setattr(
             entry, "build_edge",
             lambda: node_with(gaps=["no roster source is configured"]))
-        monkeypatch.setattr(entry, "serve", lambda supervisor: None)
+        monkeypatch.setattr(entry, "serve", lambda supervisor, **kwargs: None)
 
         with caplog.at_level("WARNING"):
             entry.main([])
@@ -123,7 +123,7 @@ class TestStartup:
             self, monkeypatch, no_signals, caplog):
         monkeypatch.setattr(entry, "build_edge",
                             lambda: node_with(geometry=False))
-        monkeypatch.setattr(entry, "serve", lambda supervisor: None)
+        monkeypatch.setattr(entry, "serve", lambda supervisor, **kwargs: None)
 
         with caplog.at_level("WARNING"):
             entry.main([])
