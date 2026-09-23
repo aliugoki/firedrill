@@ -47,7 +47,15 @@ const api = new Api().withIdentity({
 const queue = new OfflineQueue(deviceId, { isOnline: () => navigator.onLine });
 const zoneFreshness = new Freshness(15_000);
 
-let screen = 'zone';
+//: The roster, not the tiles. A warden's whole job on this device is working
+//: down the list of people in front of them; the counts are what they check
+//: once at the end. Landing on the counts made the first action of every drill
+//: a tap on a tab.
+let screen = 'roster';
+//: Hide the people already settled. The list is 101 people and the work is the
+//: three that are left, so a warden scrolled past ninety-eight ticks to find
+//: them. Off shows everyone, for the warden who needs to correct one.
+let remainingOnly = true;
 let lastHeadcount = null;
 //: Which composer is open, if any: 'ESCALATE', 'NOTE', or null.
 let composing = null;
@@ -274,9 +282,33 @@ function paintZone(zone) {
 
 function paintRoster(zone) {
   const query = document.getElementById('search').value;
-  const rows = orderForWarden(filterRoster(zone?.roster || [], { query }));
+  const all = orderForWarden(filterRoster(zone?.roster || [], { query }));
+  const left = all.filter((row) => row.state !== 'ACCOUNTED');
+  const rows = remainingOnly ? left : all;
+
+  // How far through they are, which the screen never said. A list with no end
+  // in sight is a different job from three names.
+  const progress = document.getElementById('roster-progress');
+  progress.innerHTML = `
+    <span class="roster-count">${left.length}</span>
+    <span class="roster-of">${escapeHtml(t('warden.remaining_only'))}</span>
+    <button class="roster-toggle">${escapeHtml(
+      remainingOnly ? t('warden.show_all') : t('warden.show_remaining'))}</button>`;
+  // Reached through the host rather than by id. The structure test scans for
+  // `getElementById` and insists the id is in the static markup, which is the
+  // check that catches a typo before it blanks a screen mid-drill; a button
+  // this function just wrote is not in the markup and must not weaken it.
+  progress.querySelector('.roster-toggle').addEventListener('click', () => {
+    remainingOnly = !remainingOnly;
+    paint();
+  });
+
   const host = document.getElementById('roster');
-  if (!rows.length) { host.innerHTML = `<div class="empty">—</div>`; return; }
+  if (!rows.length) {
+    host.innerHTML = `<div class="empty">${escapeHtml(
+      remainingOnly && all.length ? t('warden.all_checked') : '—')}</div>`;
+    return;
+  }
 
   host.innerHTML = rows.map((row) => `
     <div class="row" style="display:block">

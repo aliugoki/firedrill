@@ -13,7 +13,8 @@ import { Api, Freshness } from './api.js';
 import { createTranslator, isRtl, formatDuration } from './i18n.js';
 import {
   drillControl, escapeHtml, explainSummary, exitPressure, healthLine,
-  describeReason, orderForWarden, rowNotes, staleness, tiles, timingLine, verdict,
+  describeReason, orderForWarden, outstanding, rowNotes, staleness, tiles,
+  timingLine, trend, verdict, whereToLook,
   wardenContact,
 } from './render.js';
 
@@ -37,6 +38,12 @@ let drillId = params.get('drill') || null;
 let drill = null;
 //: Ending a drill stops accountability, so the button arms before it acts.
 let endArmed = false;
+//: The last few minutes of "still to account for", so the screen can say
+//: whether the number is falling. Bounded: this runs for the length of a drill
+//: on a machine nobody restarts, and an unbounded array in a page that polls
+//: every three seconds is a leak with a stopwatch on it.
+const outstandingHistory = [];
+const HISTORY_LIMIT = 200;
 
 function applyLanguage() {
   t = createTranslator(lang);
@@ -45,6 +52,7 @@ function applyLanguage() {
   document.getElementById('safety').textContent = t('app.safety_notice');
   document.getElementById('title').textContent = t('app.title');
   document.getElementById('priority-title').textContent = t('board.priority');
+  document.getElementById('search-title').textContent = t('board.search');
   document.getElementById('timing-title').textContent = t('board.timing');
   document.getElementById('zones-title').textContent = t('board.zones');
   document.getElementById('exits-title').textContent = t('bottleneck.title');
@@ -123,6 +131,8 @@ function paint() {
     ? ''
     : v.reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join('');
 
+  paintHeadline(board);
+
   document.getElementById('tiles').innerHTML = tiles(board, t)
     .map((tile) => `<div class="tile ${escapeHtml(tile.tone)}">
         <div class="n">${tile.value ?? '—'}</div>
@@ -141,9 +151,81 @@ function paint() {
     ? `${t('board.elapsed')} ${formatDuration(board.elapsed_ms, lang)}` : '';
 
   paintPriority(board);
+  paintSearch(board);
   paintTiming();
   paintZones();
   paintExits();
+}
+
+function paintHeadline(board) {
+  const host = document.getElementById('headline');
+  const state = outstanding(board);
+  if (!state) { host.innerHTML = ''; return; }
+
+  if (board?.now_ms) {
+    outstandingHistory.push({ ts: board.now_ms, remaining: state.remaining });
+    if (outstandingHistory.length > HISTORY_LIMIT) outstandingHistory.shift();
+  }
+  const movement = trend(outstandingHistory, board?.now_ms ?? Date.now());
+
+  const tone = state.remaining === 0 ? 'green' : 'red';
+  const percent = Math.round(state.fraction * 100);
+  const movementLine = movement
+    ? `<div class="headline-trend ${escapeHtml(movement.direction)}">${
+        escapeHtml(t(`board.trend_${movement.direction}`))} ${
+        movement.direction === 'flat' ? '' : Math.abs(movement.delta)} ${
+        escapeHtml(t('board.trend_over'))} ${movement.seconds}s</div>`
+    : '';
+
+  host.innerHTML = `
+    <div class="headline-figure ${escapeHtml(tone)}">
+      <div class="headline-n">${state.remaining}</div>
+      <div class="headline-k">${escapeHtml(t('board.still_to_account'))}</div>
+      ${movementLine}
+    </div>
+    <div class="headline-progress">
+      <div class="headline-bar"><span></span></div>
+      <div class="headline-meta">${state.accounted} / ${state.expected} ${
+        escapeHtml(t('board.accounted'))}</div>
+    </div>`;
+
+  // Set after rendering rather than as an attribute hole. The structure test
+  // refuses an unescaped `${}` inside a quoted attribute and does not make an
+  // exception for a number somebody computed, which is the point of it: an
+  // exception is a judgement call, and the next one will be made in a hurry.
+  host.querySelector('.headline-bar span').style.width = `${percent}%`;
+}
+
+function paintSearch(board) {
+  const host = document.getElementById('search');
+  // The assembly zones as the server lists them, so a person standing in the
+  // car park is not put on the same list as one last seen on floor 3. Falls
+  // back to the roster's own assignments inside `whereToLook` when the zone
+  // request has not landed or has failed.
+  const panels = zoneFreshness.value;
+  const groups = whereToLook(board, t, Array.isArray(panels)
+    ? panels.map((panel) => panel.zone_id) : null);
+  if (!groups.length) {
+    host.innerHTML = `<div class="empty">${escapeHtml(t('board.nowhere_to_look'))}</div>`;
+    return;
+  }
+  host.innerHTML = groups.map((group) => `
+    <div class="row ${escapeHtml(group.atAssembly ? 'at-assembly' : '')}">
+      <span class="chip ${escapeHtml(
+        group.atAssembly ? 'YELLOW' : (group.unaccounted ? 'RED' : 'YELLOW'))}">${
+        group.count}</span>
+      <div class="who">
+        <div class="name">${escapeHtml(group.label)}</div>
+        <div class="advice">${escapeHtml(group.advice)}</div>
+        <div class="meta">${escapeHtml(group.names.join(', '))}${
+          group.count > group.names.length
+            ? ` +${group.count - group.names.length}` : ''}</div>
+        ${group.unaccounted && !group.atAssembly
+          ? `<div class="reason red">${group.unaccounted} ${
+              escapeHtml(t('board.unaccounted'))}</div>`
+          : ''}
+      </div>
+    </div>`).join('');
 }
 
 function paintDrillControl(board) {

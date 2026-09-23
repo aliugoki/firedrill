@@ -22,6 +22,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import json
+import re
 import shutil
 import socket
 import subprocess
@@ -129,6 +130,8 @@ class TestTheCommandCentre:
             "priority": "#priority",
             "zones": "#zones",
             "stale": "#stale",
+            "headline": "#headline",
+            "search": "#search",
         })
 
     def test_the_page_threw_nothing(self, page):
@@ -151,6 +154,34 @@ class TestTheCommandCentre:
         tiles = page["text"]["tiles"].lower()
         assert "212" in tiles
         assert "expected" in tiles
+
+    def test_the_number_that_has_to_reach_zero_is_on_screen(self, page):
+        """It was on none of the seven tiles. `expected` and `accounted for`
+        were both there and the difference between them, which is the only
+        figure a commander is working on, was not."""
+        headline = page["text"]["headline"].lower()
+        assert "still to account for" in headline, headline
+        # The arithmetic rather than a literal. The fixture's drill ages
+        # between runs, so a hard-coded 35 is a test that fails on a slow
+        # machine for a reason that has nothing to do with the screen.
+        lines = [line.strip() for line in headline.splitlines() if line.strip()]
+        remaining = int(lines[0])
+        accounted, expected = (int(n) for n in
+                               re.search(r"(\d+) */ *(\d+)", headline).groups())
+        assert remaining == expected - accounted, headline
+        assert remaining > 0, "this fixture has people outstanding"
+
+    def test_the_dispatch_list_says_what_to_do_about_each_group(self, page):
+        """Grouped by where those people were last seen, and split by what the
+        zone means. Sending a search team to the car park for somebody already
+        standing in it spends the only budget an evacuation has."""
+        search = page["text"]["search"].lower()
+        assert "send somebody to look" in search
+        assert "a warden must confirm them" in search
+        # And the search tier is read first, whatever the counts say: the car
+        # park holds eleven people and floor 1 holds two.
+        assert search.index("send somebody to look") < \
+            search.index("a warden must confirm them")
 
     def test_the_verdict_names_what_is_blocking(self, page):
         text = page["text"]["verdict"]
@@ -181,10 +212,32 @@ class TestTheWardenScreen:
         return probe(
             browser,
             f"{base}/evac/warden?drill=demo&zone={swept}&warden=warden-1",
-            {"sync": "#sync", "tiles": "#zone-tiles", "tabs": "#tabs"})
+            {"sync": "#sync", "tiles": "#zone-tiles", "tabs": "#tabs"},
+            # The device lands on the roster now, and `paintZone` only runs for
+            # the screen on top, so the counts have to be asked for.
+            steps=[{"click": '[data-screen="zone"]', "wait": 1500}])
 
     def test_the_page_threw_nothing(self, page):
         assert page["errors"] == []
+
+    def test_the_device_lands_on_the_work_rather_than_the_counts(
+            self, server, browser):
+        """A warden's whole job on this device is the list of people in front
+        of them. Landing on the counts made the first action of every drill a
+        tap on a tab, and the counts are what they check once at the end.
+
+        Its own probe, with no steps: the fixture above has to click to the
+        zone screen to read the counts, and what is being asserted here is what
+        is on screen before anybody touches it.
+        """
+        base, swept = server
+        page = probe(
+            browser,
+            f"{base}/evac/warden?drill=demo&zone={swept}&warden=warden-1",
+            {"roster": "visible:#screen-roster", "zone": "visible:#screen-zone"})
+        assert page["errors"] == []
+        assert page["text"]["roster"] is True, "the device did not open on the roster"
+        assert page["text"]["zone"] is False
 
     def test_the_zone_counts_arrived(self, page):
         tiles = page["text"]["tiles"].lower()
@@ -316,6 +369,9 @@ class TestTheGlueNothingUnitTests:
              "problems": "#sync-problems"},
             wait=500,
             steps=[
+                # The device lands on the roster, so the zone screen has to be
+                # brought up before its counts exist to read.
+                {"click": '[data-screen="zone"]'},
                 {"until": f"{counter} !== null"},
                 {"eval": f"window.__before = Number({counter}.innerText)"},
                 {"click": '[data-screen="roster"]'},

@@ -22,6 +22,10 @@ import {
   describeReason,
   describeBlocker,
   blockingReasons,
+  outstanding,
+  trend,
+  whereToLook,
+  TREND_MINIMUM_MS,
 } from '../js/render.js';
 
 const t = createTranslator('en');
@@ -900,5 +904,165 @@ describe('why the board is refusing an all-clear', () => {
     }, ar);
     assert.ok(!/not accounted for/.test(v.reasons[0]), v.reasons[0]);
     assert.match(v.reasons[0], /1/);
+  });
+});
+
+describe('the number that has to reach zero', () => {
+  // `expected` and `accounted` were both on the screen and their difference
+  // was not, so the one number a commander is actually working on was the one
+  // thing nobody had written down.
+  it('is the difference, not either half', () => {
+    const o = outstanding({ expected: 200, accounted: 186 });
+    assert.equal(o.remaining, 14);
+    assert.equal(o.fraction, 186 / 200);
+  });
+
+  it('never goes below zero when more people turn up than were expected', () => {
+    // Contractors and visitors get accounted for without being on the roster.
+    // A negative count reads as a bug and destroys trust in the whole tile.
+    assert.equal(outstanding({ expected: 10, accounted: 12 }).remaining, 0);
+  });
+
+  it('treats an empty board as empty rather than dividing by it', () => {
+    const o = outstanding({});
+    assert.equal(o.remaining, 0);
+    assert.equal(o.fraction, 0);
+  });
+
+  it('says nothing at all when there is no board', () => {
+    assert.equal(outstanding(null), null);
+  });
+});
+
+describe('whether it is getting better', () => {
+  const at = (ts, remaining) => ({ ts, remaining });
+
+  it('reads a fall as a fall, over the span it actually measured', () => {
+    const now = 100_000;
+    const d = trend([at(now - 40_000, 30), at(now - 20_000, 22), at(now, 18)], now);
+    assert.equal(d.direction, 'falling');
+    assert.equal(d.delta, -12);
+    assert.equal(d.seconds, 40);
+  });
+
+  it('calls a rise a rise', () => {
+    const now = 100_000;
+    assert.equal(trend([at(now - 30_000, 4), at(now, 9)], now).direction, 'rising');
+  });
+
+  it('reports no movement rather than staying quiet about it', () => {
+    // Twenty people stuck at twenty for a minute is the finding. Returning
+    // null here would have hidden the search that never started.
+    const now = 100_000;
+    assert.equal(trend([at(now - 30_000, 20), at(now, 20)], now).direction, 'flat');
+  });
+
+  it('refuses to draw a direction from too little history', () => {
+    const now = 100_000;
+    const span = TREND_MINIMUM_MS - 1_000;
+    assert.equal(trend([at(now - span, 30), at(now, 10)], now), null);
+  });
+
+  it('refuses when there is only one sample', () => {
+    assert.equal(trend([{ ts: 0, remaining: 5 }], 0), null);
+    assert.equal(trend([], 0), null);
+    assert.equal(trend(null, 0), null);
+  });
+
+  it('drops samples older than the window, and the direction with them', () => {
+    // A drill that has been running twenty minutes must not be described by
+    // what happened in its first thirty seconds.
+    const now = 500_000;
+    const d = trend(
+      [at(now - 400_000, 180), at(now - 50_000, 12), at(now - 20_000, 11),
+       at(now, 11)], now);
+    assert.equal(d.delta, -1);
+    assert.equal(d.seconds, 50);
+  });
+});
+
+describe('where to send somebody', () => {
+  const person = (id, state, zone) => ({
+    person_id: id, display_name: id, state, last_zone_id: zone,
+  });
+
+  it('groups what is left by where those people were last seen', () => {
+    const groups = whereToLook({ rows: [
+      person('a', 'UNACCOUNTED', 'floor-3'),
+      person('b', 'UNCERTAIN', 'floor-3'),
+      person('c', 'UNCERTAIN', 'floor-1'),
+      person('d', 'ACCOUNTED', 'assembly-north'),
+    ] }, t);
+    assert.deepEqual(groups.map((g) => g.zone), ['floor-3', 'floor-1']);
+    assert.equal(groups[0].count, 2);
+    assert.equal(groups[0].unaccounted, 1);
+  });
+
+  it('puts the people nobody can account for at the top', () => {
+    // A zone with nine merely-unconfirmed people is not where the search
+    // starts, and sorting by size alone put it there.
+    const rows = [person('a', 'UNACCOUNTED', 'roof')];
+    for (let i = 0; i < 9; i += 1) rows.push(person(`u${i}`, 'UNCERTAIN', 'lobby'));
+    assert.equal(whereToLook({ rows }, t)[0].zone, 'roof');
+  });
+
+  it('keeps the never-seen under their own heading instead of dropping them', () => {
+    const groups = whereToLook({ rows: [
+      person('a', 'UNACCOUNTED', null),
+      person('b', 'UNCERTAIN', 'floor-2'),
+    ] }, t);
+    const unseen = groups.find((g) => g.unseen);
+    assert.ok(unseen, 'a person no camera ever saw vanished from the list');
+    assert.equal(unseen.count, 1);
+    assert.equal(unseen.label, t('board.never_seen'));
+  });
+
+  it('holds the assembly point below every zone inside the building', () => {
+    // The whole point of the panel. Eleven people standing in the car park
+    // outranked two on floor 1 on count alone, and the instruction a commander
+    // read first was to search the car park.
+    const rows = [person('a', 'UNACCOUNTED', 'floor-1')];
+    for (let i = 0; i < 11; i += 1) {
+      rows.push(person(`w${i}`, 'UNACCOUNTED', 'assembly-south'));
+    }
+    const groups = whereToLook({ rows }, t, ['assembly-north', 'assembly-south']);
+    assert.equal(groups[0].zone, 'floor-1');
+    assert.equal(groups[0].atAssembly, false);
+    assert.equal(groups[1].zone, 'assembly-south');
+    assert.equal(groups[1].atAssembly, true);
+  });
+
+  it('tells each tier what to do about it', () => {
+    const groups = whereToLook({ rows: [
+      person('a', 'UNCERTAIN', 'floor-1'),
+      person('b', 'UNCERTAIN', 'assembly-north'),
+    ] }, t, ['assembly-north']);
+    assert.equal(groups[0].advice, t('board.go_look'));
+    assert.equal(groups[1].advice, t('board.needs_a_tick'));
+    assert.notEqual(groups[0].advice, groups[1].advice);
+  });
+
+  it('falls back to the roster when the zone request has not landed', () => {
+    // A failed zone request must not quietly turn the assembly point back into
+    // somewhere to send a search team.
+    const rows = [{ person_id: 'b', display_name: 'b', state: 'UNCERTAIN',
+                    last_zone_id: 'assembly-north',
+                    assigned_assembly_zone: 'assembly-north' }];
+    assert.equal(whereToLook({ rows }, t, null)[0].atAssembly, true);
+  });
+
+  it('keeps the never-seen with the search tier, not the car park', () => {
+    // Nobody has seen them, so nothing says they are outside.
+    const groups = whereToLook({ rows: [
+      person('a', 'UNACCOUNTED', null),
+      person('b', 'UNACCOUNTED', 'assembly-north'),
+    ] }, t, ['assembly-north']);
+    assert.equal(groups[0].unseen, true);
+    assert.equal(groups[0].atAssembly, false);
+  });
+
+  it('is empty when everybody is accounted for', () => {
+    assert.deepEqual(whereToLook({ rows: [person('a', 'ACCOUNTED', 'x')] }, t), []);
+    assert.deepEqual(whereToLook({}, t), []);
   });
 });

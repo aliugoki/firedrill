@@ -26,25 +26,42 @@
       <ul></ul>
     </section>
 
+    <!-- The number that has to reach zero, and whether it is falling. It was
+         on none of the seven tiles: "expected" and "accounted for" were both
+         there and the difference was not. -->
+    <section class="headline" id="headline"></section>
+
     <section class="tiles" id="tiles"></section>
 
     <div class="grid">
-      <div class="panel">
-        <h3 id="priority-title">Needs attention</h3>
-        <div id="priority"></div>
+      <div>
+        <!-- Where to send somebody, above who is missing. The same people
+             grouped by where they were last seen is a dispatch list; the list
+             of names is a log. -->
+        <div class="panel" id="search-panel">
+          <h3 id="search-title">Where to look</h3>
+          <div id="search"></div>
+        </div>
+        <div class="panel">
+          <h3 id="priority-title">Needs attention</h3>
+          <div id="priority"></div>
+        </div>
       </div>
       <div>
-        <div class="panel" style="margin-bottom:16px">
-          <h3 id="timing-title">Evacuation times</h3>
-          <div class="body" id="timing"></div>
-        </div>
-        <div class="panel" style="margin-bottom:16px">
+        <div class="panel">
           <h3 id="zones-title">Assembly zones</h3>
           <div id="zones"></div>
         </div>
         <div class="panel">
           <h3 id="exits-title">Exits</h3>
           <div class="body" id="exits"></div>
+        </div>
+        <!-- Last while a drill is running. A percentile is a post-drill
+             measure and nobody dispatches anybody on one; it held the top of
+             this column above the two panels that are operational. -->
+        <div class="panel">
+          <h3 id="timing-title">Evacuation times</h3>
+          <div class="body" id="timing"></div>
         </div>
       </div>
     </div>

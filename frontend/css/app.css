@@ -63,6 +63,9 @@
   --size-lead: 16px;
   --size-title: 19px;
   --size-display: 32px;
+  /* The one number a commander works on. Readable across a control room,
+   * which is the only requirement it has. */
+  --size-hero: 84px;
   --size-verdict: 28px;
 
   /* --- rhythm ----------------------------------------------------------- */
@@ -193,6 +196,92 @@ main { padding: var(--s5); max-width: 1680px; margin: 0 auto; }
 .verdict ul { margin: var(--s3) 0 0; padding-inline-start: var(--s4); color: var(--muted); }
 .verdict li { margin: var(--s1) 0; }
 
+/* --- the number that has to reach zero ------------------------------------- *
+ *
+ * Above the tiles and larger than any of them, because it is the only figure
+ * being worked on. The tiles are a breakdown of it and are read second.
+ */
+
+.headline {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  gap: var(--s5);
+  align-items: center;
+  padding: var(--s4) var(--s5);
+  margin-bottom: var(--s4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.headline:empty { display: none; }
+
+.headline-figure { display: grid; gap: var(--s1); }
+.headline-n {
+  font-size: var(--size-hero);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -3px;
+  font-variant-numeric: tabular-nums;
+}
+.headline-figure.red .headline-n { color: var(--red); }
+.headline-figure.green .headline-n { color: var(--green); }
+.headline-k {
+  font-size: var(--size-lead);
+  color: var(--muted);
+  letter-spacing: -.2px;
+}
+
+/* Direction, not a sparkline. "down 6 in the last 45s" is actionable and a
+ * shape a reader has to interpret at a glance is not. */
+.headline-trend {
+  font-size: var(--size-meta);
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+.headline-trend.falling { color: var(--green); }
+.headline-trend.rising { color: var(--red); }
+/* Flat is a finding: nobody has been accounted for in a minute. It is warned
+ * about rather than left in the quiet grey the absence of a trend uses. */
+.headline-trend.flat { color: var(--yellow); }
+
+.headline-progress { display: grid; gap: var(--s2); }
+.headline-bar {
+  height: 10px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.headline-bar span {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: var(--radius-pill);
+  background: var(--green);
+  transition: width .4s ease;
+}
+.headline-meta {
+  font-size: var(--size-meta);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 900px) {
+  .headline { grid-template-columns: minmax(0, 1fr); gap: var(--s3); }
+  :root { --size-hero: 60px; }
+}
+
+/* The dispatch list's two tiers. A zone to search reads as an instruction; an
+ * assembly point where a warden has yet to tick somebody off is held back so
+ * nobody sends a search team to the car park. */
+#search .advice {
+  font-size: var(--size-meta);
+  color: var(--accent);
+  margin-top: var(--s1);
+}
+#search .row.at-assembly { opacity: .82; }
+#search .row.at-assembly .advice { color: var(--yellow); }
+
 /* --- counts ---------------------------------------------------------------- */
 
 .tiles {
@@ -257,6 +346,10 @@ main { padding: var(--s5); max-width: 1680px; margin: 0 auto; }
   gap: var(--s4);
   align-items: start;
 }
+/* The column stacks its own panels. The spacing used to be an inline margin on
+ * each one, which meant the last panel in a column carried a margin nothing
+ * needed and a new panel arrived without one. */
+.grid > div { display: grid; gap: var(--s4); }
 @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
 
 .panel {
@@ -613,3 +706,39 @@ textarea {
 #sweep, #escalate, #note { border-radius: var(--radius); font-size: var(--size-lead); }
 #escalate { border-color: var(--orange-edge); color: var(--orange); }
 #escalate:hover { background: var(--orange-bg); border-color: var(--orange); }
+
+/* --- what is left on this tablet ------------------------------------------- *
+ *
+ * The roster lands filtered to the people still to check, so the count and the
+ * way back to everyone have to be next to the list rather than in a menu.
+ */
+
+body.warden .roster-progress {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--line-soft);
+}
+body.warden .roster-count {
+  font-size: var(--size-display);
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+body.warden .roster-of { color: var(--muted); font-size: var(--size-body); }
+/* Pushed to the end, and a full touch target: a warden is tapping this with a
+ * gloved thumb in the dark. */
+body.warden .roster-toggle {
+  margin-inline-start: auto;
+  min-height: 44px;
+  padding: 0 var(--s4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--size-body);
+  cursor: pointer;
+}
+body.warden .roster-toggle:hover { background: var(--surface-3); }

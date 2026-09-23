@@ -575,3 +575,123 @@ export function describeBlocker(blocker, t) {
       return `${zone}${words}`;
   }
 }
+
+/**
+ * The one number a commander is actually working toward: zero.
+ *
+ * It was on none of the seven tiles. "Expected 212" and "accounted for 176"
+ * were both there and the difference was not, so the number that has to reach
+ * zero was something you worked out in your head, twice a minute, under
+ * pressure. The verdict said it in prose; prose is not a number you can watch
+ * fall.
+ */
+export function outstanding(board) {
+  if (!board) return null;
+  const expected = board.expected ?? 0;
+  const accounted = board.accounted ?? 0;
+  const remaining = Math.max(0, expected - accounted);
+  return {
+    remaining,
+    expected,
+    accounted,
+    fraction: expected ? accounted / expected : 0,
+  };
+}
+
+/**
+ * Whether it is getting better, from the board's own history.
+ *
+ * Twenty people outstanding at minute five means two different things: twenty
+ * down from sixty, which is an evacuation working, or twenty stuck at twenty
+ * for three minutes, which is a search that has not started. The screen showed
+ * the same "20" for both.
+ *
+ * Says nothing until there is enough history to mean anything. A trend drawn
+ * from two samples ten seconds apart is noise presented as a direction, and a
+ * commander acting on noise is worse off than one acting on nothing.
+ */
+export const TREND_WINDOW_MS = 60_000;
+export const TREND_MINIMUM_MS = 25_000;
+
+export function trend(history, now = Date.now()) {
+  const samples = (history || []).filter(
+    (s) => s && typeof s.remaining === 'number' && now - s.ts <= TREND_WINDOW_MS);
+  if (samples.length < 2) return null;
+  const oldest = samples[0];
+  const newest = samples[samples.length - 1];
+  const span = newest.ts - oldest.ts;
+  if (span < TREND_MINIMUM_MS) return null;
+
+  const delta = newest.remaining - oldest.remaining;
+  return {
+    delta,
+    seconds: Math.round(span / 1000),
+    // `flat` is a finding, not an absence of one: nobody has been accounted
+    // for in a minute, and that is the case worth a commander's attention.
+    direction: delta < 0 ? 'falling' : delta > 0 ? 'rising' : 'flat',
+  };
+}
+
+/**
+ * Where to send somebody, rather than a list of who is missing.
+ *
+ * Thirty-four names each naming a different zone is a log. The same
+ * information grouped by where those people were last seen is a dispatch
+ * list: "floor-3: four people" is an instruction and "Dania Rauf, track went
+ * stale" is not.
+ *
+ * The split that matters is not the zone, it is what the zone means. Somebody
+ * last seen on floor 3 needs a search team. Somebody last seen standing in the
+ * car park needs a warden to walk over and tick them off, and sending a search
+ * team into the building for them spends the only budget there is -- the first
+ * version of this panel listed both under the same heading and sorted the car
+ * park above two floors.
+ *
+ * People nobody has ever seen are grouped under their own heading rather than
+ * dropped. They are the ones a search cannot start from, and they are exactly
+ * who a warden has to be sent to look for by name. They sit with the search
+ * tier, because until something says otherwise they are inside.
+ */
+export function whereToLook(board, t, assemblyZones = null) {
+  const rows = (board?.rows || []).filter((r) => r.state !== 'ACCOUNTED');
+
+  // The zone panels when the caller has them, and the roster's own assignments
+  // otherwise. A failed zone request must not silently turn the assembly point
+  // back into somewhere to send a search team.
+  const assembly = assemblyZones
+    ? new Set(assemblyZones)
+    : new Set((board?.rows || [])
+      .map((r) => r.assigned_assembly_zone).filter(Boolean));
+
+  const byZone = new Map();
+  for (const row of rows) {
+    const zone = row.last_zone_id || null;
+    const key = zone ?? '__unseen__';
+    if (!byZone.has(key)) {
+      byZone.set(key, { zone, people: [], unseen: zone === null });
+    }
+    byZone.get(key).people.push(row);
+  }
+
+  const worst = (group) => group.people.filter((p) => p.state === 'UNACCOUNTED').length;
+  return [...byZone.values()]
+    .map((group) => {
+      const atAssembly = group.zone !== null && assembly.has(group.zone);
+      return {
+        zone: group.zone,
+        label: group.zone ?? t('board.never_seen'),
+        unseen: group.unseen,
+        atAssembly,
+        advice: t(atAssembly ? 'board.needs_a_tick' : 'board.go_look'),
+        count: group.people.length,
+        unaccounted: worst(group),
+        names: group.people.slice(0, 3).map((p) => p.display_name),
+      };
+    })
+    // Inside the building first, whatever the counts say. Then most
+    // unaccounted, then most people: a zone with four people nobody can
+    // account for outranks one with nine who are merely unconfirmed.
+    .sort((a, b) => (Number(a.atAssembly) - Number(b.atAssembly))
+      || (b.unaccounted - a.unaccounted)
+      || (b.count - a.count));
+}
