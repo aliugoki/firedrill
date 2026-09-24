@@ -22,6 +22,23 @@ Source revisions at copy time, 2026-09-10:
 4. Anything that needs a database session, a Redis client or a web framework was
    **not** vendored. Those dependencies are why the file was left behind.
 
+Rules 1 and 2 are now **checked rather than trusted**. Every vendored file is
+compared line by line against `git show <commit>:<path>` in its source repo,
+taken from the file's own header, and the only difference accepted is an
+import-path rewrite that imports the same symbols. Anything else — a line
+added, a line removed, an operator changed — fails the gate and names the line.
+
+That was the one rule with nothing behind it. The existing tests prove a
+vendored file imports, still declares its origin, does not reach back into its
+source repo, and is credited honestly in the usage table below; none of them
+looks at what the code does, so a one-line fix made here rather than upstream
+passed every gate — and the next re-vendor would silently revert it, which is
+exactly what rule 1 exists to prevent.
+
+The comparison skips when a source repo is not checked out, which is the normal
+state of an edge node. A separate test fails if *every* comparison skips, so a
+suite that has quietly stopped checking says so.
+
 ## From VisionTrack
 
 | Vendored as | Origin | Loc | Why |

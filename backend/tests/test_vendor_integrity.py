@@ -9,7 +9,10 @@ Phase 3.
 """
 
 import importlib
+import os
 import pkgutil
+import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -170,3 +173,106 @@ class TestTheUsageReviewIsCheckedRatherThanTrusted:
             if not any(f"app/{path}" in row for path in used):
                 wrong.append(f"{filename}: row names none of {sorted(used)}")
         assert wrong == []
+
+
+class TestAVendoredFileStillMatchesUpstream:
+    """The one vendoring rule nothing checked, and the one `CLAUDE.md` states
+    most firmly: "Don't edit a vendored file to fix an upstream bug. Fix it
+    upstream, re-vendor, record it in docs/EVAC120_PROVENANCE.md."
+
+    The tests above prove a vendored file imports, still declares where it came
+    from, does not reach back into its source repo, and is credited honestly in
+    the usage table. None of them looks at what the code *does*, so a one-line
+    fix made here rather than upstream passed every gate -- and the next
+    re-vendor would silently revert it, which is the failure the rule exists to
+    prevent.
+
+    Each header carries the repo, the commit and the upstream path, so the
+    comparison needs nothing that is not already written down.
+    """
+
+    #: Where each source repo lives. `CLAUDE.md` fixes these paths and says the
+    #: repos are read-only from here; an environment variable overrides them
+    #: for a checkout somewhere else.
+    REPOS = {
+        "VisionTrack": Path(
+            os.environ.get("EVAC_VISIONTRACK_REPO", "~/visiontrack/visiontrack")
+        ).expanduser(),
+        "DeepStream": Path(
+            os.environ.get("EVAC_DEEPSTREAM_REPO", "~/deploy/deepstream")
+        ).expanduser(),
+    }
+
+    #: How many lines the provenance header occupies, including its rules.
+    HEADER_LINES = 7
+
+    @staticmethod
+    def provenance(path: Path) -> tuple[str, str, str]:
+        """(repo, commit, upstream path), read from the header itself."""
+        lines = path.read_text().splitlines()
+        match = re.match(r"#\s*VENDORED from (\w+) @ (\S+)", lines[1])
+        assert match, f"{path.name}: second line is not a VENDORED header"
+        upstream = lines[2].lstrip("# ").strip()
+        return match.group(1), match.group(2), upstream
+
+    def upstream_source(self, path: Path) -> str:
+        repo_name, commit, upstream = self.provenance(path)
+        repo = self.REPOS.get(repo_name)
+        if repo is None or not (repo / ".git").exists():
+            pytest.skip(f"{repo_name} is not checked out here")
+        found = subprocess.run(
+            ["git", "-C", str(repo), "show", f"{commit}:{upstream}"],
+            capture_output=True, text=True)
+        if found.returncode != 0:
+            pytest.skip(f"{repo_name} has no {commit}:{upstream} "
+                        f"({found.stderr.strip()[:80]})")
+        return found.stdout
+
+    @staticmethod
+    def is_an_import_rewrite(theirs: str, ours: str) -> bool:
+        """Whether one differing line is the rewrite the header declares.
+
+        "Imports rewritten to vendor paths" is the only change the header
+        permits without an entry in the provenance document, so it is the only
+        difference accepted here. Anything else is an edit.
+        """
+        pattern = r"^(from|import)\s+app\.(modules|core|services)\.[\w.]+"
+        if not re.match(pattern, theirs.strip()):
+            return False
+        if not re.match(r"^(from|import)\s+app\.vendor\.[\w.]+", ours.strip()):
+            return False
+        # The symbols being imported have to be identical: rewriting a path is
+        # allowed, quietly importing something else under cover of it is not.
+        return theirs.split(" import ")[-1] == ours.split(" import ")[-1]
+
+    @pytest.mark.parametrize("path", VENDORED_FILES, ids=lambda p: p.name)
+    def test_it_differs_from_upstream_only_by_its_import_rewrites(self, path):
+        theirs = self.upstream_source(path).splitlines()
+        ours = path.read_text().splitlines()[self.HEADER_LINES:]
+
+        assert len(ours) == len(theirs), (
+            f"{path.name} is {len(ours)} lines against upstream's "
+            f"{len(theirs)}; a vendored file that has grown or shrunk has been "
+            "edited here rather than upstream")
+
+        edits = [
+            f"line {n}: upstream {t!r} -> vendored {o!r}"
+            for n, (t, o) in enumerate(zip(theirs, ours), start=1)
+            if t != o and not self.is_an_import_rewrite(t, o)
+        ]
+        assert edits == [], (
+            f"{path.name} has been edited here rather than upstream:\n  "
+            + "\n  ".join(edits))
+
+    def test_the_comparison_is_actually_running(self):
+        """Guards the parametrised test above.
+
+        Every one of those skips when a source repo is missing, which is the
+        normal state of an edge node and the right behaviour there -- but a
+        suite where all of them skip proves nothing, and would do so quietly.
+        """
+        reachable = [name for name, repo in self.REPOS.items()
+                     if (repo / ".git").exists()]
+        if not reachable:
+            pytest.skip("neither source repo is checked out here")
+        assert VENDORED_FILES, "no vendored files to compare"
