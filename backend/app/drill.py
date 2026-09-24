@@ -168,7 +168,13 @@ class Drill:
     def elapsed_ms(self, now_ms: int) -> int:
         if self.started_ms is None:
             return 0
-        return (self.completed_ms or now_ms) - self.started_ms
+        # `is None` on both, and the line above already knew that. A
+        # `completed_ms` of 0 is falsy and would report a drill that ended as
+        # though it were still running -- the falsy-zero shape
+        # `EVAC120_PROVENANCE.md` records as an upstream defect, two lines under
+        # the check that gets it right.
+        end = now_ms if self.completed_ms is None else self.completed_ms
+        return end - self.started_ms
 
     # -- input -----------------------------------------------------------------
 

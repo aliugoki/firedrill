@@ -167,9 +167,25 @@ epoch milliseconds.
 timestamp, and PTS starts at 0 for the first frame of a stream.
 
 Pinned by `TestZeroTimestampBug` in `backend/tests/test_vendor_visiontrack.py`
-as a strict xfail, so it flips to XPASS the moment it is fixed upstream. Phase 1
-must normalise timestamps to epoch milliseconds at the ingest boundary, or fix
-the check when this logic is reimplemented in `presence_fsm.py`.
+as a strict xfail, so it flips to XPASS the moment it is fixed upstream.
+
+**The obligation on Phase 1 was met, and the pattern came back anyway.**
+`normalise_timestamp` converts a camera's PTS to epoch milliseconds and refuses
+a camera event that arrives without a `stream_origin_ms`, so the boundary is
+sound. But `or` on a timestamp reappeared twice in code written here:
+
+| Site | What a zero does |
+|---|---|
+| `build_board`: `state.drill_started_ms or now_ms` | The health window collapses to `(now, now)`. Measured: a drill blind for 60% of its length reported `blind_fraction` **0%**, and the caveat called the blackout non-blinding. |
+| `Drill.elapsed_ms`: `(self.completed_ms or now_ms)` | A completed drill reads as still running — two lines under the `started_ms is None` check that gets it right. |
+
+Both are `is None` now, which keeps the behaviour the fallback was for: an
+unstarted drill genuinely has no window, and a running one genuinely measures
+to now. Neither was reachable through today's production path, because a
+`DRILL_STARTED` event carries wall clock — but `Event` validation explicitly
+permits `ts_ms` of 0, and unreachable by accident, through a guard somewhere
+else, is not the same as correct. Both are pinned by tests that set the
+timestamp to 0 directly.
 
 ### 2. Outbox configuration is read at two different times
 

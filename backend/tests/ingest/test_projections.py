@@ -524,3 +524,61 @@ class TestWhyTheSystemLostSightOfSomebody:
         ingestor.state.presence.mark_camera_degraded("cam-9", T0 + 30_000,
                                                      "offline")
         assert "cam-9" in self.board_for(ingestor).rows[0].blinded_by
+
+
+class TestAStartTimestampOfExactlyZero:
+    """The falsy-zero defect, in our own reimplementation.
+
+    `EVAC120_PROVENANCE.md` records it against the vendored `rule_state.py`:
+    `since = state.condition_since_ms or now_ms`, where a timestamp of exactly
+    0 is falsy and silently restarts the hold timer. It is pinned upstream as a
+    strict xfail, and the document says Phase 1 must either normalise
+    timestamps at the ingest boundary or avoid the check when the logic is
+    reimplemented.
+
+    The normalisation was built -- `normalise_timestamp` converts a camera's
+    PTS and refuses a camera event with no `stream_origin_ms`. The pattern came
+    back anyway, in `build_board`, where the consequence is worse than upstream:
+    the health window collapses to zero length and a drill that was blind for
+    most of its length reports that it saw everything.
+
+    Not reachable through today's production path, because a DRILL_STARTED
+    event carries wall clock. Unreachable by accident, through a guard
+    somewhere else, is not the same as correct -- and `Event` validation
+    explicitly permits `ts_ms` of 0.
+    """
+
+    def test_the_health_window_starts_at_the_drill_not_at_now(self, ingestor):
+        from app.ingest.health import Component
+
+        ingestor.state.drill_started_ms = 0
+        ingestor.state.health.degrade(Component.CAMERA, "*", 0, "all dark")
+        ingestor.state.health.recover(Component.CAMERA, "*", 60_000)
+
+        board = build_board(ingestor.state, roster_of(("EMP-1", "A", "north",
+                                                       "Eng", True)),
+                            now_ms=100_000)
+        assert board.health.blind_fraction == pytest.approx(0.6, abs=0.01), (
+            "the window collapsed to (now, now), so a drill blind for 60% of "
+            "its length reported that it saw everything")
+
+    def test_and_the_caveat_stops_calling_a_blackout_non_blinding(self, ingestor):
+        from app.ingest.health import Component
+
+        ingestor.state.drill_started_ms = 0
+        ingestor.state.health.degrade(Component.CAMERA, "*", 0, "all dark")
+        ingestor.state.health.recover(Component.CAMERA, "*", 60_000)
+
+        board = build_board(ingestor.state, roster_of(("EMP-1", "A", "north",
+                                                       "Eng", True)),
+                            now_ms=100_000)
+        assert "non-blinding" not in (board.health.caveat() or "")
+
+    def test_an_unstarted_drill_still_has_no_window(self, ingestor):
+        # The reason the fallback exists. `None` means the drill has not begun,
+        # and a window from the epoch to now would be a fabrication.
+        assert ingestor.state.drill_started_ms is None
+        board = build_board(ingestor.state, roster_of(("EMP-1", "A", "north",
+                                                       "Eng", True)),
+                            now_ms=100_000)
+        assert board.health.blind_fraction == 0.0

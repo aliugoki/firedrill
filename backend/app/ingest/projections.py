@@ -441,7 +441,16 @@ def build_board(
                 blinded | (state.health.blinded_targets_at(last_seen)
                            if last_seen is not None else set())))))
 
-    start = state.drill_started_ms or now_ms
+    # `is None`, not `or`. A start of exactly 0 is falsy, and this is the
+    # falsy-zero defect `EVAC120_PROVENANCE.md` records against the vendored
+    # `rule_state.py` -- reintroduced in the reimplementation the same document
+    # says to watch. Here it collapses the health window to zero length, so a
+    # drill that was blind for 60% of its length reports `blind_fraction` 0 and
+    # the caveat calls a camera blackout non-blinding.
+    #
+    # `None` still means now: an unstarted drill has no window, which is the
+    # honest answer and the reason the fallback exists at all.
+    start = now_ms if state.drill_started_ms is None else state.drill_started_ms
     return LiveBoard(
         now_ms=now_ms, rows=tuple(rows),
         health=state.health.summary(start, now_ms),

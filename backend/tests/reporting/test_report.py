@@ -167,6 +167,30 @@ class TestTheVerdictOrder:
         assert "no live drill has run" in "\n".join(validate(**CLEAN).describe())
 
 
+class TestACompletionTimestampOfExactlyZero:
+    """The same falsy-zero shape, two lines under the check that gets it right.
+
+    `elapsed_ms` guards `started_ms is None` explicitly and then wrote
+    `(self.completed_ms or now_ms)`, so a drill completed at timestamp 0 reads
+    as one still running.
+    """
+
+    def test_a_completed_drill_does_not_read_as_still_running(self):
+        drill = drill_with(people=1)
+        drill.started_ms = 0
+        drill.completed_ms = 0
+        assert drill.elapsed_ms(500_000) == 0, (
+            "a drill that started and ended at 0 lasted no time; reading "
+            "`now` for the end makes it look like it is still going")
+
+    def test_a_running_drill_still_measures_to_now(self):
+        # The reason the fallback exists.
+        drill = drill_with(people=1)
+        drill.started_ms = 0
+        drill.completed_ms = None
+        assert drill.elapsed_ms(500_000) == 500_000
+
+
 class TestTheLinkToCentralReachesTheRecord:
     """`Component.CENTRAL_LINK` has been in the vocabulary and in the
     non-blinding set since health was written, and the only thing that ever
