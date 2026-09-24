@@ -241,6 +241,37 @@ particular drill could not establish.
 
 ---
 
+### The one failure the cameras cannot see, swept rather than staged
+
+A stable misidentification — one person's face confidently matched to another
+employee's name, on a track nobody else is claiming — leaves no camera evidence
+at all. The identity machine has nothing to conflict with, the presence machine
+watches a real person walk to the muster point, and the board reports the
+*other* employee safe. Nothing in `core/` can detect it; the manual roll-call
+is the only thing that does.
+
+That claim used to rest on one deliberately constructed pair. It is now swept:
+injection mixes are turned up and ground truth is asked who actually arrived,
+and the two directions are asserted separately.
+
+| Mix | Camera-only false accepts | What is asserted |
+|---|---|---|
+| Wrong identity, alone or under track fragmentation | Yes | A finished roll-call catches every one; the drill reports FAIL |
+| All ten knobs at once | Yes | Same, and the fold carries no blocker — nothing for an operator to notice |
+| Look-alikes with ID switches | **None in 119 seeds** | Must stay none: a look-alike close enough to test the margin gate is a `CONFLICT`, not a coin-flip winner (invariant 3) |
+| Misassociation with a lossy face pipeline | **None in 119 seeds** | Must stay none: `identity_fsm.gate` refuses a face pinned to the wrong body on the structure of the association, not on its score |
+
+The second half is the more valuable one. Those two mixes are failure modes the
+design claims to refuse outright, and if either ever starts putting a name on
+the wrong body, the roll-call quietly becomes the only defence against
+something the system was supposed to handle itself.
+
+The "all ten knobs" case is not designed: it is the mix and seed that first
+produced a false accept during a sweep of sixty random combinations, kept
+because a case found is worth more than a case invented.
+
+---
+
 ## 6. A worked example
 
 From a 200-agent simulated drill under the realistic injection profile,
