@@ -265,3 +265,23 @@ Three properties worth knowing before Phase 2 uses it:
 
 Steps 1 to 3 need the GPU host and a built image. Steps 4 and 5 need recorded
 footage. None of it can be faked, and none of it is faked here.
+
+**Steps 1 to 3 are not this repository's to run**, and that is worth stating
+because the list above reads like a backlog. They act on `ai-worker-ds` — its
+pipeline wiring, its SGIE configs, its image — which lives in VisionTrack, and
+`CLAUDE.md` makes all three source repositories read-only from here. VisionTrack
+has its own ordered plan for them in
+`~/visiontrack-checkpoints/p2-3-deferred/RUNBOOK.md`, with pre-flight
+checkpoints, a rollback tag and a success signal, and the parked code to
+re-enable rather than rewrite.
+
+So §2.3 is a **recommendation to that team**, not work queued here: their
+runbook opens with a pinned-pyds rebuild, and the argument above is that
+removing the SGIE is cheaper and should be tried first. What EVAC-120 owns is
+everything downstream of the embeddings, which is built and tested against the
+simulator, and steps 4 and 5 the day real footage exists.
+
+Checked on this host: the GPU is present and so is a `visiontrack-ai-worker`
+image, so the test is runnable — by whoever owns that stack. The
+SGIE-disabled pipeline parked in that checkpoint directory is the *stable
+baseline*, not the proposed test, so the §2.3 inference remains untried.
