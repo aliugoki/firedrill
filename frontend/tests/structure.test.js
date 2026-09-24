@@ -163,9 +163,18 @@ describe('the glue reads what render.js hands it', () => {
     themeToggle: ['theme', 'next', 'label', 'chrome'],
   };
 
+  //: The same rule for `queue.js`, added after `reconcileSync.refused` was
+  //: found computed and unread. Its docstring promised a refused action was
+  //: removed rather than retried forever, and the value that would have done
+  //: it reached nothing, so the row was resent every sync for the whole drill.
+  const RETURNED_BY_QUEUE = {
+    reconcileSync: ['acknowledged', 'unanswered', 'refused', 'refusalMessages'],
+    deviceIdentity: ['deviceId', 'persisted'],
+  };
+
   const glue = ['js/command.js', 'js/warden.js'].map(code).join('\n');
 
-  for (const [fn, keys] of Object.entries(RETURNED)) {
+  for (const [fn, keys] of Object.entries({ ...RETURNED, ...RETURNED_BY_QUEUE })) {
     it(`every value ${fn} returns is read somewhere`, () => {
       // Only for the functions the glue actually calls. `warden.js` has no use
       // for `exitPressure` and that is not a defect.
@@ -178,10 +187,13 @@ describe('the glue reads what render.js hands it', () => {
   }
 
   it('the table describes functions that exist', () => {
-    const source = code('js/render.js');
-    for (const fn of Object.keys(RETURNED)) {
-      assert.match(source, new RegExp(`export function ${fn}\\b`),
-        `${fn} is listed here but no longer exported`);
+    for (const [file, table] of [['js/render.js', RETURNED],
+                                 ['js/queue.js', RETURNED_BY_QUEUE]]) {
+      const source = code(file);
+      for (const fn of Object.keys(table)) {
+        assert.match(source, new RegExp(`export function ${fn}\\b`),
+          `${fn} is listed here but no longer exported from ${file}`);
+      }
     }
   });
 });

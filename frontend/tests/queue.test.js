@@ -397,3 +397,91 @@ describe('the device knowing which device it is', () => {
     assert.equal(second.deviceId, first.deviceId);
   });
 });
+
+describe('a refused action does not follow the warden round all drill', () => {
+  /**
+   * `reconcileSync` states the contract in its own docstring: "a refused
+   * action is *removed* rather than retried forever ... retrying it every
+   * thirty seconds would bury the warden's real work behind a permanent
+   * error". It returns `outcome.refused` to that end, and nothing outside
+   * these tests ever read it.
+   *
+   * So the row stayed in IndexedDB and went back to the server on every sync
+   * for the rest of the drill: the pending count a warden watches to know
+   * their work landed never cleared, and the server wrote an audit entry each
+   * time it refused it again.
+   */
+  const answerFor = (pending) => ({
+    accepted: pending.filter((p) => p.zone_id === 'assembly-north').length,
+    duplicates: 0,
+    settled: pending.filter((p) => p.zone_id === 'assembly-north')
+      .map((p) => p.device_seq),
+    refusals: pending.filter((p) => p.zone_id !== 'assembly-north')
+      .map((p) => ({ device_seq: p.device_seq, reason: 'not assigned' })),
+  });
+
+  /** Exactly what `warden.js` does with the outcome. */
+  const applySync = async (queue) => {
+    const pending = await queue.pending();
+    const outcome = reconcileSync(pending, answerFor(pending));
+    await queue.acknowledge(
+      outcome.acknowledged.concat(outcome.refused.map((r) => r.device_seq)));
+    return outcome;
+  };
+
+  const withOneOfEach = async () => {
+    const queue = makeQueue();
+    await queue.enqueue({ kind: 'CONFIRM_PRESENT', warden_id: 'w',
+                          zone_id: 'assembly-north', ts_ms: 1, subject: 'emp:A' });
+    await queue.enqueue({ kind: 'CONFIRM_PRESENT', warden_id: 'w',
+                          zone_id: 'assembly-south', ts_ms: 2, subject: 'emp:B' });
+    return queue;
+  };
+
+  it('leaves the queue empty after one sync', async () => {
+    const queue = await withOneOfEach();
+    await applySync(queue);
+    assert.equal(await queue.depth(), 0);
+  });
+
+  it('and does not resend it on the next thirty', async () => {
+    const queue = await withOneOfEach();
+    await applySync(queue);
+    for (let i = 0; i < 30; i += 1) {
+      const outcome = await applySync(queue);
+      assert.deepEqual(outcome.refusalMessages, [],
+        'the server was asked to refuse it again');
+    }
+  });
+
+  it('still reports the refusal the one time it happens', async () => {
+    // Deleting the row without keeping the message would turn "shown forever"
+    // into "shown once and lost", which is worse: the warden has to know this
+    // action did not land and must be reported another way.
+    const queue = await withOneOfEach();
+    const outcome = await applySync(queue);
+    assert.equal(outcome.refusalMessages.length, 1);
+    assert.match(outcome.refusalMessages[0], /seq 2/);
+  });
+
+  it('does not take the accepted one with it', async () => {
+    const queue = await withOneOfEach();
+    const outcome = await applySync(queue);
+    assert.deepEqual(outcome.acknowledged, [1]);
+    assert.deepEqual(outcome.refused.map((r) => r.device_seq), [2]);
+  });
+
+  it('keeps an unanswered action queued, which is the opposite case', async () => {
+    // The guard. Silence is not a refusal: an action the server answered for
+    // neither way must survive to be sent again.
+    const queue = makeQueue();
+    await queue.enqueue({ kind: 'CONFIRM_PRESENT', warden_id: 'w',
+                          zone_id: 'assembly-north', ts_ms: 1, subject: 'emp:A' });
+    const pending = await queue.pending();
+    const outcome = reconcileSync(pending, { accepted: 0, settled: [], refusals: [] });
+    await queue.acknowledge(
+      outcome.acknowledged.concat(outcome.refused.map((r) => r.device_seq)));
+    assert.equal(await queue.depth(), 1);
+    assert.equal(outcome.unanswered.length, 1);
+  });
+});

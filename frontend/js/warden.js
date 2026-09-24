@@ -63,6 +63,16 @@ let remainingOnly = true;
 let lastHeadcount = null;
 //: Which composer is open, if any: 'ESCALATE', 'NOTE', or null.
 let composing = null;
+//: Refusals accumulate for the drill rather than being recomputed each sync.
+//:
+//: They used to be reassigned from the latest response, which worked only
+//: because the refused row stayed in the queue and was resent forever -- so
+//: the server refused it again every ten seconds and the message reappeared.
+//: Deleting the row, which is what the queue's own contract says to do, would
+//: have made the warning vanish on the next sync. A warden seeing an error
+//: once and never again is worse off than one seeing it repeatedly: the whole
+//: point is that they know this action did not land and must report it another
+//: way.
 let refusals = [];
 //: Actions the server answered for neither way. Normally empty: the next sync
 //: sends them again. Worth showing because a queue that never empties means
@@ -191,8 +201,17 @@ async function sync() {
   try {
     const response = await api.wardenSync(drillId, pending.map(toWire));
     const outcome = reconcileSync(pending, response);
-    await queue.acknowledge(outcome.acknowledged);
-    refusals = outcome.refusalMessages;
+    // Refused rows go too. `reconcileSync` says so in its own docstring -- "a
+    // refused action is *removed* rather than retried forever" -- and nothing
+    // read `outcome.refused`, so a malformed or out-of-scope action sat in
+    // IndexedDB and was resent on every sync for the rest of the drill. The
+    // queue never emptied, so the pending count a warden watches to know their
+    // work landed never cleared, and the server wrote an audit entry each time.
+    await queue.acknowledge(
+      outcome.acknowledged.concat(outcome.refused.map((row) => row.device_seq)));
+    for (const message of outcome.refusalMessages) {
+      if (!refusals.includes(message)) refusals.push(message);
+    }
     unanswered = outcome.unanswered;
     await refreshZone();
   } catch (error) {
