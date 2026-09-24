@@ -190,9 +190,21 @@ timestamp to 0 directly.
 ### 2. Outbox configuration is read at two different times
 
 `OUTBOX_DIR` is a module-level constant read at import; `COMPANY_ID` is read
-from the environment on every `_path()` call. Phase 3's config layer must set
-`OUTBOX_DIR` from `EVAC_OUTBOX_DIR` **before** first import of the module.
-Not a bug upstream, but a trap worth naming.
+from the environment on every `_path()` call. So the two halves of one
+configuration are fixed at different moments, and setting `OUTBOX_DIR` after
+the module is imported has no effect. Not a bug upstream, but a trap worth
+naming.
+
+**Phase 3 resolved it by not importing the module.** `app/ingest/replication.py`
+reimplemented the store-and-forward rather than vendoring it, and the usage
+table above records `outbox.py` as read for its design and **not imported** —
+a claim `test_vendor_integrity.py` enforces in both directions, so the day
+anything does import it the table has to say so.
+
+This section used to read "Phase 3's config layer must set `OUTBOX_DIR` …
+before first import", which was an obligation on a phase that is finished and
+that met it by a route the sentence did not anticipate. The trap is kept named
+here for whoever imports the module later; it is not outstanding work.
 
 ## Limits of the vendored identity code
 
