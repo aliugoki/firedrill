@@ -243,6 +243,82 @@ class TestWardenZoneScoping:
         assert len(body["rejected"]) == 1
         assert "assembly-south" in body["rejected"][0]
 
+    def test_a_headcount_does_not_eat_the_next_confirmation(self, client):
+        """The worst thing this path can do, and it took an ordinary action to
+        cause it.
+
+        Duplicate detection compared the device's sequence against
+        `DeviceQueue.next_seq` -- which is the *event stream* counter, and
+        `record_headcount` consumes one too. So a warden submitting a physical
+        count between two syncs pushed it past their device's numbering, and
+        their next confirmation was counted a duplicate, discarded, and
+        reported in `settled`. The device deletes what the server settles, so
+        the action was gone from both sides with each believing it had landed.
+
+        Invariant 9 makes a warden's confirmation the final authority. This
+        destroyed one silently.
+        """
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+
+        def confirm(seq, subject):
+            return client.post(
+                f"/api/evac/drills/{drill_id}/warden/sync", headers=WARDEN,
+                json={"actions": [{
+                    "kind": "CONFIRM_PRESENT", "warden_id": "warden-7",
+                    "device_id": "tablet-3", "zone_id": "assembly-north",
+                    "ts_ms": T0, "device_seq": seq, "subject": subject}]}).json()
+
+        assert confirm(1, "emp:EMP-000")["accepted"] == 1
+
+        # The warden counts heads from the same tablet, which is the whole
+        # point of the tablet.
+        assert client.post(
+            f"/api/evac/drills/{drill_id}/warden/headcount", headers=WARDEN,
+            json={"zone_id": "assembly-north", "warden_id": "warden-7",
+                  "device_id": "tablet-3", "ts_ms": T0 + 1_000,
+                  "physical_count": 2}).status_code == 200
+
+        landed = confirm(2, "emp:EMP-001")
+        assert landed["accepted"] == 1, landed
+        assert landed["duplicates"] == 0, landed
+
+    def test_a_resent_sequence_is_a_duplicate_not_a_second_action(self, client):
+        # The ordinary retry: the device sent it, the acknowledgement was lost,
+        # it sends again. The comparison was `<` against a counter that a
+        # different code path happened to increment, so this only worked by
+        # accident -- and stopped working the moment the counters diverged.
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        body = {"actions": [{
+            "kind": "CONFIRM_PRESENT", "warden_id": "warden-7",
+            "device_id": "tablet-3", "zone_id": "assembly-north",
+            "ts_ms": T0, "device_seq": 1, "subject": "emp:EMP-000"}]}
+
+        first = client.post(f"/api/evac/drills/{drill_id}/warden/sync",
+                            headers=WARDEN, json=body).json()
+        again = client.post(f"/api/evac/drills/{drill_id}/warden/sync",
+                            headers=WARDEN, json=body).json()
+        assert first["accepted"] == 1
+        assert again["accepted"] == 0 and again["duplicates"] == 1
+        # And still settled, so the device deletes it rather than retrying for
+        # the rest of the drill.
+        assert again["settled"] == [1]
+
+    def test_the_two_counters_do_not_share_a_field(self, client):
+        # The root cause, asserted directly: one field was doing two jobs.
+        drill_id = make_drill(client)
+        client.post(f"/api/evac/drills/{drill_id}/start", headers=OPERATOR)
+        client.post(f"/api/evac/drills/{drill_id}/warden/sync", headers=WARDEN,
+                    json={"actions": [{
+                        "kind": "CONFIRM_PRESENT", "warden_id": "warden-7",
+                        "device_id": "tablet-3", "zone_id": "assembly-north",
+                        "ts_ms": T0, "device_seq": 9, "subject": "emp:EMP-000"}]})
+        drill = client.app.state.registry.get(drill_id)
+        queue = drill.warden.devices["tablet-3"]
+        assert queue.last_device_seq == 9, "the device's own numbering"
+        assert queue.next_seq != 9, "the event stream's, which is not the same"
+
     def test_a_warden_with_no_assigned_zones_is_unrestricted(self, client):
         # A roving supervisor. Explicit, not a default that erodes.
         drill_id = make_drill(client)

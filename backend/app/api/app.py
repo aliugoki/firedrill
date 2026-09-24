@@ -526,7 +526,8 @@ def create_app(registry: DrillRegistry | None = None,
                 kind=kind, warden_id=item.warden_id, device_id=item.device_id,
                 zone_id=item.zone_id, ts_ms=item.ts_ms, subject=item.subject,
                 identity=item.identity, note=item.note,
-                queued_offline=item.queued_offline, synced_at_ms=now_ms())
+                queued_offline=item.queued_offline, synced_at_ms=now_ms(),
+                device_seq=item.device_seq)
             try:
                 validate(action)
             except WardenActionError as exc:
@@ -535,11 +536,25 @@ def create_app(registry: DrillRegistry | None = None,
 
             queue = drill.warden.device(item.device_id, item.warden_id)
             queue.heard_from(now_ms(), item.zone_id)
-            if item.device_seq < queue.next_seq:
+            # Against the device's own counter, not the event-stream one.
+            #
+            # This compared with `next_seq`, which `record_headcount` also
+            # consumes -- so a warden submitting a physical count between two
+            # syncs pushed it past their device's numbering, and their next
+            # confirmation was counted a duplicate, discarded, and reported
+            # settled. The device then deleted it from IndexedDB. Measured: one
+            # confirmation gone from both sides with each believing it landed,
+            # which is the worst thing this path can do.
+            #
+            # `<=` rather than `<`: a device that resent the sequence it just
+            # delivered -- the ordinary retry, when an acknowledgement is lost
+            # -- was re-applied, and only escaped notice because
+            # `record_warden_action` happened to bump the shared field.
+            if item.device_seq <= queue.last_device_seq:
                 duplicates += 1
                 settled.append(item.device_seq)
                 continue
-            queue.next_seq = item.device_seq
+            queue.last_device_seq = item.device_seq
             drill.record_warden_action(action)
             accepted += 1
             settled.append(item.device_seq)

@@ -515,6 +515,15 @@ class Drill:
             self.warden.apply(action)
             queue = self.warden.device(action.device_id, action.warden_id)
             queue.next_seq = max(queue.next_seq, event.seq + 1)
+            # And the device's own counter, so a tablet still holding
+            # unacknowledged actions does not have them all applied a second
+            # time after the node restarts. Guarded because events written
+            # before this was carried have no `device_seq`, and a recovered
+            # drill from one of those is better off deduping on nothing than
+            # refusing to load.
+            if action.device_seq is not None:
+                queue.last_device_seq = max(queue.last_device_seq,
+                                            action.device_seq)
 
     def _system_event(self, event_type: EventType, now_ms: int) -> Event:
         self._system_seq += 1

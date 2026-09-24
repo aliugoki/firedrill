@@ -152,6 +152,45 @@ class TestRecoveringADrill:
         restarted.recover(T0 + 600_000)
         assert restarted.board(T0 + 600_000).accounted == once
 
+    def test_the_device_sequence_survives_the_restart(self, stores):
+        """Otherwise a tablet still holding unacknowledged actions has every
+        one of them applied a second time after the node comes back.
+
+        `device_seq` arrived on the wire, was used for duplicate detection in
+        memory, and was thrown away -- so nothing about what a device had
+        already delivered outlived the process.
+        """
+        live = make_drill(stores)
+        live.start(T0)
+        live.record_warden_action(WardenAction(
+            kind=ActionKind.CONFIRM_PRESENT, warden_id="warden-7",
+            device_id="tablet-3", zone_id="assembly-north", ts_ms=T0 + 60_000,
+            subject="emp:EMP-001", device_seq=4))
+
+        restarted = make_drill(stores)
+        restarted.status = DrillStatus.RUNNING
+        restarted.started_ms = T0
+        restarted.recover(T0 + 600_000)
+
+        assert restarted.warden.devices["tablet-3"].last_device_seq == 4
+
+    def test_an_older_event_without_one_still_recovers(self, stores):
+        # Events written before the sequence was carried have no `device_seq`,
+        # and a drill recorded from one of those is better off deduping on
+        # nothing than refusing to load.
+        live = make_drill(stores)
+        live.start(T0)
+        live.record_warden_action(WardenAction(
+            kind=ActionKind.CONFIRM_PRESENT, warden_id="warden-7",
+            device_id="tablet-3", zone_id="assembly-north", ts_ms=T0 + 60_000,
+            subject="emp:EMP-001"))
+
+        restarted = make_drill(stores)
+        restarted.status = DrillStatus.RUNNING
+        restarted.started_ms = T0
+        assert restarted.recover(T0 + 600_000) > 0
+        assert restarted.warden.devices["tablet-3"].last_device_seq == 0
+
     def test_recovery_without_a_store_is_a_no_op(self, stores):
         bare = Drill(drill_id="d9", tenant_id="t", site_id="s", name="x",
                      roster=roster_of(1), created_ms=T0)

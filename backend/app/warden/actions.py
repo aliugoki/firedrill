@@ -87,6 +87,12 @@ class WardenAction:
     note: str | None = None
     queued_offline: bool = False
     synced_at_ms: int | None = None
+    device_seq: int | None = None
+    """The number the device gave this action, carried so it survives.
+
+    It arrived on the wire, was used for duplicate detection in memory and
+    then thrown away, so nothing about which actions a device had already
+    delivered outlived a restart. See `DeviceQueue.last_device_seq`."""
     action_id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
     @property
@@ -184,6 +190,10 @@ def to_event(
     payload: dict = {
         "action_id": action.action_id,
         "action": action.kind.value,
+        # Carried so duplicate detection survives a restart. Without it a
+        # recovered node has no record of what a device already delivered, and
+        # a tablet re-syncing its queue has every action applied twice.
+        "device_seq": action.device_seq,
         "warden_id": action.warden_id,
         "device_id": action.device_id,
         "zone_id": action.zone_id,
@@ -262,6 +272,7 @@ def from_event(event: Event) -> WardenAction | None:
         queued_offline=bool(payload.get("queued_offline", False)),
         synced_at_ms=(event.ts_ms + payload["sync_lag_ms"]
                       if payload.get("sync_lag_ms") is not None else None),
+        device_seq=payload.get("device_seq"),
         action_id=payload.get("action_id") or str(uuid.uuid4()),
     )
 
@@ -280,6 +291,18 @@ class DeviceQueue:
     device_id: str
     warden_id: str
     next_seq: int = 1
+    """The **event stream** sequence for events this drill emits from this
+    device's queue. Incremented by `record_warden_action` and by
+    `record_headcount`."""
+    last_device_seq: int = 0
+    """The highest sequence number this **device** has delivered.
+
+    A separate counter, and it has to be. The sync route did duplicate
+    detection against `next_seq`, which is the event counter above -- so a
+    headcount, which also consumes an event sequence, advanced it past the
+    device's own numbering and the warden's next confirmation was discarded as
+    a duplicate and reported settled. The device then deleted it. Measured: one
+    confirmation lost with both sides believing it had landed."""
     pending: list[WardenAction] = field(default_factory=list)
     synced: list[WardenAction] = field(default_factory=list)
     #: When the server last heard from this device, and about which zone.
