@@ -12,6 +12,7 @@
 import { Api, Freshness } from './api.js';
 import { Settings } from './queue.js';
 import { createTranslator, isRtl, formatDuration } from './i18n.js';
+import { icon, stateIcon } from './icons.js';
 import {
   blockingReasons, drillControl, escapeHtml, explainSummary, exitPressure,
   healthLine, describeReason, orderForWarden, outstanding, rowNotes, staleness,
@@ -63,6 +64,7 @@ function applyLanguage() {
   document.getElementById('timing-title').textContent = t('board.timing');
   document.getElementById('zones-title').textContent = t('board.zones');
   document.getElementById('exits-title').textContent = t('bottleneck.title');
+  paintPanelIcons();
   document.getElementById('lang').textContent = lang === 'en' ? 'العربية' : 'English';
 }
 
@@ -133,7 +135,12 @@ function paint() {
   const v = verdict(board, t);
   const section = document.getElementById('verdict');
   section.className = `verdict ${v.clear ? 'clear' : 'not-clear'}`;
-  section.querySelector('h2').textContent = v.headline;
+  // The glyph goes in the verdict too, because this is the line read first and
+  // from furthest away. A tick and a cross differ at a distance where two
+  // shades of a heading do not.
+  section.querySelector('h2').innerHTML =
+    icon(v.clear ? 'check' : 'cross', { size: 26, stroke: 2.2 })
+    + `<span>${escapeHtml(v.headline)}</span>`;
   section.querySelector('ul').innerHTML = v.clear
     ? ''
     : v.reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join('');
@@ -142,7 +149,8 @@ function paint() {
 
   document.getElementById('tiles').innerHTML = tiles(board, t)
     .map((tile) => `<div class="tile ${escapeHtml(tile.tone)}">
-        <div class="n">${tile.value ?? '—'}</div>
+        <div class="tile-head">${icon(tile.glyph, { size: 16 })}<div class="n">${
+          tile.value ?? '—'}</div></div>
         <div class="k">${escapeHtml(tile.label)}</div>
       </div>`)
     .join('');
@@ -171,6 +179,38 @@ function paint() {
   paintTiming();
   paintZones();
   paintExits();
+}
+
+/**
+ * Put each panel's icon in front of its heading.
+ *
+ * Driven by `data-icon` in the markup rather than a list here, so a panel added
+ * to `index.html` gets its icon by saying which one it wants, and a panel that
+ * forgets simply has none -- which is a missing decoration, not a broken board.
+ *
+ * Run from `applyLanguage` because the heading is rewritten there: setting
+ * `textContent` on the title span leaves the icon alone, and this is what puts
+ * it there in the first place.
+ */
+function paintPanelIcons() {
+  for (const heading of document.querySelectorAll('.panel h3[data-icon]')) {
+    if (heading.querySelector('.icon')) continue;
+    heading.insertAdjacentHTML('afterbegin', icon(heading.dataset.icon));
+  }
+}
+
+/**
+ * How many rows a panel is showing, beside its title.
+ *
+ * The count an operator wants before they read the list: eight zones to search
+ * is a different morning from one. Hidden at zero rather than showing a nought,
+ * because an empty panel already says so in its own words.
+ */
+function paintPanelCount(id, value) {
+  const host = document.getElementById(id);
+  if (!host) return;
+  host.textContent = value > 0 ? String(value) : '';
+  host.hidden = !(value > 0);
 }
 
 function paintHeadline(board) {
@@ -225,11 +265,13 @@ function paintSearch(board) {
     host.innerHTML = `<div class="empty">${escapeHtml(t('board.nowhere_to_look'))}</div>`;
     return;
   }
+  paintPanelCount('search-count', groups.length);
   host.innerHTML = groups.map((group) => `
     <div class="row ${escapeHtml(group.atAssembly ? 'at-assembly' : '')}">
       <span class="chip ${escapeHtml(
         group.atAssembly ? 'YELLOW' : (group.unaccounted ? 'RED' : 'YELLOW'))}">${
-        group.count}</span>
+        group.atAssembly ? icon('warden', { size: 14 }) : icon('search', { size: 14 })
+        }<span>${group.count}</span></span>
       <div class="who">
         <div class="name">${escapeHtml(group.label)}</div>
         <div class="advice">${escapeHtml(group.advice)}</div>
@@ -295,9 +337,11 @@ function paintPriority(board) {
     host.innerHTML = `<div class="empty">${escapeHtml(t('board.no_priority'))}</div>`;
     return;
   }
+  paintPanelCount('priority-count', rows.length);
   host.innerHTML = rows.map((row) => `
     <div class="row">
-      <span class="chip ${escapeHtml(row.colour)}">${escapeHtml(t('state.' + row.state, row.state))}</span>
+      <span class="chip ${escapeHtml(row.colour)}">${stateIcon(row.state, { size: 14 })}<span>${
+        escapeHtml(t('state.' + row.state, row.state))}</span></span>
       <div class="who">
         <div class="name">${escapeHtml(row.display_name)}</div>
         <div class="meta">${escapeHtml(row.department || '')}${
@@ -309,7 +353,9 @@ function paintPriority(board) {
         ${rowNotes(row, t).map((note) => `<div class="reason ${
           escapeHtml(note.tone)}">${escapeHtml(note.text)}</div>`).join('')}
       </div>
-      <button data-explain="${escapeHtml(row.person_ref)}">?</button>
+      <button class="explain" data-explain="${escapeHtml(row.person_ref)}"
+        title="${escapeHtml(t('board.why'))}"
+        aria-label="${escapeHtml(t('board.why'))}">${icon('question')}</button>
     </div>`).join('');
 
   host.querySelectorAll('[data-explain]').forEach((button) => {
@@ -333,15 +379,16 @@ function paintZones() {
     host.innerHTML = `<div class="empty">—</div>`;
     return;
   }
+  paintPanelCount('zones-count', panels.length);
   host.innerHTML = panels.map((panel) => `
     <div class="row">
       <span class="chip ${escapeHtml(panel.is_clean ? 'GREEN' : 'YELLOW')}">${
-        panel.is_clean ? '✓' : '…'}</span>
+        panel.is_clean ? icon('check', { size: 14 }) : icon('warden', { size: 14 })
+        }<span>${panel.confirmed}/${panel.expected}</span></span>
       <div class="who">
         <div class="name">${escapeHtml(panel.zone_id)}</div>
-        <div class="meta">${panel.confirmed}/${panel.expected} ${
-          escapeHtml(t('warden.confirmed'))} · ${panel.outstanding} ${
-          escapeHtml(t('warden.outstanding'))}</div>
+        <div class="meta">${escapeHtml(t('warden.confirmed'))} · ${
+          panel.outstanding} ${escapeHtml(t('warden.outstanding'))}</div>
         ${blockingReasons(panel, t).map(
           (reason) => `<div class="reason">${escapeHtml(reason)}</div>`).join('')}
         ${(() => {

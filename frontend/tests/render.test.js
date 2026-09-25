@@ -8,7 +8,8 @@ import { describe, it } from 'node:test';
 import { Api, Freshness, ApiError } from '../js/api.js';
 import { createTranslator, missingKeys, STRINGS, isRtl } from '../js/i18n.js';
 import {
-  filterRoster, headcountVerdict, healthLine, healthCaveat, orderForWarden,
+  filterRoster, headcountVerdict, healthLine, healthCaveat, blindPercent,
+  orderForWarden,
   staleness,
   syncStatus, tiles, timingLine, verdict,
   exitPressure,
@@ -1337,5 +1338,45 @@ describe('a timing panel for a drill whose clock was corrected', () => {
       target_p95_s: 120,
     }, createTranslator('ar'));
     assert.ok(!/[A-Za-z]{4,}/.test(line.caveats[0]), line.caveats[0]);
+  });
+});
+
+describe('a blind fraction too small to round to a whole percent', () => {
+  // The board printed "0% of this drill was unseen" over a drill that had a
+  // real outage in it. A sentence that reads as a bug invites a commander to
+  // stop believing the line, and the line is the one qualifying every number
+  // above it.
+  it('says under 1% rather than 0%', () => {
+    assert.equal(blindPercent(0.0008, t), t('health.under_one_percent'));
+    assert.doesNotMatch(blindPercent(0.0008, t), /^0%/);
+  });
+
+  it('still rounds an ordinary fraction', () => {
+    assert.equal(blindPercent(0.42, t), '42%');
+    assert.equal(blindPercent(0.6, t), '60%');
+  });
+
+  it('reaches the strip and the caveat, not one of them', () => {
+    const health = {
+      degraded: false, blind: false, open_outages: 0, total_outages: 1,
+      blind_fraction: 0.0008, longest_blind_ms: 120_000,
+    };
+    const line = healthLine(health, t);
+    assert.doesNotMatch(line.text, /0%/, line.text);
+    assert.doesNotMatch(line.caveat, /0%/, line.caveat);
+    assert.match(line.text, /under 1%/);
+  });
+
+  it('is worded in the language being read', () => {
+    const ar = createTranslator('ar');
+    assert.notEqual(blindPercent(0.0008, ar), blindPercent(0.0008, t));
+    assert.ok(!/[A-Za-z]/.test(blindPercent(0.0008, ar)));
+  });
+
+  it('a drill with no blind time at all still says nothing', () => {
+    const line = healthLine({ degraded: false, blind: false, open_outages: 0,
+                              total_outages: 0, blind_fraction: 0 }, t);
+    assert.equal(line.tone, 'ok');
+    assert.equal(line.caveat, null);
   });
 });

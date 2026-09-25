@@ -35,6 +35,10 @@ const SHELL = [
   // no network -- did not happen.
   '/static/js/render.js',
   '/static/js/queue.js',
+  // Icons are inline SVG in a module rather than a font or a sprite, so the
+  // one thing they need is to be in this list: a tablet starting from cache
+  // with this file missing loses every symbol on the screen.
+  '/static/js/icons.js',
   '/static/js/i18n.js',
   '/static/js/api.js',
   '/static/manifest.webmanifest',

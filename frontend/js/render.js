@@ -47,17 +47,25 @@ export function blockingReasons(board, t) {
     { ...blocker, text: sentences[index] }, t));
 }
 
-/** The count tiles, in the order an operator reads them. */
+/**
+ * The count tiles, in the order an operator reads them.
+ *
+ * Each carries the glyph its state carries everywhere else. The same shape on
+ * the tile, on the chip beside a name and on the warden's card means the
+ * vocabulary is learned once; seven identical tiles meant the colour was the
+ * only thing telling them apart, and colour is the channel that fails first --
+ * on a sunlit tablet, and for about one man in twelve.
+ */
 export function tiles(board, t) {
   if (!board) return [];
   return [
-    { key: 'expected', tone: '', value: board.expected, label: t('board.expected') },
-    { key: 'accounted', tone: 'green', value: board.accounted, label: t('board.accounted') },
-    { key: 'evacuating', tone: '', value: board.still_evacuating, label: t('board.evacuating') },
-    { key: 'unobserved', tone: 'orange', value: board.currently_unobserved, label: t('board.unobserved') },
-    { key: 'uncertain', tone: 'yellow', value: board.uncertain, label: t('board.uncertain') },
-    { key: 'unaccounted', tone: 'red', value: board.unaccounted, label: t('board.unaccounted') },
-    { key: 'unknown', tone: 'yellow', value: board.unknown_people, label: t('board.unknown') },
+    { key: 'expected', tone: '', glyph: 'people', value: board.expected, label: t('board.expected') },
+    { key: 'accounted', tone: 'green', glyph: 'check', value: board.accounted, label: t('board.accounted') },
+    { key: 'evacuating', tone: '', glyph: 'exit', value: board.still_evacuating, label: t('board.evacuating') },
+    { key: 'unobserved', tone: 'orange', glyph: 'unseen', value: board.currently_unobserved, label: t('board.unobserved') },
+    { key: 'uncertain', tone: 'yellow', glyph: 'question', value: board.uncertain, label: t('board.uncertain') },
+    { key: 'unaccounted', tone: 'red', glyph: 'cross', value: board.unaccounted, label: t('board.unaccounted') },
+    { key: 'unknown', tone: 'yellow', glyph: 'warden', value: board.unknown_people, label: t('board.unknown') },
   ];
 }
 
@@ -101,7 +109,7 @@ export function healthLine(health, t) {
     // misleading about everything the board is showing.
     return {
       tone: 'degraded',
-      text: `${t('health.seeing_now')} — ${Math.round(blindFraction * 100)}% `
+      text: `${t('health.seeing_now')} — ${blindPercent(blindFraction, t)} `
         + `${t('health.was_blind')}`,
       caveat,
     };
@@ -117,20 +125,35 @@ export function healthLine(health, t) {
  * happens in the browser, and the server's prose stays as the fallback for a
  * node that sends numbers this build does not know about.
  */
+/**
+ * A blind fraction as a percentage, or "under 1%".
+ *
+ * `Math.round` on a small fraction gives 0, and the board printed "0% of this
+ * drill was unseen" over a drill that had a real outage in it -- a sentence
+ * that reads as a bug and invites a reader to stop believing the line. A
+ * fortieth of a percent is still not nothing: the interval happened, the
+ * report needs it, and the honest way to say so is that it was under a
+ * percent rather than none.
+ */
+export function blindPercent(fraction, t) {
+  const percent = Math.round(fraction * 100);
+  return percent < 1 ? t('health.under_one_percent') : `${percent}%`;
+}
+
 export function healthCaveat(health, t) {
   if (!health) return null;
   const fraction = health.blind_fraction;
   if (typeof fraction !== 'number') return health.caveat ?? null;
 
-  const percent = Math.round(fraction * 100);
+  const percent = blindPercent(fraction, t);
   if (fraction >= 0.5) {
     // The one that changes what a commander does: stop reading the board and
     // go and ask the wardens.
-    return `${percent}% ${t('health.caveat_mostly_blind')}`;
+    return `${percent} ${t('health.caveat_mostly_blind')}`;
   }
   if (fraction > 0) {
     const longest = Math.round((health.longest_blind_ms || 0) / 1000);
-    return `${percent}% ${t('health.caveat_blind')} `
+    return `${percent} ${t('health.caveat_blind')} `
       + `(${health.total_outages} ${t('health.outages')}, ${longest}s)`;
   }
   if (health.total_outages > 0) {

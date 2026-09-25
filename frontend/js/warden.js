@@ -25,6 +25,7 @@ import {
   themeToggle,
 } from './render.js';
 import { OfflineQueue, Settings, deviceIdentity, reconcileSync } from './queue.js';
+import { icon, stateIcon } from './icons.js';
 
 // Guarded, and read once. A tablet with site data blocked throws on the
 // `localStorage` getter itself, and this file read it three lines into module
@@ -242,14 +243,14 @@ async function refreshZone() {
 
 function paintTabs() {
   const tabs = [
-    ['zone', t('warden.my_zone')],
-    ['roster', t('warden.roster')],
-    ['unknown', t('warden.unknown')],
+    ['zone', t('warden.my_zone'), 'zone'],
+    ['roster', t('warden.roster'), 'people'],
+    ['unknown', t('warden.unknown'), 'question'],
   ];
   const host = document.getElementById('tabs');
-  host.innerHTML = tabs.map(([key, label]) =>
+  host.innerHTML = tabs.map(([key, label, glyph]) =>
     `<button role="tab" data-screen="${escapeHtml(key)}" aria-selected="${escapeHtml(screen === key)}">${
-      escapeHtml(label)}</button>`).join('');
+      icon(glyph, { size: 17 })}<span>${escapeHtml(label)}</span></button>`).join('');
   host.querySelectorAll('[data-screen]').forEach((button) => {
     button.addEventListener('click', () => {
       screen = button.dataset.screen;
@@ -284,8 +285,13 @@ async function paint() {
   }, t);
   const syncEl = document.getElementById('sync');
   syncEl.className = `warden-status ${status.tone}`;
-  syncEl.textContent = status.text +
-    (refusals.length ? ` · ${refusals.length} refused` : '');
+  // A shape per state rather than the same bullet for all of them. "Synced",
+  // "offline" and "cannot save" are three different things to a warden and
+  // they were three identical dots.
+  const syncGlyph = { online: 'check', offline: 'device', blind: 'alert' };
+  syncEl.innerHTML = icon(syncGlyph[status.tone] || 'device', { size: 16 })
+    + `<span>${escapeHtml(status.text
+      + (refusals.length ? ` · ${refusals.length} refused` : ''))}</span>`;
 
   // The reasons, not the count of them. The sync route says a device with one
   // action refused "must be able to tell which, or a warden's screen shows
@@ -309,10 +315,15 @@ async function paint() {
   const tone = health.tone === 'blind' ? 'blind' : 'offline';
   const headline = health.tone === 'blind'
     ? t('warden.rely_on_count') : health.text;
+  // The same glyph vocabulary as the sync strip above it: a warning triangle
+  // when the cameras cannot see, a blinded eye when they saw less of the drill
+  // than they missed. Two strips side by side with one dot and one shape read
+  // as two different kinds of thing, which they are not.
   healthEl.innerHTML = health.tone === 'ok'
     ? ''
     : `<div class="warden-status ${escapeHtml(tone)}">${
-        escapeHtml(headline)}</div>`
+        icon(tone === 'blind' ? 'alert' : 'unseen', { size: 16 })}<span>${
+        escapeHtml(headline)}</span></div>`
       + (health.caveat
         ? `<div class="caveat">${escapeHtml(health.caveat)}</div>` : '');
 
@@ -381,7 +392,8 @@ function paintRoster(zone) {
   host.innerHTML = rows.map((row) => `
     <div class="row" style="display:block">
       <div class="person-head">
-        <span class="chip ${escapeHtml(row.colour)}">${escapeHtml(t('state.' + row.state, row.state))}</span>
+        <span class="chip ${escapeHtml(row.colour)}">${stateIcon(row.state, { size: 14 })}<span>${
+          escapeHtml(t('state.' + row.state, row.state))}</span></span>
         <div class="who">
           <div class="name">${escapeHtml(row.display_name)}</div>
           <div class="meta">${escapeHtml(row.department || '')}</div>
@@ -390,17 +402,26 @@ function paintRoster(zone) {
             escapeHtml(note.tone)}">${escapeHtml(note.text)}</div>`).join('')}
         </div>
       </div>
+      <!-- One primary and a row of exceptions, not four of the same thing.
+           Confirming is what a warden does to almost everybody in front of
+           them; the other three are the unusual answers. Four identical grey
+           buttons made the common action something you had to read for. -->
       <div class="person-actions">
-        <button data-act="CONFIRM_PRESENT" data-ref="${escapeHtml(row.person_ref)}">${
-          escapeHtml(t('warden.confirm'))}</button>
+        <button class="primary confirm" data-act="CONFIRM_PRESENT"
+          data-ref="${escapeHtml(row.person_ref)}">${icon('check', { size: 20 })}<span>${
+          escapeHtml(t('warden.confirm'))}</span></button>
+      </div>
+      <div class="person-exceptions">
         <button data-act="NOT_HERE" data-ref="${escapeHtml(row.person_ref)}">${
-          escapeHtml(t('warden.not_here'))}</button>
+          icon('cross', { size: 15 })}<span>${escapeHtml(t('warden.not_here'))}</span></button>
         ${row.person_ref.startsWith('emp:')
           ? `<button data-act="WRONG_PERSON" data-ref="${escapeHtml(row.person_ref)}">${
-              escapeHtml(t('warden.wrong_person'))}</button>`
+              icon('warden', { size: 15 })}<span>${
+              escapeHtml(t('warden.wrong_person'))}</span></button>`
           : ''}
         <button data-act="MARK_ABSENT" data-ref="${escapeHtml(row.person_ref)}">${
-          escapeHtml(t('warden.mark_absent'))}</button>
+          icon('unseen', { size: 15 })}<span>${
+          escapeHtml(t('warden.mark_absent'))}</span></button>
       </div>
     </div>`).join('');
 

@@ -247,6 +247,9 @@ main { padding: var(--s5); max-width: 1680px; margin: 0 auto; }
 .verdict.not-clear { background: linear-gradient(90deg, var(--red-bg), var(--surface) 60%); }
 .verdict.not-clear::before { background: var(--red); }
 .verdict h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
   margin: 0 0 var(--s2);
   font-size: var(--size-verdict);
   letter-spacing: -.4px;
@@ -420,20 +423,68 @@ main { padding: var(--s5); max-width: 1680px; margin: 0 auto; }
   overflow: hidden;
   box-shadow: var(--shadow);
 }
+/* --- icons ----------------------------------------------------------------- *
+ *
+ * Inline SVG, `currentColor`, so an icon takes the colour of whatever it sits
+ * in and nothing here has to know the state palette. Decoration beside a label
+ * that already says the thing, never the message itself.
+ */
+.icon {
+  flex: none;
+  display: inline-block;
+  vertical-align: -.18em;
+}
+
+/* Directional glyphs point the way the language reads. The search magnifier
+ * and the exit arrow both have a handedness; a check mark does not. */
+[dir="rtl"] .icon.flip { transform: scaleX(-1); }
+
 .panel > h3 {
   margin: 0;
   padding: var(--s3) var(--s4);
-  font-size: var(--size-micro);
+  font-size: var(--size-meta);
   font-weight: 700;
   border-bottom: 1px solid var(--line-soft);
-  color: var(--dim);
-  text-transform: uppercase;
-  letter-spacing: 1px;
+  color: var(--text);
+  letter-spacing: .2px;
   background: var(--surface-2);
   position: sticky;
   top: 0;
   z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
 }
+
+/* Two bands of panel, and the heading is where the difference shows. `act` is
+ * what somebody does something about in the next minute; `reference` is what
+ * they read afterwards. Every heading used to be the same small grey capitals,
+ * so a dispatch list and a percentile table announced themselves identically. */
+.panel.act > h3 { color: var(--text); }
+.panel.act > h3 .icon { color: var(--accent); }
+.panel.reference > h3 {
+  color: var(--muted);
+  font-size: var(--size-micro);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.panel.reference > h3 .icon { color: var(--dim); }
+.panel.reference { background: var(--bg); }
+
+/* How many rows are in there, read before the list itself: eight zones to
+ * search is a different morning from one. Hidden at zero -- an empty panel
+ * already says so in its own words. */
+.panel-count {
+  margin-inline-start: auto;
+  background: var(--surface-3);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  padding: 1px 8px;
+  font-size: var(--size-micro);
+  font-variant-numeric: tabular-nums;
+}
+.panel-count[hidden] { display: none; }
 .panel .body { padding: var(--s4); }
 
 /* The list a commander scans. Capped and scrolled inside its own panel: two
@@ -505,10 +556,16 @@ body.warden .row::before { display: none; }
 .row .reason.yellow { color: var(--yellow); font-weight: 600; }
 .row .reason.red    { color: var(--red);    font-weight: 600; }
 
+/* A shape as well as a colour. Roughly one man in twelve cannot read a
+ * red/green difference reliably, and on a sunlit tablet the whole palette
+ * washes out -- the glyph is what survives both. */
 .chip {
   flex: none;
   align-self: flex-start;
   margin-top: 1px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   border-radius: var(--radius-pill);
   padding: 2px 9px;
   font-size: var(--size-micro);
@@ -648,7 +705,11 @@ body.warden .tile .n { font-size: 28px; }
   font-weight: 700;
   border: 1px solid transparent;
 }
-.warden-status::before {
+/* The dot was the same for all three states. `warden.js` puts a shape here
+ * now -- a tick, a tablet, a warning -- because "synced", "offline" and
+ * "cannot save" are three different things to the person holding it. The dot
+ * stays for a strip that has no icon in it. */
+.warden-status:not(:has(.icon))::before {
   content: "";
   width: 9px; height: 9px;
   border-radius: 50%;
@@ -716,11 +777,68 @@ body.warden .tile .n { font-size: 28px; }
   gap: var(--s2);
   margin-top: var(--s3);
 }
-.person-actions button { min-height: var(--tap); font-size: var(--size-body); }
-/* Two by two on the roster rather than four across. Four actions in a row on a
- * tablet gives each of them a quarter of the width and a name that wraps; two
- * by two gives a gloved hand a target it can hit without looking. */
-body.warden #roster .person-actions { grid-template-columns: repeat(2, 1fr); }
+.person-actions button {
+  min-height: var(--tap);
+  font-size: var(--size-body);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+}
+
+/* --- one primary, three exceptions ----------------------------------------- *
+ *
+ * Confirming is what a warden does to almost everybody standing in front of
+ * them. The other three are the unusual answers. Four identical grey buttons
+ * made the common action something you had to read for, which is the wrong way
+ * round on a screen used at arm's length under pressure.
+ */
+body.warden #roster .person-actions { grid-template-columns: 1fr; }
+body.warden #roster .person-actions .confirm {
+  min-height: 60px;
+  font-size: var(--size-lead);
+  font-weight: 700;
+  background: var(--green-bg);
+  border-color: var(--green-edge);
+  color: var(--green);
+}
+body.warden #roster .person-actions .confirm:hover {
+  background: var(--green-edge);
+  color: var(--text);
+}
+
+/* The exceptions: smaller, quieter, and three across because they are read
+ * rather than aimed for. Still a real target -- 44px is the floor for a
+ * gloved thumb, and these are wider than they are tall. */
+.person-exceptions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--s2);
+  margin-top: var(--s2);
+}
+.person-exceptions button {
+  min-height: 44px;
+  padding: var(--s2) var(--s1);
+  font-size: var(--size-meta);
+  color: var(--muted);
+  background: transparent;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  line-height: 1.15;
+  text-align: center;
+}
+.person-exceptions button:hover { background: var(--surface-2); color: var(--text); }
+.person-exceptions .icon { color: var(--dim); }
+
+/* Two across when there are only two of them -- an unknown person has no
+ * "wrong person" answer, and a third empty column looks like a missing
+ * button. */
+.person-exceptions:has(button:nth-child(2):last-child) {
+  grid-template-columns: repeat(2, 1fr);
+}
 
 /* A card per person, with the state above the name rather than beside it.
  * Beside it, every name started at a different x depending on how long the
@@ -813,3 +931,35 @@ body.warden .roster-toggle {
   cursor: pointer;
 }
 body.warden .roster-toggle:hover { background: var(--surface-3); }
+
+/* The one route to the evidence behind a decision. It was a bare "?" glyph in
+ * a default button; at 28px square with the icon it reads as something to
+ * press. */
+button.explain {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  border-radius: var(--radius-pill);
+}
+button.explain:hover { color: var(--accent); border-color: var(--accent); }
+
+/* Tabs carry their glyph above the word on a tablet: the row is three across
+ * and a horizontal icon would eat the label's width. */
+body.warden .tabs button {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+body.warden .tabs button .icon { color: var(--dim); }
+body.warden .tabs button[aria-selected="true"] .icon { color: var(--accent); }
+
+/* The tile's glyph sits with its number, not above the label: the number is
+ * what the eye lands on and the shape qualifies it. */
+.tile-head { display: flex; align-items: center; gap: var(--s2); }
+.tile-head .icon { opacity: .75; }

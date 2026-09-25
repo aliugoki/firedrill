@@ -37,34 +37,42 @@
 
     <section class="tiles" id="tiles"></section>
 
+    <!-- Two bands, and the split is the point. `act` is what somebody does
+         something about in the next minute; `reference` is what they read
+         afterwards. Every panel used to carry the same small grey heading, so
+         a dispatch list and a percentile table looked like the same kind of
+         thing. -->
     <div class="grid">
       <div>
         <!-- Where to send somebody, above who is missing. The same people
              grouped by where they were last seen is a dispatch list; the list
              of names is a log. -->
-        <div class="panel" id="search-panel">
-          <h3 id="search-title">Where to look</h3>
+        <div class="panel act" id="search-panel">
+          <h3 data-icon="search"><span id="search-title">Where to look</span>
+            <span class="panel-count" id="search-count"></span></h3>
           <div id="search"></div>
         </div>
-        <div class="panel">
-          <h3 id="priority-title">Needs attention</h3>
+        <div class="panel act">
+          <h3 data-icon="alert"><span id="priority-title">Needs attention</span>
+            <span class="panel-count" id="priority-count"></span></h3>
           <div id="priority"></div>
         </div>
       </div>
       <div>
-        <div class="panel">
-          <h3 id="zones-title">Assembly zones</h3>
+        <div class="panel act">
+          <h3 data-icon="zone"><span id="zones-title">Assembly zones</span>
+            <span class="panel-count" id="zones-count"></span></h3>
           <div id="zones"></div>
         </div>
-        <div class="panel">
-          <h3 id="exits-title">Exits</h3>
+        <div class="panel reference">
+          <h3 data-icon="exit"><span id="exits-title">Exits</span></h3>
           <div class="body" id="exits"></div>
         </div>
         <!-- Last while a drill is running. A percentile is a post-drill
              measure and nobody dispatches anybody on one; it held the top of
              this column above the two panels that are operational. -->
-        <div class="panel">
-          <h3 id="timing-title">Evacuation times</h3>
+        <div class="panel reference">
+          <h3 data-icon="clock"><span id="timing-title">Evacuation times</span></h3>
           <div class="body" id="timing"></div>
         </div>
       </div>
