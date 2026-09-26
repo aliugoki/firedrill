@@ -1011,6 +1011,7 @@ Audited against the filesystem, not against memory.
 | Security model | `docs/EVAC120_SECURITY.md` | Done |
 | OpenAPI spec for `/api/evac/*` | generated at `/openapi.json`, 14 routes | Done |
 | Deployment guide | `docs/EVAC120_DEPLOYMENT.md` | Done |
+| Integration procedure | `docs/EVAC120_INTEGRATION.md` | Done. Standing a site up against FaceTrack and VisionTrack, step by step, walked through against a clean node |
 | Warden PWA install guide | `docs/EVAC120_WARDEN_PWA.md` | Done |
 | Validation criteria and report | `docs/EVAC120_VALIDATION.md`, `app/reporting/` | Done |
 | Alembic schema | `backend/alembic/versions/0001_event_log.py` | Done. `evac_events` plus drills, zone kinds and the audit log |

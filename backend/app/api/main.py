@@ -17,6 +17,7 @@ from app.core.roster import RosterSnapshot
 from app.infra.audit import AuditLog
 from app.infra.auth import settings_from_env
 from app.infra.config import assembly_zones, database_url
+from app.service.edge import configuration_gaps
 
 
 def _roster_provider():
@@ -134,6 +135,15 @@ def _recovered_registry(env: dict, drill_store, events_store):
 _env = dict(os.environ)
 events_store, drill_store, audit = _stores(_env)
 registry, startup_gaps = _recovered_registry(_env, drill_store, events_store)
+
+# The same configuration gaps the edge process names at boot.
+#
+# It has no HTTP surface and this one does, so until now the two disagreed:
+# a node with no roster, no geometry, no event stream and no database answered
+# `/healthz` with `degraded: false`, which is the endpoint a monitoring system
+# polls. `create_app` says these are "reported through /healthz rather than
+# raised at boot", and the entry point was passing only the recovery gaps.
+startup_gaps = list(startup_gaps or []) + configuration_gaps(_env)
 
 app = create_app(registry=registry,
                  roster_provider=_roster_provider(),

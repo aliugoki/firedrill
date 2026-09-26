@@ -85,6 +85,40 @@ class TestAMisconfiguredNodeStartsAndExplainsItself:
         assert "no geometry source" in gaps
         assert "no roster source" in gaps
 
+    def test_facetrack_being_set_does_not_silence_the_roster_gap(self):
+        """The one dependency where this promise did not hold.
+
+        `EVAC_FACETRACK_URL` is in `.env.example` and nothing anywhere reads
+        it -- the HTTP client is a Phase 5 item. It was enough to satisfy the
+        roster check, so a node configured from the template exactly as
+        written reported no roster problem at startup and then refused to
+        create a drill with a 503 the moment somebody pressed start.
+
+        This function exists so a missing piece is named at boot rather than
+        found at the first drill, and the roster is the piece whose absence
+        matters most: without it a board has no denominator.
+        """
+        gaps = "\n".join(build_edge({
+            "EVAC_SITE_ID": "site-1", "EVAC_TENANT_ID": "tenant-1",
+            "EVAC_FACETRACK_URL": "http://localhost:5002",
+            "EVAC_FACETRACK_API_KEY": "key",
+        }, now_ms=T0).gaps)
+        assert "EVAC_FACETRACK_URL" in gaps
+        assert "no FaceTrack client is built" in gaps
+        # And it says what to do instead, because an operator reading this has
+        # a drill to run and needs the answer, not the diagnosis.
+        assert "EVAC_ROSTER_FILE" in gaps
+
+    def test_an_exported_roster_satisfies_it(self, tmp_path):
+        # The guard: naming the gap correctly must not mean naming it always.
+        roster = tmp_path / "roster.json"
+        roster.write_text(json.dumps({"employees": []}))
+        gaps = "\n".join(build_edge({
+            "EVAC_SITE_ID": "site-1", "EVAC_TENANT_ID": "tenant-1",
+            "EVAC_ROSTER_FILE": str(roster),
+        }, now_ms=T0).gaps)
+        assert "roster" not in gaps.lower()
+
     def test_the_gaps_say_what_the_consequence_is(self):
         # Not "REDIS_URL missing" but what an operator loses by it.
         gaps = build_edge({}, now_ms=T0).gaps
@@ -599,6 +633,51 @@ class TestBlockedReplicationIsNotAHealthyJob:
     def test_a_working_link_carries_no_instruction(self, tmp_path):
         node = build_edge(full_env(tmp_path), now_ms=T0)
         assert node.health(T0)["replication_blocked_action"] is None
+
+
+class TestTheFlushIntervalIsActuallyConfigurable:
+    """`EVAC120_DEPLOYMENT.md` calls `EVAC_OUTBOX_FLUSH_SEC` "not only a tuning
+    knob ... the window during which an event exists but is not yet durable,
+    and therefore the producer half of the recovery point objective", and tells
+    an operator that shortening it buys a smaller loss window.
+
+    Nothing read it. An operator who shortened it changed nothing at all, and
+    `measure_rpo` went on quoting the 15-second default as their exposure -- a
+    setting a document tells somebody to change and no code reads is worse than
+    no setting, because they believe the window is smaller than it is.
+    """
+
+    def _linked(self, tmp_path, **extra):
+        """A node with somewhere to replicate to.
+
+        `full_env` deliberately has no central link, so it has no `replicate`
+        job and no RPO block -- which is the honest shape for a node that
+        replicates nowhere, and not the one this setting is about.
+        """
+        return build_edge(dict(full_env(tmp_path),
+                               EVAC_CENTRAL_URL="https://central.example",
+                               EVAC_CENTRAL_TOKEN="t0ken", **extra), now_ms=T0)
+
+    def test_the_supervisor_runs_on_the_configured_interval(self, tmp_path):
+        node = self._linked(tmp_path, EVAC_OUTBOX_FLUSH_SEC="3")
+        assert node.replicate_interval_ms == 3_000
+        assert node.supervisor.job("replicate").interval_ms == 3_000
+
+    def test_and_the_rpo_quotes_that_number(self, tmp_path):
+        # The figure a site reads before deciding how much it trusts the
+        # buffer. It reported the default however this was set.
+        node = self._linked(tmp_path, EVAC_OUTBOX_FLUSH_SEC="3")
+        assert node.health(T0)["rpo"]["producer_exposure_ms"] == 3_000
+
+    def test_an_unset_interval_is_the_documented_default(self, tmp_path):
+        assert self._linked(tmp_path).replicate_interval_ms == 15_000
+
+    @pytest.mark.parametrize("bad", ["", "soon", "-4", "0"])
+    def test_a_value_that_is_not_a_positive_number_falls_back(self, tmp_path, bad):
+        # A typo in one environment variable must not stop an edge node booting
+        # during a drill, and a zero interval would spin the flush loop.
+        node = self._linked(tmp_path, EVAC_OUTBOX_FLUSH_SEC=bad)
+        assert node.replicate_interval_ms == 15_000
 
 
 class TestAStalledQueueReachesTheMonitor:

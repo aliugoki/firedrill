@@ -110,6 +110,7 @@ been calibrated and no live drill has run. `docs/EVAC120_BENCHMARKS.md` and
 | `docs/EVAC120_RESILIENCE.md` | What each failure costs, and the recovery point objective |
 | `docs/EVAC120_SECURITY.md` | Permissions, biometric data, and what is *not* addressed |
 | `docs/EVAC120_VALIDATION.md` | How a drill is judged when there is no oracle |
+| `docs/EVAC120_INTEGRATION.md` | **Standing a site up:** step by step, with FaceTrack and VisionTrack |
 | `docs/EVAC120_DEPLOYMENT.md` | Running an edge node |
 | `docs/EVAC120_WARDEN_PWA.md` | Setting up a warden's tablet, written for the person doing it |
 | `docs/EVAC120_CALIBRATION.md` | Empty on purpose: nothing is calibrated yet |

@@ -222,6 +222,85 @@ def _drill_end_times(node) -> dict:
             if drill.completed_ms is not None}
 
 
+def configuration_gaps(env: dict) -> list[str]:
+    """Every missing piece, from the environment alone.
+
+    Pulled out of `build_edge` so the API process can report the same list.
+    It could not before: `build_edge` accumulates these while wiring
+    consumers, stores and replicators, and the API has no business doing any
+    of that — so the two processes knew different things.
+
+    The consequence was the one this project keeps finding. The edge process
+    names every gap at boot and has no HTTP surface, and the API answers
+    `/healthz` and computed none of them, so a node with no roster, no
+    geometry, no event stream and no database reported `degraded: false` to
+    the endpoint a monitoring system polls.
+
+    Configuration only. Anything that needs a connection — a DSN that is
+    refused, a geometry export that will not parse — is found while wiring and
+    stays in `build_edge`, because a check that has to dial out does not belong
+    in a health endpoint's hot path.
+    """
+    gaps: list[str] = []
+
+    if not env.get("EVAC_SITE_ID"):
+        gaps.append("EVAC_SITE_ID is not set; this node does not know which "
+                    "building it covers")
+    if not env.get("EVAC_TENANT_ID"):
+        gaps.append("EVAC_TENANT_ID is not set")
+
+    if env.get("EVAC_CENTRAL_URL") and not env.get("EVAC_CENTRAL_TOKEN"):
+        gaps.append("EVAC_CENTRAL_URL is set but EVAC_CENTRAL_TOKEN is not; "
+                    "central will refuse every batch")
+
+    if not env.get("EVAC_REDIS_URL") or not env.get("EVAC_TENANT_ID"):
+        gaps.append("no event stream is configured, so no camera observation "
+                    "can reach this node")
+
+    if not env.get("EVAC_GEOMETRY_FILE") and not env.get("EVAC_VISIONTRACK_DSN"):
+        gaps.append("no geometry source is configured, so no zone can be "
+                    "resolved and nobody can reach an assembly point")
+
+    if not (env.get("EVAC_DATABASE_URL") or env.get("EVAC_DB_PASSWORD")):
+        gaps.append("no database is configured; drills run but are not "
+                    "recorded, and a restart loses one in progress")
+
+    if not env.get("EVAC_ROSTER_FILE"):
+        if env.get("EVAC_FACETRACK_URL"):
+            gaps.append(
+                "EVAC_FACETRACK_URL is set but no FaceTrack client is built "
+                "yet, so it provides no roster; set EVAC_ROSTER_FILE to an "
+                "exported roster or no drill can be created")
+        else:
+            gaps.append("no roster source is configured; a drill has no "
+                        "denominator and cannot be created")
+
+    return gaps
+
+
+def _flush_interval_ms(env: dict) -> int:
+    """How often the outbox is flushed, in milliseconds.
+
+    Read here rather than defaulted silently, because the number is the
+    producer half of the recovery point objective and the deployment document
+    tells an operator to tune it. A setting a document tells somebody to change
+    and nothing reads is worse than no setting: they believe they have shrunk
+    their loss window and they have not.
+
+    A value that is not a positive number falls back to the default rather than
+    raising. A typo in one environment variable must not stop an edge node
+    booting during a drill, and `gaps` is where a misconfiguration is reported.
+    """
+    raw = env.get("EVAC_OUTBOX_FLUSH_SEC", "")
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_REPLICATE_INTERVAL_MS
+    if seconds <= 0:
+        return DEFAULT_REPLICATE_INTERVAL_MS
+    return int(seconds * 1000)
+
+
 def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
     """Wire an edge node from the environment. Never raises on a missing piece.
 
@@ -371,9 +450,25 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
         gaps.append("no database is configured; drills run but are not "
                     "recorded, and a restart loses one in progress")
 
-    if not env.get("EVAC_ROSTER_FILE") and not env.get("EVAC_FACETRACK_URL"):
-        gaps.append("no roster source is configured; a drill has no "
-                    "denominator and cannot be created")
+    # Asked of what actually provides a roster, which today is the export file
+    # and only the export file. `EVAC_FACETRACK_URL` used to silence this gap,
+    # and nothing anywhere reads it: a node configured from `.env.example`
+    # exactly as written reported no roster problem at startup and then
+    # refused to create a drill with a 503 the moment somebody pressed start.
+    #
+    # That is the one dependency where this function's own promise did not
+    # hold. It exists so a missing piece is named at boot rather than
+    # discovered at the first drill, and the roster is the piece whose absence
+    # matters most.
+    if not env.get("EVAC_ROSTER_FILE"):
+        if env.get("EVAC_FACETRACK_URL"):
+            gaps.append(
+                "EVAC_FACETRACK_URL is set but no FaceTrack client is built "
+                "yet, so it provides no roster; set EVAC_ROSTER_FILE to an "
+                "exported roster or no drill can be created")
+        else:
+            gaps.append("no roster source is configured; a drill has no "
+                        "denominator and cannot be created")
 
     retention = RetentionLedger()
     node_holder: dict = {}
@@ -407,9 +502,17 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
             node.retention_report = report
         return report
 
+    # The flush interval, from the environment rather than from the default.
+    # `EVAC120_DEPLOYMENT.md` calls this "not only a tuning knob ... the window
+    # during which an event exists but is not yet durable, and therefore the
+    # producer half of the recovery point objective", and nothing read it: an
+    # operator shortening it to buy a smaller loss window changed nothing at
+    # all, and `measure_rpo` went on reporting the default as the exposure.
+    flush_ms = _flush_interval_ms(env)
     supervisor = build_supervisor(
         ingestor=ingestor, consumer=consumer, replicator=replicator,
-        sync_runner=sync_runner, retention_check=retention_check)
+        sync_runner=sync_runner, retention_check=retention_check,
+        replicate_interval_ms=flush_ms)
 
     if events_store is not None:
         from app.service.supervisor import Job
@@ -424,7 +527,12 @@ def build_edge(env: dict | None = None, *, now_ms: int = 0) -> EdgeNode:
         supervisor=supervisor, consumer=consumer, replicator=replicator,
         geometry=geometry, events_store=events_store, drill_store=drill_store,
         registry=registry, recovered_drills=tuple(recovered),
-        gaps=tuple(gaps), retention=retention, audit=audit)
+        gaps=tuple(gaps), retention=retention, audit=audit,
+        # So `measure_rpo` quotes the interval the supervisor is actually
+        # running on rather than the default. The RPO block is the number a
+        # site reads before deciding how much it trusts the buffer, and it was
+        # reporting 15s however this was configured.
+        replicate_interval_ms=flush_ms)
     # The job closes over this so its report reaches `health()`. The node
     # cannot be built before the supervisor it holds, and the supervisor needs
     # the job, so one of the two has to be handed over afterwards.

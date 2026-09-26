@@ -58,6 +58,89 @@ class TestAssemblyZones:
         assert assembly_zones(dict(os.environ)) == frozenset({"north", "south"})
 
 
+class TestHealthzNamesTheSameGapsTheEdgeProcessDoes:
+    """Two processes, and until now they knew different things.
+
+    The edge process names every missing piece at boot and has **no HTTP
+    surface**. The API answers `/healthz` and computed none of them. So a node
+    with no roster, no geometry, no event stream and no database reported
+    `degraded: false` to the endpoint a monitoring system polls -- a node that
+    cannot run a drill at all, calling itself healthy.
+
+    `create_app` says these are "reported through /healthz rather than raised
+    at boot ... one that starts and says what is missing gives them the
+    answer". The entry point was passing only the recovery gaps.
+    """
+
+    def _healthz(self, monkeypatch, env):
+        import importlib
+
+        for key in list(os.environ):
+            if key.startswith("EVAC_"):
+                monkeypatch.delenv(key, raising=False)
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+
+        import app.api.main as entry
+        entry = importlib.reload(entry)
+        return TestClient(entry.app).get("/healthz").json()
+
+    def test_a_node_missing_everything_does_not_call_itself_healthy(
+            self, monkeypatch):
+        body = self._healthz(monkeypatch, {"EVAC_TRUST_IDENTITY_HEADERS": "true"})
+        assert body["degraded"] is True
+        gaps = "\n".join(body.get("configuration_gaps") or [])
+        assert "no roster source" in gaps
+        assert "no geometry source" in gaps
+        assert "no event stream" in gaps
+
+    def test_the_gaps_say_the_consequence_not_the_variable(self, monkeypatch):
+        # An operator reading a dashboard needs to know what they lose, not
+        # which string is unset.
+        body = self._healthz(monkeypatch, {"EVAC_TRUST_IDENTITY_HEADERS": "true"})
+        gaps = "\n".join(body.get("configuration_gaps") or [])
+        assert "cannot be created" in gaps
+        assert "nobody can reach an assembly point" in gaps
+
+    def test_facetrack_alone_is_still_a_missing_roster_here_too(
+            self, monkeypatch):
+        # The same trap as at boot: the variable is in `.env.example`, nothing
+        # reads it, and it must not make the endpoint look satisfied.
+        body = self._healthz(monkeypatch, {
+            "EVAC_TRUST_IDENTITY_HEADERS": "true",
+            "EVAC_FACETRACK_URL": "http://localhost:5002"})
+        gaps = "\n".join(body.get("configuration_gaps") or [])
+        assert "no FaceTrack client is built" in gaps
+
+    def test_and_a_configured_node_reports_none_of_them(self, monkeypatch, tmp_path):
+        """The guard: naming gaps correctly must not mean naming them always.
+
+        Asked of the configuration gaps specifically. A node whose database has
+        no schema yet still reports a *recovery* gap -- "could not read which
+        drills were running" -- which is a different category and correct: the
+        board is empty because nothing was reloaded, not because the building
+        is.
+        """
+        roster = tmp_path / "roster.json"
+        roster.write_text(json.dumps({"employees": []}))
+        geometry = tmp_path / "geometry.json"
+        geometry.write_text(json.dumps({"floor_plans": [], "cameras": []}))
+        body = self._healthz(monkeypatch, {
+            "EVAC_TRUST_IDENTITY_HEADERS": "true",
+            "EVAC_SITE_ID": "site-1", "EVAC_TENANT_ID": "tenant-1",
+            "EVAC_REDIS_URL": "redis://localhost:6379/0",
+            "EVAC_GEOMETRY_FILE": str(geometry),
+            "EVAC_ROSTER_FILE": str(roster),
+            "EVAC_DATABASE_URL": f"sqlite:///{tmp_path}/evac.db"})
+
+        gaps = "\n".join(body.get("configuration_gaps") or [])
+        for absent in ("no roster source", "no geometry source",
+                       "no event stream", "EVAC_SITE_ID", "EVAC_TENANT_ID",
+                       "no database is configured"):
+            assert absent not in gaps, f"{absent!r} reported on a set-up node"
+
+
+
 class TestTheRosterSource:
     def test_nothing_configured_is_no_provider(self, monkeypatch):
         # Which makes drill creation refuse with an explanation rather than
